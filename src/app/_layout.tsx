@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { theme } from '../constants/theme';
 import { AuthProvider } from '../context/AuthContext';
+import { AlertProvider } from '../context/AlertContext';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -40,54 +41,56 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <StatusBar style="light" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: {
-            backgroundColor: theme.colors.background,
-          },
-          animation: 'fade',
-        }}
-      >
-        <Stack.Screen
-          name="index"
-          options={{
-            animation: 'fade',
-          }}
-        />
-        <Stack.Screen
-          name="login"
-          options={{
-            animation: 'fade',
-          }}
-        />
-        <Stack.Screen
-          name="signup"
-          options={{
-            animation: 'slide_from_right',
-          }}
-        />
-        <Stack.Screen
-          name="(tabs)"
-          options={{
+      <AlertProvider>
+        <StatusBar style="light" />
+        <Stack
+          screenOptions={{
             headerShown: false,
+            contentStyle: {
+              backgroundColor: theme.colors.background,
+            },
             animation: 'fade',
           }}
-        />
-        <Stack.Screen
-          name="expo-auth-session"
-          options={{
-            animation: 'fade',
-          }}
-        />
-        <Stack.Screen
-          name="+not-found"
-          options={{
-            animation: 'fade',
-          }}
-        />
-      </Stack>
+        >
+          <Stack.Screen
+            name="index"
+            options={{
+              animation: 'fade',
+            }}
+          />
+          <Stack.Screen
+            name="login"
+            options={{
+              animation: 'fade',
+            }}
+          />
+          <Stack.Screen
+            name="signup"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="(tabs)"
+            options={{
+              headerShown: false,
+              animation: 'fade',
+            }}
+          />
+          <Stack.Screen
+            name="expo-auth-session"
+            options={{
+              animation: 'fade',
+            }}
+          />
+          <Stack.Screen
+            name="+not-found"
+            options={{
+              animation: 'fade',
+            }}
+          />
+        </Stack>
+      </AlertProvider>
     </AuthProvider>
   );
 }

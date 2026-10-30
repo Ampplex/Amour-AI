@@ -8,7 +8,6 @@ import {
   RefreshControl,
   ActivityIndicator,
   Image,
-  Alert,
   Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,6 +15,7 @@ import { router } from 'expo-router';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { theme } from '../../constants/theme';
 import MarkdownText from '../../components/MarkdownText';
+import { showAlert } from '../../context/AlertContext';
 import {
   PersonaItem,
   getStoredPersonas,
@@ -104,21 +104,26 @@ export default function PersonasScreen() {
   }, [loadPersonas]);
 
   const handleDelete = (id: string, name: string) => {
-    Alert.alert('Delete Persona', `Are you sure you want to remove "${name}" from your roster?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deletePersonaFromRoster(id);
-            setPersonas((prev) => prev.filter((p) => p.id !== id));
-          } catch (err) {
-            console.warn('[Personas] Delete error:', err);
-          }
+    showAlert(
+      'Delete Persona',
+      `Are you sure you want to remove "${name}" from your roster?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deletePersonaFromRoster(id);
+              setPersonas((prev) => prev.filter((p) => p.id !== id));
+            } catch (err) {
+              console.warn('[Personas] Delete error:', err);
+            }
+          },
         },
-      },
-    ]);
+      ],
+      'danger'
+    );
   };
 
   const filteredPersonas = personas.filter((p) => {
@@ -206,7 +211,12 @@ export default function PersonasScreen() {
           <TouchableOpacity
             style={[styles.chatBtn, { backgroundColor: borderColor }]}
             onPress={() => {
-              Alert.alert('Initiating Chat', `Opening conversational channel with ${item.name}...`);
+              showAlert(
+                'Initiating Chat',
+                `Opening secure conversational channel with ${item.name}...`,
+                [{ text: 'Dismiss', style: 'primary' }],
+                'info'
+              );
             }}
             activeOpacity={0.85}
           >

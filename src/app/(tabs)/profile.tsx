@@ -5,27 +5,32 @@ import {
   Text,
   TouchableOpacity,
   Image,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
+import { showAlert } from '../../context/AlertContext';
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
 
   const handleSignOut = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/login');
+    showAlert(
+      'Sign Out',
+      'Are you sure you want to sign out from Amour AI?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+            router.replace('/login');
+          },
         },
-      },
-    ]);
+      ],
+      'danger'
+    );
   };
 
   if (!user) {

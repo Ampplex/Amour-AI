@@ -10,7 +10,6 @@ import {
   Platform,
   Image,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -28,6 +27,7 @@ import {
 } from '../../components/CreateBotIcons';
 import { API_CONFIG } from '../../constants/authConfig';
 import { savePersonaToRoster } from '../../services/personaService';
+import { showAlert } from '../../context/AlertContext';
 
 // Presets for offline fallback
 const PERSONA_PRESETS = [
@@ -110,7 +110,7 @@ export default function CreateBotScreen() {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert('Permission Needed', 'Please allow photo library access to choose an avatar image.');
+        showAlert('Permission Needed', 'Please allow photo library access to choose an avatar image.', [{ text: 'OK', style: 'primary' }], 'warning');
         return;
       }
 
@@ -231,27 +231,32 @@ export default function CreateBotScreen() {
   };
 
   const handleCancelStudio = () => {
-    Alert.alert('Exit Avatar Studio', 'Any unsaved details will be discarded. Exit to home?', [
-      { text: 'Keep Designing', style: 'cancel' },
-      {
-        text: 'Exit',
-        style: 'destructive',
-        onPress: () => {
-          setStage(0);
-          setBotName('');
-          setTagline('');
-          setImageUri(null);
-          setGreeting('');
-          setMemoryProfile('');
-          router.replace('/(tabs)');
+    showAlert(
+      'Exit Avatar Studio',
+      'Any unsaved details will be discarded. Exit to home?',
+      [
+        { text: 'Keep Designing', style: 'cancel' },
+        {
+          text: 'Exit',
+          style: 'destructive',
+          onPress: () => {
+            setStage(0);
+            setBotName('');
+            setTagline('');
+            setImageUri(null);
+            setGreeting('');
+            setMemoryProfile('');
+            router.replace('/(tabs)');
+          },
         },
-      },
-    ]);
+      ],
+      'danger'
+    );
   };
 
   const handleLaunchAvatar = async () => {
     if (!botName.trim()) {
-      Alert.alert('Name Required', 'Please provide a name for your avatar.');
+      showAlert('Name Required', 'Please provide a name for your avatar.', [{ text: 'OK', style: 'primary' }], 'warning');
       return;
     }
 
@@ -270,20 +275,26 @@ export default function CreateBotScreen() {
       console.warn('[Amour Studio] Save persona notice:', e);
     } finally {
       setIsDeploying(false);
-      Alert.alert('Avatar Activated', `"${botName}" is now live and saved to your roster!`, [
-        {
-          text: 'View Personas',
-          onPress: () => {
-            setStage(0);
-            setBotName('');
-            setTagline('');
-            setImageUri(null);
-            setGreeting('');
-            setMemoryProfile('');
-            router.replace('/(tabs)/personas');
+      showAlert(
+        'Avatar Activated',
+        `"${botName}" is now live and saved to your roster!`,
+        [
+          {
+            text: 'View Personas',
+            style: 'primary',
+            onPress: () => {
+              setStage(0);
+              setBotName('');
+              setTagline('');
+              setImageUri(null);
+              setGreeting('');
+              setMemoryProfile('');
+              router.replace('/(tabs)/personas');
+            },
           },
-        },
-      ]);
+        ],
+        'success'
+      );
     }
   };
 
