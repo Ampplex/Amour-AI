@@ -20,14 +20,13 @@ export default function StartScreen() {
 
   const navigateNext = useCallback(() => {
     if (navigatedRef.current) return;
-    if (!isAuthReady) return;
     navigatedRef.current = true;
     if (user) {
       router.replace('/(tabs)');
     } else {
       router.replace('/login');
     }
-  }, [user, isAuthReady]);
+  }, [user]);
 
   useEffect(() => {
     // Subtle pulsing for the tagline while loading
@@ -47,14 +46,12 @@ export default function StartScreen() {
     ).start();
   }, [pulseAnim]);
 
-  // Navigate when auth check completes and minimum splash delay elapsed
+  // Navigate when auth check completes, or guaranteed fallback after 2 seconds
   useEffect(() => {
-    if (isAuthReady) {
-      const timer = setTimeout(() => {
-        navigateNext();
-      }, 1200);
-      return () => clearTimeout(timer);
-    }
+    const timer = setTimeout(() => {
+      navigateNext();
+    }, isAuthReady ? 1200 : 2200);
+    return () => clearTimeout(timer);
   }, [isAuthReady, navigateNext]);
 
   return (

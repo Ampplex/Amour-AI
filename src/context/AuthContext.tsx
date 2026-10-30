@@ -54,6 +54,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [pendingGoogleSession, setPendingGoogleSession] = useState<boolean>(false);
 
   useEffect(() => {
+    // Safety fallback: Ensure isAuthReady never stays false for more than 2 seconds
+    const safetyTimeout = setTimeout(() => {
+      setIsAuthReady(true);
+    }, 2000);
+
     try {
       GoogleSignin.configure({
         webClientId: GOOGLE_CONFIG.clientId,
@@ -82,12 +87,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // No stored session
         })
         .finally(() => {
+          clearTimeout(safetyTimeout);
           setIsAuthReady(true);
         });
     } catch (e) {
       console.log('[GoogleSignin] configure warning:', e);
+      clearTimeout(safetyTimeout);
       setIsAuthReady(true);
     }
+
+    return () => clearTimeout(safetyTimeout);
   }, []);
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(

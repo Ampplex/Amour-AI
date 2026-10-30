@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
@@ -17,13 +17,24 @@ export default function RootLayout() {
     'ChangaOne-Italic': require('../../assets/fonts/ChangaOne-Italic.ttf'),
   });
 
+  const [fallbackReady, setFallbackReady] = useState(false);
+
+  useEffect(() => {
+    // Safety timer: guarantees the native splash hides even if fonts fail or delay
+    const timer = setTimeout(() => {
+      setFallbackReady(true);
+      SplashScreen.hideAsync().catch(() => {});
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     if (loaded || error) {
       SplashScreen.hideAsync().catch(() => {});
     }
   }, [loaded, error]);
 
-  if (!loaded && !error) {
+  if (!loaded && !error && !fallbackReady) {
     return null;
   }
 
