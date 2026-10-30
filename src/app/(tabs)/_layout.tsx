@@ -1,7 +1,7 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
-import { HomeIcon, PlusCircleIcon, ProfileIcon } from '../../components/TabIcons';
+import { HomeIcon, PersonasIcon, PlusCircleIcon, ProfileIcon } from '../../components/TabIcons';
 
 export default function TabLayout() {
   return (
@@ -21,7 +21,7 @@ export default function TabLayout() {
         tabBarInactiveTintColor: '#666666',
         tabBarLabelStyle: {
           fontFamily: 'ChangaOne-Regular',
-          fontSize: 12,
+          fontSize: 11,
           marginTop: 2,
         },
       }}
@@ -34,10 +34,17 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="personas"
+        options={{
+          title: 'Personas',
+          tabBarIcon: ({ color }) => <PersonasIcon color={color} size={22} />,
+        }}
+      />
+      <Tabs.Screen
         name="create"
         options={{
           title: 'Create',
-          tabBarIcon: ({ color }) => <PlusCircleIcon color={color} size={24} />,
+          tabBarIcon: ({ color }) => <PlusCircleIcon color={color} size={25} />,
         }}
       />
       <Tabs.Screen

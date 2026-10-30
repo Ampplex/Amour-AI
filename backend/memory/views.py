@@ -247,3 +247,90 @@ class GenerateAvatarPersonaView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class PersonaListCreateView(APIView):
+    """
+    Lists personas from PostgreSQL database (Neon) or creates a new Persona
+    forged in Amour Studio.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .models import Persona
+        from .serializers import PersonaSerializer
+
+        # Auto-seed initial personas if database table is empty
+        if Persona.objects.count() == 0:
+            Persona.objects.create(
+                name="Seraphina",
+                tagline="Nocturnal Astrologer & Enigmatic Confidant",
+                border_color="#F43F5E",
+                greeting="*gently looks up from an ancient celestial chart as you approach* The stars hinted at a curious traveler tonight. What question brings you into my observatory?",
+                memory_prompt="Seraphina is an observant, serene nocturnal astrologer who reads deep cosmic alignments. Speaks in measured, warm tones with poetic turns of phrase.",
+                visibility="public",
+            )
+            Persona.objects.create(
+                name="Kaelen",
+                tagline="Wanderer of Forgotten Realms",
+                border_color="#8B5CF6",
+                greeting="*leans back against the stone hearth, carving a rune into weathered cedar* Pull up a stool, friend. You have the look of someone who has walked through storms.",
+                memory_prompt="Kaelen is an intrepid wanderer with memories of distant ruined kingdoms and quiet campfires. Loyal, slightly cynical, deeply grounded.",
+                visibility="public",
+            )
+            Persona.objects.create(
+                name="Lyra",
+                tagline="Cyberpunk Hologram Architect",
+                border_color="#10B981",
+                greeting="*adjusts glowing optic visor and flicks an iridescent data stream aside* Caught you admiring the neon grid. Ready to build something impossible?",
+                memory_prompt="Lyra is a fast-talking synth-wave engineer with a brilliant analytical mind and witty banter. Loves hacking interfaces and talking about synthetic philosophy.",
+                visibility="public",
+            )
+
+        visibility = request.query_params.get("visibility")
+        queryset = Persona.objects.all()
+        if visibility in ["public", "private"]:
+            queryset = queryset.filter(visibility=visibility)
+
+        serializer = PersonaSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        from .models import Persona
+        from .serializers import PersonaSerializer
+
+        data = request.data.copy()
+        serializer = PersonaSerializer(data=data)
+        if serializer.is_valid():
+            creator = request.user if request.user and request.user.is_authenticated else None
+            persona = serializer.save(creator=creator)
+            return Response(PersonaSerializer(persona).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PersonaDetailView(APIView):
+    """
+    Retrieves or deletes a single persona from the database.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, persona_id):
+        from .models import Persona
+        from .serializers import PersonaSerializer
+
+        try:
+            persona = Persona.objects.get(id=persona_id)
+            return Response(PersonaSerializer(persona).data)
+        except Persona.DoesNotExist:
+            return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def delete(self, request, persona_id):
+        from .models import Persona
+
+        try:
+            persona = Persona.objects.get(id=persona_id)
+            persona.delete()
+            return Response({"message": "Persona deleted successfully"}, status=status.HTTP_200_OK)
+        except Persona.DoesNotExist:
+            return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+

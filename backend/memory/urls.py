@@ -7,6 +7,8 @@ from .views import (
     ClearMemoryView,
     BotImageUploadView,
     GenerateAvatarPersonaView,
+    PersonaListCreateView,
+    PersonaDetailView,
 )
 
 urlpatterns = [
@@ -17,4 +19,6 @@ urlpatterns = [
     path("clear/", ClearMemoryView.as_view(), name="memory-clear"),
     path("upload-image/", BotImageUploadView.as_view(), name="bot-upload-image"),
     path("generate-persona/", GenerateAvatarPersonaView.as_view(), name="generate-avatar-persona"),
+    path("personas/", PersonaListCreateView.as_view(), name="persona-list-create"),
+    path("personas/<uuid:persona_id>/", PersonaDetailView.as_view(), name="persona-detail"),
 ]

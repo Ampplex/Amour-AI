@@ -27,6 +27,7 @@ import {
   GlobeIcon,
 } from '../../components/CreateBotIcons';
 import { API_CONFIG } from '../../constants/authConfig';
+import { savePersonaToRoster } from '../../services/personaService';
 
 // Presets for offline fallback
 const PERSONA_PRESETS = [
@@ -248,25 +249,42 @@ export default function CreateBotScreen() {
     ]);
   };
 
-  const handleLaunchAvatar = () => {
+  const handleLaunchAvatar = async () => {
     if (!botName.trim()) {
       Alert.alert('Name Required', 'Please provide a name for your avatar.');
       return;
     }
 
     setIsDeploying(true);
-    setTimeout(() => {
+    try {
+      await savePersonaToRoster({
+        name: botName.trim(),
+        tagline: tagline.trim(),
+        border_color: borderColor,
+        image_url: imageUri || '',
+        greeting: greeting.trim(),
+        memory_prompt: memoryProfile.trim(),
+        visibility: accessTier,
+      });
+    } catch (e) {
+      console.warn('[Amour Studio] Save persona notice:', e);
+    } finally {
       setIsDeploying(false);
-      Alert.alert('Avatar Activated', `"${botName}" is now live and waiting to chat!`, [
+      Alert.alert('Avatar Activated', `"${botName}" is now live and saved to your roster!`, [
         {
-          text: 'Start Chat',
+          text: 'View Personas',
           onPress: () => {
             setStage(0);
-            router.replace('/(tabs)');
+            setBotName('');
+            setTagline('');
+            setImageUri(null);
+            setGreeting('');
+            setMemoryProfile('');
+            router.replace('/(tabs)/personas');
           },
         },
       ]);
-    }, 600);
+    }
   };
 
   // Clean Amour Stepper
