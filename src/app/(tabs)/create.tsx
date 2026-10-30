@@ -28,36 +28,37 @@ import {
 import { API_CONFIG } from '../../constants/authConfig';
 import { savePersonaToRoster } from '../../services/personaService';
 import { showAlert } from '../../context/AlertContext';
+import { useAuth } from '../../context/AuthContext';
 
 // Presets for offline fallback
 const PERSONA_PRESETS = [
   {
-    name: 'Seraphina',
-    tagline: 'Empathetic Companion and Dream Weaver',
+    name: 'Nova',
+    tagline: 'Warm Confidant and Creative Thinker',
     avatarColor: '#F43F5E',
-    greeting: "*looks up with gentle eyes and sets down her book* Hello. I am really glad you stopped by today. What is on your mind?",
-    memory: "Lore: A warm and perceptive confidant who listens deeply without judgment.\nTone: Gentle, thoughtful, candid, and slightly whimsical.\nPassions: Literature, evening walks, vintage jazz, and indie films.\nQuirks: Leaves small thoughtful notes in books she reads.",
+    greeting: "*looks up with a friendly smile* Hello! What is on your mind today?",
+    memory: "A warm and perceptive friend who listens deeply and shares thoughtful thoughts.",
   },
   {
-    name: 'Kaelen',
-    tagline: 'Strategic Thinker and Mindful Mentor',
+    name: 'Atlas',
+    tagline: 'Thoughtful Guide and Calm Listener',
     avatarColor: '#8B5CF6',
-    greeting: "*nods attentively, adjusting his notes* Welcome. Tell me what challenge you are navigating today, let us work through it together.",
-    memory: "Lore: High-acuity strategist trained in systems thinking and emotional poise.\nTone: Articulate, grounded, direct, and encouraging.\nPassions: Philosophy, architecture, complex games, mountain trails.\nQuirks: Takes three seconds of quiet stillness before answering difficult questions.",
+    greeting: "*nods attentively* Welcome. Take your time, I am right here with you.",
+    memory: "A calm, reliable companion who offers grounded perspectives and steady encouragement.",
   },
   {
-    name: 'Lyra',
-    tagline: 'Creative Muse and Spontaneous Storyteller',
+    name: 'Aria',
+    tagline: 'Spirited Storyteller and Curious Mind',
     avatarColor: '#EC4899',
-    greeting: "*grins with an energetic spark in her gaze* You arrived right on cue! I was just piecing together a wild idea. What are we creating?",
-    memory: "Lore: Visionary creative mind driven by bold aesthetic experiments and fiction.\nTone: Playful, vibrant, witty, and deeply loyal.\nPassions: Sci-fi worldbuilding, synthwave music, digital illustrations.\nQuirks: Speaks in vivid visual metaphors.",
+    greeting: "*smiles warmly* Glad you stopped by! What shall we explore together?",
+    memory: "Curious and imaginative companion passionate about ideas, stories, and genuine conversation.",
   },
   {
     name: 'Orion',
     tagline: 'Nocturnal Philosopher and Star Watcher',
     avatarColor: '#10B981',
-    greeting: "*leans against the balcony, looking out at the sky* Beautiful night, is it not? Take a breath. There is no rush here.",
-    memory: "Lore: Calm, grounded observer fascinated by cosmic history and human nature.\nTone: Soft-spoken, contemplative, patient, and sincere.\nPassions: Astronomy, acoustic guitar, dark roast coffee, history.\nQuirks: Loves pointing out constellations.",
+    greeting: "*looks up with gentle eyes* Good to see you. There is no rush here.",
+    memory: "Calm and sincere companion fascinated by life, music, and quiet reflection.",
   },
 ];
 
@@ -80,6 +81,7 @@ const MEMORY_TAGS = [
 ];
 
 export default function CreateBotScreen() {
+  const { user } = useAuth();
   // Stage 0: Amour Studio Portal, Stage 1: Persona, Stage 2: Mind & Voice, Stage 3: Launch
   const [stage, setStage] = useState<number>(0);
 
@@ -262,15 +264,22 @@ export default function CreateBotScreen() {
 
     setIsDeploying(true);
     try {
-      await savePersonaToRoster({
-        name: botName.trim(),
-        tagline: tagline.trim(),
-        border_color: borderColor,
-        image_url: imageUri || '',
-        greeting: greeting.trim(),
-        memory_prompt: memoryProfile.trim(),
-        visibility: accessTier,
-      });
+      const userHandle = user?.email ? `@${user.email.split('@')[0]}` : '@creator';
+      await savePersonaToRoster(
+        {
+          name: botName.trim(),
+          tagline: tagline.trim(),
+          border_color: borderColor,
+          image_url: imageUri || '',
+          greeting: greeting.trim(),
+          memory_prompt: memoryProfile.trim(),
+          visibility: accessTier,
+          publisher_name: user?.name || 'Creator',
+          publisher_handle: userHandle,
+          publisher_avatar: user?.picture || '',
+        },
+        user?.id
+      );
     } catch (e) {
       console.warn('[Amour Studio] Save persona notice:', e);
     } finally {
@@ -310,19 +319,19 @@ export default function CreateBotScreen() {
       <View style={styles.stagePillsRow}>
         <View style={[styles.stagePill, currentStage === 1 && styles.stagePillActive, currentStage > 1 && styles.stagePillCompleted]}>
           <Text style={[styles.stagePillLabel, currentStage === 1 && styles.stagePillLabelActive]}>
-            01 Persona
+            01 Identity
           </Text>
         </View>
         <View style={styles.stageConnector} />
         <View style={[styles.stagePill, currentStage === 2 && styles.stagePillActive, currentStage > 2 && styles.stagePillCompleted]}>
           <Text style={[styles.stagePillLabel, currentStage === 2 && styles.stagePillLabelActive]}>
-            02 Mind and Voice
+            02 Voice and Memory
           </Text>
         </View>
         <View style={styles.stageConnector} />
         <View style={[styles.stagePill, currentStage === 3 && styles.stagePillActive]}>
           <Text style={[styles.stagePillLabel, currentStage === 3 && styles.stagePillLabelActive]}>
-            03 Launch
+            03 Review
           </Text>
         </View>
       </View>
@@ -354,9 +363,9 @@ export default function CreateBotScreen() {
             </View>
           </View>
 
-          <Text style={styles.portalHeroTitle}>Forge an Avatar</Text>
+          <Text style={styles.portalHeroTitle}>Create a Companion</Text>
           <Text style={styles.portalHeroSubtitle}>
-            Bring an original persona to life with conversational depth, personal memory, and roleplay presence.
+            Bring a unique companion to life with their own personality, style, and greeting.
           </Text>
         </View>
 
@@ -395,7 +404,7 @@ export default function CreateBotScreen() {
             <View style={styles.stageTitleBlock}>
               <Text style={styles.stageTitleText}>Avatar Identity</Text>
               <Text style={styles.stageSubtitleText}>
-                Craft visual presence, core name, and persona archetype.
+                Choose a photo, name, and headline for your companion.
               </Text>
             </View>
 
@@ -481,7 +490,7 @@ export default function CreateBotScreen() {
                 <TextInput
                   ref={nameInputRef}
                   style={styles.studioTextInput}
-                  placeholder="e.g. Seraphina, Kaelen, Lyra"
+                  placeholder="e.g. Nova, Atlas, Aria"
                   placeholderTextColor="#52525B"
                   value={botName}
                   onChangeText={setBotName}
@@ -564,7 +573,7 @@ export default function CreateBotScreen() {
               activeOpacity={0.85}
             >
               <Text style={[styles.amourPrimaryCtaText, !isStepReady && styles.amourCtaTextDisabled]}>
-                Proceed to Mind and Voice
+                Proceed to Voice and Memory
               </Text>
             </TouchableOpacity>
           </View>
@@ -668,7 +677,7 @@ export default function CreateBotScreen() {
                   ) : (
                     <SparklesIcon color="#F43F5E" size={14} />
                   )}
-                  <Text style={styles.sparkAiBtnText}>Synthesize Memory</Text>
+                  <Text style={styles.sparkAiBtnText}>Inspire Memory</Text>
                 </TouchableOpacity>
               </View>
 
@@ -736,7 +745,7 @@ export default function CreateBotScreen() {
         <View style={styles.stageTitleBlock}>
           <Text style={styles.stageTitleText}>Avatar Profile</Text>
           <Text style={styles.stageSubtitleText}>
-            Final activation summary for your companion.
+            Review your companion before saving.
           </Text>
         </View>
 
@@ -769,7 +778,7 @@ export default function CreateBotScreen() {
 
           {/* Greeting Section */}
           <View style={styles.passportSection}>
-            <Text style={styles.passportSectionLabel}>CONVERSATIONAL OPENER</Text>
+            <Text style={styles.passportSectionLabel}>FIRST MESSAGE</Text>
             <View style={styles.passportBubbleBox}>
               <MarkdownText
                 content={greeting || "*smiles gently* Ready when you are."}
@@ -780,10 +789,10 @@ export default function CreateBotScreen() {
 
           {/* Memory Section */}
           <View style={styles.passportSection}>
-            <Text style={styles.passportSectionLabel}>CORE MEMORY PROFILE</Text>
+            <Text style={styles.passportSectionLabel}>PERSONALITY AND STORY</Text>
             <View style={styles.passportMemoryBox}>
               <MarkdownText
-                content={memoryProfile || "Persona configured with adaptive conversational memory."}
+                content={memoryProfile || "A thoughtful companion ready to chat."}
                 style={styles.passportMemoryText}
               />
             </View>
@@ -802,7 +811,7 @@ export default function CreateBotScreen() {
           {isDeploying ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Text style={styles.amourPrimaryCtaText}>Activate Avatar</Text>
+            <Text style={styles.amourPrimaryCtaText}>Save Persona</Text>
           )}
         </TouchableOpacity>
 

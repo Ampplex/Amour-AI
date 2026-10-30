@@ -9,6 +9,10 @@ from .views import (
     GenerateAvatarPersonaView,
     PersonaListCreateView,
     PersonaDetailView,
+    PersonaLikeToggleView,
+    PublisherFollowToggleView,
+    PublisherProfileView,
+    UserInteractionsView,
 )
 
 urlpatterns = [
@@ -21,4 +25,9 @@ urlpatterns = [
     path("generate-persona/", GenerateAvatarPersonaView.as_view(), name="generate-avatar-persona"),
     path("personas/", PersonaListCreateView.as_view(), name="persona-list-create"),
     path("personas/<uuid:persona_id>/", PersonaDetailView.as_view(), name="persona-detail"),
+    path("personas/<uuid:persona_id>/like/", PersonaLikeToggleView.as_view(), name="persona-like"),
+    path("publishers/<str:handle>/follow/", PublisherFollowToggleView.as_view(), name="publisher-follow"),
+    path("publishers/<str:identifier>/profile/", PublisherProfileView.as_view(), name="publisher-profile"),
+    path("user-interactions/", UserInteractionsView.as_view(), name="user-interactions"),
+    path("interactions/", UserInteractionsView.as_view(), name="interactions"),
 ]

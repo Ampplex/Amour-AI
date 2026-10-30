@@ -13,9 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import Svg, { Path, Circle } from 'react-native-svg';
+import { useAuth } from '../../context/AuthContext';
 import { theme } from '../../constants/theme';
 import MarkdownText from '../../components/MarkdownText';
 import { showAlert } from '../../context/AlertContext';
+import PersonaDetailModal from '../../components/PersonaDetailModal';
+import CompanionChatModal from '../../components/CompanionChatModal';
 import {
   PersonaItem,
   getStoredPersonas,
@@ -67,26 +70,33 @@ function MessageIcon({ size = 15, color = '#FFFFFF' }: { size?: number; color?: 
 }
 
 export default function PersonasScreen() {
+  const { user } = useAuth();
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
+  const [selectedPersona, setSelectedPersona] = useState<PersonaItem | null>(null);
+  const [activeChatPersona, setActiveChatPersona] = useState<PersonaItem | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [activeFilter, setActiveFilter] = useState<'all' | 'private' | 'public'>('all');
+
+  const handleInitiateChat = (p: PersonaItem) => {
+    setActiveChatPersona(p);
+  };
 
   const loadPersonas = useCallback(async (isPullToRefresh = false) => {
     if (isPullToRefresh) {
       setRefreshing(true);
     }
     try {
-      // 1. Initial quick load from local cache if first mount
+      // 1. Initial quick load from local cache scoped to current user ID
       if (!isPullToRefresh) {
-        const cached = await getStoredPersonas();
+        const cached = await getStoredPersonas(user?.id);
         if (cached && cached.length > 0) {
           setPersonas(cached);
           setLoading(false);
         }
       }
-      // 2. Sync with server / database
-      const synced = await fetchAndSyncPersonas();
+      // 2. Fetch directly from PostgreSQL database for current logged in user ID
+      const synced = await fetchAndSyncPersonas(user?.id);
       setPersonas(synced);
     } catch (err) {
       console.warn('[Personas] Error loading personas:', err);
@@ -94,7 +104,7 @@ export default function PersonasScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [user?.id]);
 
   // Subscribe to real-time events across the app (creation, deletion, syncing)
   useEffect(() => {
@@ -105,7 +115,13 @@ export default function PersonasScreen() {
     return unsubscribe;
   }, []);
 
-  // Automatically refresh whenever this tab comes into focus
+  // Automatically refresh whenever this tab comes into focus or user ID resolves
+  useEffect(() => {
+    if (user?.id) {
+      loadPersonas(false);
+    }
+  }, [user?.id, loadPersonas]);
+
   useFocusEffect(
     useCallback(() => {
       loadPersonas(false);
@@ -128,7 +144,7 @@ export default function PersonasScreen() {
           onPress: () => {
             // Instant 0ms optimistic UI update: card vanishes immediately
             setPersonas((prev) => prev.filter((p) => p.id !== id));
-            deletePersonaFromRoster(id);
+            deletePersonaFromRoster(id, user?.id);
           },
         },
       ],
@@ -146,7 +162,11 @@ export default function PersonasScreen() {
     const isPrivate = item.visibility === 'private';
 
     return (
-      <View style={[styles.card, { borderColor: '#1F2937' }]}>
+      <TouchableOpacity
+        style={[styles.card, { borderColor: '#1F2937' }]}
+        onPress={() => setSelectedPersona(item)}
+        activeOpacity={0.88}
+      >
         {/* Header row: Portrait + Info + Delete */}
         <View style={styles.cardHeader}>
           {/* Avatar Portrait with dynamic border color */}
@@ -200,7 +220,10 @@ export default function PersonasScreen() {
           {/* Delete Action */}
           <TouchableOpacity
             style={styles.deleteBtn}
-            onPress={() => handleDelete(item.id, item.name)}
+            onPress={(e) => {
+              e.stopPropagation();
+              handleDelete(item.id, item.name);
+            }}
             activeOpacity={0.7}
             accessibilityLabel={`Delete ${item.name}`}
           >
@@ -211,7 +234,7 @@ export default function PersonasScreen() {
         {/* Roleplay Opening Greeting Preview */}
         {item.greeting ? (
           <View style={styles.greetingBox}>
-            <Text style={styles.greetingLabel}>Opening Dialogue</Text>
+            <Text style={styles.greetingLabel}>First Message</Text>
             <MarkdownText content={item.greeting} style={styles.greetingText} />
           </View>
         ) : null}
@@ -219,22 +242,23 @@ export default function PersonasScreen() {
         {/* Action Bar */}
         <View style={styles.cardActions}>
           <TouchableOpacity
+            style={styles.detailsBtn}
+            onPress={() => setSelectedPersona(item)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.detailsBtnText}>View Profile</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[styles.chatBtn, { backgroundColor: borderColor }]}
-            onPress={() => {
-              showAlert(
-                'Initiating Chat',
-                `Opening secure conversational channel with ${item.name}...`,
-                [{ text: 'Dismiss', style: 'primary' }],
-                'info'
-              );
-            }}
+            onPress={() => handleInitiateChat(item)}
             activeOpacity={0.85}
           >
             <MessageIcon size={14} color="#FFFFFF" />
             <Text style={styles.chatBtnText}>Chat Now</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -249,7 +273,7 @@ export default function PersonasScreen() {
           </View>
         </View>
         <Text style={styles.headerSubtitle}>
-          Avatars forged with persistent memory and voice
+          Your companions ready to chat
         </Text>
       </View>
 
@@ -290,23 +314,23 @@ export default function PersonasScreen() {
       {loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#F43F5E" />
-          <Text style={styles.loadingText}>Syncing with database...</Text>
+          <Text style={styles.loadingText}>Loading your personas...</Text>
         </View>
       ) : filteredPersonas.length === 0 ? (
         <View style={styles.emptyContainer}>
           <View style={styles.emptyIconCircle}>
             <ShieldLockIcon size={32} color="#6B7280" />
           </View>
-          <Text style={styles.emptyTitle}>No Personas Found</Text>
+          <Text style={styles.emptyTitle}>No Personas Yet</Text>
           <Text style={styles.emptySubtitle}>
-            Forge your first original character with custom voice and memory in Amour Studio.
+            Create your first companion with their own voice and personality.
           </Text>
           <TouchableOpacity
             style={styles.forgeBtn}
             onPress={() => router.push('/(tabs)/create')}
             activeOpacity={0.85}
           >
-            <Text style={styles.forgeBtnText}>Forge in Studio</Text>
+            <Text style={styles.forgeBtnText}>Create Persona</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -326,6 +350,25 @@ export default function PersonasScreen() {
           }
         />
       )}
+
+      {/* Comprehensive Avatar Profile & Memory Detail Modal */}
+      <PersonaDetailModal
+        visible={!!selectedPersona}
+        persona={selectedPersona}
+        onClose={() => setSelectedPersona(null)}
+        onInitiateChat={(p) => {
+          setSelectedPersona(null);
+          handleInitiateChat(p);
+        }}
+        onDelete={handleDelete}
+      />
+
+      {/* Real Interactive Chat Modal */}
+      <CompanionChatModal
+        visible={!!activeChatPersona}
+        persona={activeChatPersona}
+        onClose={() => setActiveChatPersona(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -504,6 +547,22 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     marginTop: 14,
     gap: 8,
+  },
+  detailsBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: '#161622',
+    borderWidth: 1,
+    borderColor: '#262638',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailsBtnText: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 13,
+    color: '#9CA3AF',
+    letterSpacing: 0.3,
   },
   chatBtn: {
     flexDirection: 'row',

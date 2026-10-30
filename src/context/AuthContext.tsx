@@ -5,6 +5,7 @@ import * as AuthSession from 'expo-auth-session';
 import * as Linking from 'expo-linking';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { GOOGLE_CONFIG, API_CONFIG } from '../constants/authConfig';
+import { clearFeedMemoryCache } from '../services/feedService';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -363,6 +364,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await GoogleSignin.signOut();
     } catch {}
+    clearFeedMemoryCache();
     setUser(null);
     setError(null);
     setPendingGoogleSession(false);

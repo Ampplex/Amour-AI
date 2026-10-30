@@ -10,12 +10,23 @@ export interface PersonaItem {
   greeting: string;
   memory_prompt: string;
   visibility: string;
+  is_community?: boolean;
+  likes_count?: number;
+  chats_count?: number;
+  publisher_name?: string;
+  publisher_handle?: string;
+  publisher_avatar?: string;
   creator_name?: string;
+  creator_id?: string;
   created_at: string;
   updated_at?: string;
 }
 
-const STORAGE_KEY = '@amour_personas_roster';
+const BASE_STORAGE_KEY = '@amour_personas_roster';
+
+function getStorageKey(userId?: string): string {
+  return userId ? `${BASE_STORAGE_KEY}_${userId}` : BASE_STORAGE_KEY;
+}
 
 type PersonaListener = (personas: PersonaItem[]) => void;
 const listeners = new Set<PersonaListener>();
@@ -41,49 +52,19 @@ function notifyListeners(personas: PersonaItem[]) {
   });
 }
 
-// Default seeded personas if storage and network are both empty
-const SEED_PERSONAS: PersonaItem[] = [
-  {
-    id: '26c93a17-ab27-43e0-adb8-470dc15ab3bd',
-    name: 'Lyra',
-    tagline: 'Cyberpunk Hologram Architect',
-    border_color: '#10B981',
-    image_url: '',
-    greeting: '*adjusts glowing optic visor and flicks an iridescent data stream aside* Caught you admiring the neon grid. Ready to build something impossible?',
-    memory_prompt: 'Lyra is a fast-talking synth-wave engineer with a brilliant analytical mind and witty banter. Loves hacking interfaces and talking about synthetic philosophy.',
-    visibility: 'public',
-    creator_name: 'Amour Core',
-    created_at: '2026-10-30T16:50:51.214198+05:30',
-  },
-  {
-    id: '230c2da9-9082-4d70-a0c7-eca4a869c739',
-    name: 'Kaelen',
-    tagline: 'Wanderer of Forgotten Realms',
-    border_color: '#8B5CF6',
-    image_url: '',
-    greeting: '*leans back against the stone hearth, carving a rune into weathered cedar* Pull up a stool, friend. You have the look of someone who has walked through storms.',
-    memory_prompt: 'Kaelen is an intrepid wanderer with memories of distant ruined kingdoms and quiet campfires. Loyal, slightly cynical, deeply grounded.',
-    visibility: 'public',
-    creator_name: 'Amour Core',
-    created_at: '2026-10-30T16:50:51.157244+05:30',
-  },
-  {
-    id: 'df442f6d-998d-4448-8cf1-ed58085e076c',
-    name: 'Seraphina',
-    tagline: 'Nocturnal Astrologer & Enigmatic Confidant',
-    border_color: '#F43F5E',
-    image_url: '',
-    greeting: '*gently looks up from an ancient celestial chart as you approach* The stars hinted at a curious traveler tonight. What question brings you into my observatory?',
-    memory_prompt: 'Seraphina is an observant, serene nocturnal astrologer who reads deep cosmic alignments. Speaks in measured, warm tones with poetic turns of phrase.',
-    visibility: 'public',
-    creator_name: 'Amour Core',
-    created_at: '2026-10-30T16:50:51.100228+05:30',
-  },
-];
+// Dummy legacy IDs to always filter out
+const DUMMY_IDS = new Set<string>([
+  '26c93a17-ab27-43e0-adb8-470dc15ab3bd',
+  '230c2da9-9082-4d70-a0c7-eca4a869c739',
+  'df442f6d-998d-4448-8cf1-ed58085e076c',
+]);
 
 // Helper to attempt fetch across candidate endpoints (adb reverse or local Wi-Fi)
 const CANDIDATE_URLS = [
+  'http://192.168.1.4:8000/api',
+  'http://127.0.0.1:8000/api',
   API_CONFIG.baseUrl,
+  'http://10.104.217.217:8000/api',
   'http://192.168.1.2:8000/api',
 ];
 
@@ -113,45 +94,48 @@ async function tryServerFetch(path: string, options: RequestInit = {}): Promise<
   return null;
 }
 
-export async function getStoredPersonas(): Promise<PersonaItem[]> {
+export async function getStoredPersonas(userId?: string): Promise<PersonaItem[]> {
+  const storageKey = getStorageKey(userId);
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (p) => !DUMMY_IDS.has(p.id) && p.creator_name !== 'Amour Core'
+        );
       }
     }
   } catch (err) {
     console.warn('[PersonaService] Read error:', err);
   }
-  return SEED_PERSONAS;
+  return [];
 }
 
-export async function fetchAndSyncPersonas(): Promise<PersonaItem[]> {
+/**
+ * Retrieves personas stored with corresponding user ID in PostgreSQL database (Neon).
+ */
+export async function fetchAndSyncPersonas(userId?: string): Promise<PersonaItem[]> {
+  const storageKey = getStorageKey(userId);
   // 1. Load local cache first
-  const localList = await getStoredPersonas();
+  const localList = await getStoredPersonas(userId);
 
-  // 2. Try fetching from server
+  // 2. Query PostgreSQL strictly for this user ID
   try {
-    const res = await tryServerFetch('/memory/personas/');
+    const endpoint = userId
+      ? `/memory/personas/?creator_id=${userId}`
+      : '/memory/personas/?scope=my_personas';
+    const res = await tryServerFetch(endpoint);
     if (res && res.ok) {
       const serverList: PersonaItem[] = await res.json();
       if (Array.isArray(serverList)) {
-        // Merge: server items take precedence, but keep any local-only created items
-        const map = new Map<string, PersonaItem>();
-        for (const p of serverList) {
-          map.set(p.name.toLowerCase(), p);
-        }
-        for (const p of localList) {
-          if (!map.has(p.name.toLowerCase())) {
-            map.set(p.name.toLowerCase(), p);
-          }
-        }
-        const merged = Array.from(map.values());
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        notifyListeners(merged);
-        return merged;
+        const validServer = serverList.filter(
+          (p) => !DUMMY_IDS.has(p.id) && p.creator_name !== 'Amour Core'
+        );
+        // Persist real user personas in local storage
+        await AsyncStorage.setItem(storageKey, JSON.stringify(validServer));
+        notifyListeners(validServer);
+        return validServer;
       }
     }
   } catch (err) {
@@ -161,23 +145,31 @@ export async function fetchAndSyncPersonas(): Promise<PersonaItem[]> {
   return localList;
 }
 
-export async function savePersonaToRoster(item: Omit<PersonaItem, 'id' | 'created_at'>): Promise<PersonaItem> {
+/**
+ * Stores persona with corresponding user ID in PostgreSQL database (Neon).
+ */
+export async function savePersonaToRoster(
+  item: Omit<PersonaItem, 'id' | 'created_at'>,
+  userId?: string
+): Promise<PersonaItem> {
+  const storageKey = getStorageKey(userId);
   const newId = 'persona-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6);
   const nowIso = new Date().toISOString();
 
   const newPersona: PersonaItem = {
     ...item,
     id: newId,
+    creator_id: userId,
     created_at: nowIso,
   };
 
-  // 1. Immediately store in local AsyncStorage and notify all subscribers (INSTANT UI UPDATE)
-  const current = await getStoredPersonas();
+  // 1. Store in user's local roster immediately (0ms instant UI update)
+  const current = await getStoredPersonas(userId);
   const updated = [newPersona, ...current.filter((p) => p.name.toLowerCase() !== newPersona.name.toLowerCase())];
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
   notifyListeners(updated);
 
-  // 2. Fire server POST in parallel
+  // 2. Store in PostgreSQL with corresponding user ID
   try {
     const res = await tryServerFetch('/memory/personas/', {
       method: 'POST',
@@ -190,14 +182,17 @@ export async function savePersonaToRoster(item: Omit<PersonaItem, 'id' | 'create
         greeting: item.greeting,
         memory_prompt: item.memory_prompt,
         visibility: item.visibility,
+        user_id: userId,
+        publisher_name: item.publisher_name,
+        publisher_handle: item.publisher_handle,
+        publisher_avatar: item.publisher_avatar,
       }),
     });
     if (res && res.ok) {
       const savedFromServer: PersonaItem = await res.json();
       if (savedFromServer && savedFromServer.id) {
-        // Replace temp ID with backend UUID
         const finalUpdated = updated.map((p) => (p.id === newId ? savedFromServer : p));
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(finalUpdated));
+        await AsyncStorage.setItem(storageKey, JSON.stringify(finalUpdated));
         notifyListeners(finalUpdated);
         return savedFromServer;
       }
@@ -209,18 +204,14 @@ export async function savePersonaToRoster(item: Omit<PersonaItem, 'id' | 'create
   return newPersona;
 }
 
-export async function deletePersonaFromRoster(id: string): Promise<boolean> {
-  // 1. Remove from local AsyncStorage and notify all subscribers immediately (INSTANT 0ms UI UPDATE)
-  try {
-    const current = await getStoredPersonas();
-    const updated = current.filter((p) => p.id !== id);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    notifyListeners(updated);
-  } catch (err) {
-    console.warn('[PersonaService] Local delete error:', err);
-  }
+export async function deletePersonaFromRoster(id: string, userId?: string): Promise<void> {
+  const storageKey = getStorageKey(userId);
+  const current = await getStoredPersonas(userId);
+  const updated = current.filter((p) => p.id !== id);
+  await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+  notifyListeners(updated);
 
-  // 2. Attempt server delete in parallel
+  // Sync delete with PostgreSQL database
   try {
     await tryServerFetch(`/memory/personas/${id}/`, {
       method: 'DELETE',
@@ -228,6 +219,4 @@ export async function deletePersonaFromRoster(id: string): Promise<boolean> {
   } catch (err) {
     console.warn('[PersonaService] Server delete notice:', err);
   }
-
-  return true;
 }
