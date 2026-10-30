@@ -2,14 +2,15 @@ services:
   - type: web
     name: amour-ai-backend
     runtime: python
+    plan: free
     rootDir: backend
     buildCommand: "./build.sh"
     startCommand: "gunicorn amour_backend.wsgi:application --bind 0.0.0.0:$PORT"
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: amour-ai-db
-          property: connectionString
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: DEBUG
@@ -22,9 +23,7 @@ services:
         sync: false
       - key: AWS_S3_BUCKET_NAME
         value: "reeve-devpilot-downloads-309490998255"
-
-databases:
-  - name: amour-ai-db
-    databaseName: amour_db
-    user: amour_user
-    plan: free
+      - key: NEON_AUTH_BASE_URL
+        value: "https://ep-quiet-bonus-a11t1nym.neonauth.ap-southeast-1.aws.neon.tech/neondb/auth"
+      - key: NEON_AUTH_JWKS_URL
+        value: "https://ep-quiet-bonus-a11t1nym.neonauth.ap-southeast-1.aws.neon.tech/neondb/auth/.well-known/jwks.json"
