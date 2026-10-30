@@ -30,8 +30,25 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# Environment & Secrets (NEVER COMMIT SENSITIVE KEYS)
+.env
+.env*
+*.env
+backend/.env
+!*.example
+!**/*.example
+
+# Python / Django
+venv/
+**/venv/
+env/
+**/env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite3
+db.sqlite3
 
 # typescript
 *.tsbuildinfo
