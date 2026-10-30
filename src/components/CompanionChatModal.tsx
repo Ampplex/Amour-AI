@@ -9,34 +9,49 @@ import {
   TouchableOpacity,
   Image,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Keyboard,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
 import { PersonaItem, updatePersonaMemory } from '../services/personaService';
 import { API_CONFIG } from '../constants/authConfig';
 import { useAuth } from '../context/AuthContext';
 
-function CloseIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: string }) {
+const { width } = Dimensions.get('window');
+
+function BackIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M18 6L6 18M6 6l12 12" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <Path
+        d="M15 18l-6-6 6-6"
+        stroke={color}
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </Svg>
   );
 }
 
-function SendIcon({ size = 18, color = '#F43F5E' }: { size?: number; color?: string }) {
+function SendArrowIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-      <Path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M5 12h14M12 5l7 7-7 7"
+        stroke={color}
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </Svg>
   );
 }
 
-function BrainIcon({ size = 18, color = '#F43F5E' }: { size?: number; color?: string }) {
+function BrainIcon({ size = 14, color = '#60A5FA' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -53,6 +68,14 @@ function BrainIcon({ size = 18, color = '#F43F5E' }: { size?: number; color?: st
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </Svg>
+  );
+}
+
+function CloseIcon({ size = 18, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M18 6L6 18M6 6l12 12" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
   );
 }
@@ -113,11 +136,34 @@ export default function CompanionChatModal({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
+  const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
   const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
   const [memoryInput, setMemoryInput] = useState<string>('');
   const [greetingInput, setGreetingInput] = useState<string>('');
   const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
   const flatListRef = useRef<FlatList>(null);
+
+  // Dynamic keyboard tracker that elevates the input box perfectly above the keyboard
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 60);
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Initialize with persona's customized greeting (opening script)
   useEffect(() => {
@@ -133,13 +179,13 @@ export default function CompanionChatModal({
     const initialGreeting = persona.greeting || `Hello! I am ${persona.name}. How are you today?`;
     setMessages([
       {
-        id: 'msg-greeting',
+        id: `msg-greeting-${persona.id}`,
         sender: 'bot',
         text: initialGreeting,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       },
     ]);
-  }, [visible, persona]);
+  }, [visible, persona?.id]);
 
   const handleSaveMemoryModal = async () => {
     if (!activePersona) return;
@@ -181,7 +227,7 @@ export default function CompanionChatModal({
 
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+    }, 80);
 
     const clientTime = new Date().toLocaleString('en-US', {
       weekday: 'long',
@@ -244,110 +290,124 @@ export default function CompanionChatModal({
     <Modal
       visible={visible}
       animationType="slide"
-      transparent={false}
+      statusBarTranslucent={true}
       onRequestClose={onClose}
     >
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView
-          style={styles.keyboardContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
-        >
-          {/* Top Header */}
-          <View style={styles.topHeader}>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
-              <CloseIcon size={20} color="#FFFFFF" />
-            </TouchableOpacity>
+        {/* Top Header */}
+        <View style={styles.topHeader}>
+          <TouchableOpacity
+            onPress={onClose}
+            style={styles.backBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityLabel="Back to companions"
+          >
+            <BackIcon size={20} color="#FFFFFF" />
+          </TouchableOpacity>
 
-            <View style={styles.headerAvatarCol}>
-              <View style={[styles.headerSquircle, { borderColor }]}>
-                {activePersona.image_url ? (
-                  <Image source={{ uri: activePersona.image_url }} style={styles.headerAvatarImg} />
-                ) : (
-                  <View style={[styles.headerAvatarImg, { backgroundColor: borderColor }]}>
-                    <Text style={styles.headerAvatarLetter}>
-                      {activePersona.name.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                )}
-              </View>
+          <View style={styles.headerProfileCol}>
+            <View style={[styles.headerSquircle, { borderColor }]}>
+              {activePersona.image_url ? (
+                <Image source={{ uri: activePersona.image_url }} style={styles.headerAvatarImg} />
+              ) : (
+                <View style={[styles.headerAvatarImg, { backgroundColor: borderColor }]}>
+                  <Text style={styles.headerAvatarLetter}>
+                    {activePersona.name.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+            </View>
 
-              <View style={styles.headerTextCol}>
-                <Text style={styles.headerBotName}>{activePersona.name}</Text>
+            <View style={styles.headerTextCol}>
+              <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}</Text>
+              <View style={styles.statusRow}>
+                <View style={styles.onlineDot} />
                 <Text style={styles.headerStatusText}>Online · Reeve Memory</Text>
               </View>
             </View>
-
-            <TouchableOpacity
-              onPress={() => setShowMemoryModal(true)}
-              style={styles.memoryHeaderBtn}
-              activeOpacity={0.7}
-              accessibilityLabel="View persona memory"
-            >
-              <BrainIcon size={18} color={borderColor} />
-            </TouchableOpacity>
           </View>
 
-          {/* Messages Flow */}
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.messagesList}
-            renderItem={({ item }) => {
-              const isUser = item.sender === 'user';
-              return (
+          {/* High-Tech Memory Pill */}
+          <TouchableOpacity
+            onPress={() => setShowMemoryModal(true)}
+            style={styles.memoryPillBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="View persona memory"
+          >
+            <BrainIcon size={13} color="#60A5FA" />
+            <Text style={styles.memoryPillText}>Memory</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Messages Flow */}
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.messagesList}
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          renderItem={({ item }) => {
+            const isUser = item.sender === 'user';
+            return (
+              <View
+                style={[
+                  styles.messageBubbleRow,
+                  isUser ? styles.userBubbleRow : styles.botBubbleRow,
+                ]}
+              >
                 <View
                   style={[
-                    styles.messageBubbleRow,
-                    isUser ? styles.userBubbleRow : styles.botBubbleRow,
+                    styles.bubbleContainer,
+                    isUser
+                      ? [styles.userBubble, { backgroundColor: borderColor }]
+                      : styles.botBubble,
                   ]}
                 >
-                  {!isUser && (
-                    <View style={[styles.miniAvatarSquircle, { borderColor }]}>
-                      {activePersona.image_url ? (
-                        <Image source={{ uri: activePersona.image_url }} style={styles.miniAvatarImg} />
-                      ) : (
-                        <View style={[styles.miniAvatarImg, { backgroundColor: borderColor }]}>
-                          <Text style={styles.miniAvatarLetter}>{activePersona.name.charAt(0)}</Text>
-                        </View>
-                      )}
-                    </View>
-                  )}
-
-                  <View
+                  <MarkdownText
+                    content={item.text}
+                    style={isUser ? styles.userBubbleText : styles.botBubbleText}
+                    actionStyle={isUser ? styles.userActionText : styles.botActionText}
+                  />
+                  <Text
                     style={[
-                      styles.bubbleBox,
-                      isUser ? styles.userBubbleBox : styles.botBubbleBox,
-                      !isUser && { borderLeftColor: borderColor, borderLeftWidth: 2 },
+                      styles.bubbleTimestamp,
+                      isUser ? styles.userTimestampText : styles.botTimestampText,
                     ]}
                   >
-                    <MarkdownText
-                      content={item.text}
-                      style={isUser ? styles.userBubbleText : styles.botBubbleText}
-                    />
-                    <Text style={styles.bubbleTimestamp}>{item.timestamp}</Text>
-                  </View>
+                    {item.timestamp}
+                  </Text>
                 </View>
-              );
-            }}
-            ListFooterComponent={
-              isTyping ? (
-                <View style={styles.typingIndicatorRow}>
-                  <View style={[styles.miniAvatarSquircle, { borderColor }]}>
-                    <View style={[styles.miniAvatarImg, { backgroundColor: borderColor }]} />
-                  </View>
-                  <View style={styles.typingBubble}>
-                    <ActivityIndicator size="small" color={borderColor} />
-                    <Text style={styles.typingText}>{activePersona.name} is typing...</Text>
-                  </View>
+              </View>
+            );
+          }}
+          ListFooterComponent={
+            isTyping ? (
+              <View style={styles.typingIndicatorRow}>
+                <View style={[styles.typingBubble, { borderColor: '#26263A' }]}>
+                  <ActivityIndicator size="small" color={borderColor} />
+                  <Text style={styles.typingText}>{activePersona.name} is typing...</Text>
                 </View>
-              ) : undefined
-            }
-          />
+              </View>
+            ) : undefined
+          }
+        />
 
-          {/* Bottom Chat Input */}
-          <View style={styles.inputBar}>
+        {/* Bottom Floating Chat Input - Guaranteed to stay above keyboard */}
+        <View
+          style={[
+            styles.inputContainer,
+            {
+              paddingBottom:
+                keyboardHeight > 0
+                  ? keyboardHeight + (Platform.OS === 'android' ? 6 : 4)
+                  : (Platform.OS === 'ios' ? 12 : 14),
+            },
+          ]}
+        >
+          <View style={styles.inputCapsule}>
             <TextInput
               style={styles.chatTextInput}
               placeholder={`Message ${activePersona.name}...`}
@@ -361,38 +421,48 @@ export default function CompanionChatModal({
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                { backgroundColor: inputText.trim() ? borderColor : '#1E1E28' },
+                {
+                  backgroundColor: inputText.trim() ? borderColor : '#1E1E28',
+                },
               ]}
               onPress={handleSend}
               disabled={!inputText.trim() || isTyping}
               activeOpacity={0.8}
             >
-              <SendIcon size={16} color={inputText.trim() ? '#FFFFFF' : '#4B5563'} />
+              <SendArrowIcon
+                size={16}
+                color={inputText.trim() ? '#FFFFFF' : '#4B5563'}
+              />
             </TouchableOpacity>
           </View>
-        </KeyboardAvoidingView>
+        </View>
 
         {/* Live In-Chat Memory Tuning Sheet */}
         <Modal
           visible={showMemoryModal}
           animationType="fade"
           transparent={true}
+          statusBarTranslucent={true}
           onRequestClose={() => setShowMemoryModal(false)}
         >
           <View style={styles.modalBackdrop}>
             <View style={styles.modalSheetCard}>
               <View style={styles.modalSheetHeader}>
                 <View style={styles.modalSheetTitleRow}>
-                  <BrainIcon size={18} color={borderColor} />
+                  <BrainIcon size={16} color="#60A5FA" />
                   <Text style={styles.modalSheetTitle}>Companion Memory (Reeve)</Text>
                 </View>
-                <TouchableOpacity onPress={() => setShowMemoryModal(false)} style={styles.sheetCloseBtn}>
-                  <CloseIcon size={18} color="#FFFFFF" />
+                <TouchableOpacity
+                  onPress={() => setShowMemoryModal(false)}
+                  style={styles.sheetCloseBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <CloseIcon size={16} color="#FFFFFF" />
                 </TouchableOpacity>
               </View>
 
               <ScrollView style={styles.modalSheetBody} showsVerticalScrollIndicator={false}>
-                <Text style={styles.sheetFieldLabel}>FIRST MESSAGE / OPENING SCRIPT</Text>
+                <Text style={styles.sheetFieldLabel}>FIRST MESSAGE / SCRIPT</Text>
                 <TextInput
                   style={styles.sheetInput}
                   value={greetingInput}
@@ -416,7 +486,7 @@ export default function CompanionChatModal({
                   numberOfLines={4}
                 />
                 <Text style={styles.sheetSubHint}>
-                  100% stored into Reeve. Changes take effect on the very next message.
+                  100% stored in Reeve memory graph. Changes apply on the next turn.
                 </Text>
 
                 <View style={styles.sheetActionRow}>
@@ -451,10 +521,7 @@ export default function CompanionChatModal({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#000000',
-  },
-  keyboardContainer: {
-    flex: 1,
+    backgroundColor: '#09090D',
   },
   topHeader: {
     flexDirection: 'row',
@@ -463,29 +530,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#16161D',
+    borderBottomColor: '#161622',
+    backgroundColor: '#09090D',
   },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#161620',
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#14141E',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#262634',
+    borderColor: '#222232',
   },
-  headerAvatarCol: {
+  headerProfileCol: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
+    flex: 1,
+    marginLeft: 10,
   },
   headerSquircle: {
     width: 40,
     height: 40,
-    borderRadius: 12,
-    borderWidth: 1.5,
+    borderRadius: 14,
+    borderWidth: 1.8,
     overflow: 'hidden',
+    backgroundColor: '#12121A',
   },
   headerAvatarImg: {
     width: '100%',
@@ -500,144 +571,164 @@ const styles = StyleSheet.create({
   },
   headerTextCol: {
     justifyContent: 'center',
+    flex: 1,
   },
   headerBotName: {
     fontFamily: 'ChangaOne-Regular',
-    fontSize: 17,
+    fontSize: 16.5,
     color: '#FFFFFF',
     letterSpacing: 0.3,
   },
-  headerStatusText: {
-    fontSize: 11,
-    color: '#10B981',
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     marginTop: 2,
   },
-  memoryHeaderBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#161620',
+  onlineDot: {
+    width: 6.5,
+    height: 6.5,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
+  },
+  headerStatusText: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  memoryPillBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
     borderWidth: 1,
-    borderColor: '#262634',
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+  },
+  memoryPillText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#60A5FA',
+    letterSpacing: 0.3,
   },
   messagesList: {
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 14,
+    paddingTop: 16,
+    paddingBottom: 20,
+    gap: 12,
   },
   messageBubbleRow: {
+    width: '100%',
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-    maxWidth: '85%',
   },
   userBubbleRow: {
-    alignSelf: 'flex-end',
+    justifyContent: 'flex-end',
   },
   botBubbleRow: {
-    alignSelf: 'flex-start',
+    justifyContent: 'flex-start',
   },
-  miniAvatarSquircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    borderWidth: 1.2,
-    overflow: 'hidden',
+  bubbleContainer: {
+    maxWidth: '82%',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
   },
-  miniAvatarImg: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  miniAvatarLetter: {
-    fontFamily: 'ChangaOne-Regular',
-    fontSize: 12,
-    color: '#FFFFFF',
-  },
-  bubbleBox: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 16,
-  },
-  userBubbleBox: {
-    backgroundColor: '#1E1E2C',
+  userBubble: {
     borderBottomRightRadius: 4,
   },
-  botBubbleBox: {
-    backgroundColor: '#12121A',
+  botBubble: {
+    backgroundColor: '#151520',
+    borderWidth: 1,
+    borderColor: '#242436',
     borderBottomLeftRadius: 4,
   },
   userBubbleText: {
-    fontSize: 14.5,
+    fontSize: 15,
     color: '#FFFFFF',
-    lineHeight: 21,
+    lineHeight: 22,
   },
   botBubbleText: {
-    fontSize: 14.5,
-    color: '#E5E7EB',
-    lineHeight: 21,
+    fontSize: 15,
+    color: '#F3F4F6',
+    lineHeight: 22,
+  },
+  userActionText: {
+    fontStyle: 'italic',
+    color: '#FFE4E6',
+  },
+  botActionText: {
+    fontStyle: 'italic',
+    color: '#94A3B8',
   },
   bubbleTimestamp: {
     fontSize: 10,
-    color: '#6B7280',
     alignSelf: 'flex-end',
     marginTop: 4,
+  },
+  userTimestampText: {
+    color: 'rgba(255, 255, 255, 0.75)',
+  },
+  botTimestampText: {
+    color: '#64748B',
   },
   typingIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginTop: 6,
+    marginTop: 4,
+    marginBottom: 8,
   },
   typingBubble: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#12121A',
+    backgroundColor: '#151520',
+    borderWidth: 1,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 9,
     borderRadius: 16,
   },
   typingText: {
     fontSize: 12,
     color: '#9CA3AF',
   },
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
+  inputContainer: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 8,
+    backgroundColor: '#09090D',
     borderTopWidth: 1,
-    borderTopColor: '#16161D',
-    backgroundColor: '#000000',
+    borderTopColor: '#161622',
+  },
+  inputCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#14141E',
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#262638',
+    paddingLeft: 16,
+    paddingRight: 6,
+    paddingVertical: 4,
   },
   chatTextInput: {
     flex: 1,
-    backgroundColor: '#12121A',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 10,
-    fontSize: 14,
+    fontSize: 14.5,
     color: '#FFFFFF',
+    minHeight: 38,
     maxHeight: 100,
-    borderWidth: 1,
-    borderColor: '#222230',
+    paddingVertical: 6,
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.75)',
     justifyContent: 'center',
     paddingHorizontal: 20,
   },

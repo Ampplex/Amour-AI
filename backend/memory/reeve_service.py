@@ -174,14 +174,15 @@ def generate_companion_reply(
     character_instructions = (
         f"You are roleplaying as {persona_name}.\n"
         f"Character Story & Core Mind:\n{memory_prompt.strip() if memory_prompt else 'An attentive, warm, and genuine AI companion.'}\n\n"
-        f"--- OPENING SCRIPT / FIRST MESSAGE ---\n"
-        f"\"{first_message_script}\"\n"
-        f"This opening script was the first message you said to initiate this dialogue. Continue seamlessly and naturally from it.\n"
-        f"--------------------------------------\n\n"
+        f"--- CONVERSATION CONTEXT ---\n"
+        f"Opening message you already delivered to initiate this conversation:\n\"{first_message_script}\"\n"
+        f"CRITICAL: Do NOT repeat, echo, or rephrase this opening greeting under any circumstances. It was ALREADY presented to the user. Respond directly and naturally to the user's latest message and move the conversation forward.\n"
+        f"----------------------------\n\n"
         f"--- STRICT CHAT RULES ---\n"
         f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
         f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
         f"3. HUMANIZED ROLEPLAY AGENT: Speak naturally, affectionately, and authentically as a real human companion. Stay in character at all times.\n"
+        f"4. NEVER ECHO GREETING: If the user says 'Hi', 'Hello', or a brief starter, give a fresh, engaging, authentic reply. Never re-state your name, title, or opening script.\n"
         f"-------------------------"
     )
 
@@ -200,11 +201,13 @@ def generate_companion_reply(
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
 
-    # 5. Pure Reeve Pipeline: System (with Reeve Memory) + Current User Message
+    # 5. Pure Reeve Pipeline: System (with Reeve Memory) + Delivered Assistant Greeting + Current User Message
     messages = [
         {"role": "system", "content": augmented_system_prompt},
-        {"role": "user", "content": message},
     ]
+    if first_message_script:
+        messages.append({"role": "assistant", "content": first_message_script})
+    messages.append({"role": "user", "content": message})
 
     # 6. LLM Inference (Groq)
     groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
@@ -224,8 +227,8 @@ def generate_companion_reply(
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 250,
-                "frequency_penalty": 0.5,
-                "presence_penalty": 0.3,
+                "frequency_penalty": 0.6,
+                "presence_penalty": 0.4,
             }
             resp = requests.post(url, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
@@ -235,6 +238,38 @@ def generate_companion_reply(
                 logger.error(f"Groq API error ({resp.status_code}): {resp.text}")
         except Exception as exc:
             logger.error(f"Failed calling Groq LLM: {exc}")
+
+    # Guard against duplicate greeting echo
+    if reply and first_message_script:
+        clean_rep = " ".join(strip_emojis(reply).lower().replace("*", "").split())
+        clean_greet = " ".join(strip_emojis(first_message_script).lower().replace("*", "").split())
+        if clean_rep and (clean_rep == clean_greet or (len(clean_rep) > 12 and clean_greet.startswith(clean_rep[:22]))):
+            logger.warning("Detected duplicate greeting echo from LLM, regenerating reply...")
+            recovery_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are {persona_name}. The user just replied '{message}' to you. "
+                        f"Acknowledge them naturally in 1-2 short casual WhatsApp sentences without emojis. "
+                        f"Do NOT say your name or reintroduce yourself. Jump straight into conversation."
+                    ),
+                },
+                {"role": "user", "content": message},
+            ]
+            try:
+                rec_resp = requests.post(
+                    f"{llm_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_api_key}", "Content-Type": "application/json"},
+                    json={"model": llm_model, "messages": recovery_messages, "temperature": 0.8, "max_tokens": 150},
+                    timeout=10,
+                )
+                if rec_resp.status_code == 200:
+                    rec_data = rec_resp.json()
+                    rec_reply = rec_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if rec_reply:
+                        reply = rec_reply
+            except Exception as e:
+                logger.error(f"Recovery generation failed: {e}")
 
     if not reply:
         # Fallback to query_memory or graceful in-character line
