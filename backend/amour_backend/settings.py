@@ -33,6 +33,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -73,6 +74,19 @@ DATABASES = {
     }
 }
 
+# Auto-configure from cloud DATABASE_URL (Render, Railway, Supabase, Neon, AWS RDS)
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL:
+    try:
+        import dj_database_url
+        DATABASES["default"] = dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
+    except ImportError:
+        pass
+
 # Custom User Model
 AUTH_USER_MODEL = "authentication.User"
 
@@ -89,6 +103,22 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
+# CSRF Trusted Origins for cloud deployments
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.onrender.com",
+    "https://*.up.railway.app",
+    "https://*.fly.dev",
+    "https://*.apprunner.aws",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS Settings (Mobile friendly)
