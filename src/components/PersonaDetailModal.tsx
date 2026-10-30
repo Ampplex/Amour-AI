@@ -200,7 +200,7 @@ export default function PersonaDetailModal({
       setMemoryText(persona.memory_prompt || '');
       setIsEditing(false);
     }
-  }, [persona, visible]);
+  }, [persona?.id, visible]);
 
   if (!activePersona) return null;
 
@@ -276,6 +276,7 @@ export default function PersonaDetailModal({
               style={styles.headerActionBtn}
               onPress={() => setIsEditing(!isEditing)}
               activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               accessibilityLabel="Edit memory"
             >
               <EditIcon size={16} color={isEditing ? borderColor : '#FFFFFF'} />
@@ -385,6 +386,7 @@ export default function PersonaDetailModal({
                   style={styles.editPencilBtn}
                   onPress={() => setIsEditing(true)}
                   activeOpacity={0.7}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 >
                   <EditIcon size={13} color={borderColor} />
                   <Text style={[styles.editPencilText, { color: borderColor }]}>Edit</Text>
@@ -427,6 +429,7 @@ export default function PersonaDetailModal({
                   style={styles.editPencilBtn}
                   onPress={() => setIsEditing(true)}
                   activeOpacity={0.7}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 >
                   <EditIcon size={13} color={borderColor} />
                   <Text style={[styles.editPencilText, { color: borderColor }]}>Edit</Text>
