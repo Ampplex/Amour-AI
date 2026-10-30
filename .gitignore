@@ -39,6 +39,8 @@ backend/.env
 !**/*.example
 
 # Python / Django
+staticfiles/
+backend/staticfiles/
 venv/
 **/venv/
 env/
@@ -56,3 +58,4 @@ db.sqlite3
 # generated native folders
 /ios
 /android
+.neon
