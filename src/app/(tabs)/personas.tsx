@@ -11,7 +11,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { theme } from '../../constants/theme';
 import MarkdownText from '../../components/MarkdownText';
@@ -21,6 +21,7 @@ import {
   getStoredPersonas,
   fetchAndSyncPersonas,
   deletePersonaFromRoster,
+  subscribePersonas,
 } from '../../services/personaService';
 
 function ShieldLockIcon({ size = 13, color = '#F43F5E' }: { size?: number; color?: string }) {
@@ -95,9 +96,21 @@ export default function PersonasScreen() {
     }
   }, []);
 
+  // Subscribe to real-time events across the app (creation, deletion, syncing)
   useEffect(() => {
-    loadPersonas(false);
-  }, [loadPersonas]);
+    const unsubscribe = subscribePersonas((updated) => {
+      setPersonas(updated);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Automatically refresh whenever this tab comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadPersonas(false);
+    }, [loadPersonas])
+  );
 
   const onRefresh = useCallback(() => {
     loadPersonas(true);
@@ -112,13 +125,10 @@ export default function PersonasScreen() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              await deletePersonaFromRoster(id);
-              setPersonas((prev) => prev.filter((p) => p.id !== id));
-            } catch (err) {
-              console.warn('[Personas] Delete error:', err);
-            }
+          onPress: () => {
+            // Instant 0ms optimistic UI update: card vanishes immediately
+            setPersonas((prev) => prev.filter((p) => p.id !== id));
+            deletePersonaFromRoster(id);
           },
         },
       ],

@@ -17,6 +17,30 @@ export interface PersonaItem {
 
 const STORAGE_KEY = '@amour_personas_roster';
 
+type PersonaListener = (personas: PersonaItem[]) => void;
+const listeners = new Set<PersonaListener>();
+
+/**
+ * Subscribe to real-time persona updates (creation, deletion, syncing).
+ * Automatically fires when any persona changes anywhere in the app.
+ */
+export function subscribePersonas(listener: PersonaListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyListeners(personas: PersonaItem[]) {
+  listeners.forEach((listener) => {
+    try {
+      listener(personas);
+    } catch (e) {
+      console.warn('[PersonaService] Listener error:', e);
+    }
+  });
+}
+
 // Default seeded personas if storage and network are both empty
 const SEED_PERSONAS: PersonaItem[] = [
   {
@@ -126,6 +150,7 @@ export async function fetchAndSyncPersonas(): Promise<PersonaItem[]> {
         }
         const merged = Array.from(map.values());
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        notifyListeners(merged);
         return merged;
       }
     }
@@ -146,10 +171,11 @@ export async function savePersonaToRoster(item: Omit<PersonaItem, 'id' | 'create
     created_at: nowIso,
   };
 
-  // 1. Immediately store in local AsyncStorage
+  // 1. Immediately store in local AsyncStorage and notify all subscribers (INSTANT UI UPDATE)
   const current = await getStoredPersonas();
   const updated = [newPersona, ...current.filter((p) => p.name.toLowerCase() !== newPersona.name.toLowerCase())];
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  notifyListeners(updated);
 
   // 2. Fire server POST in parallel
   try {
@@ -172,6 +198,7 @@ export async function savePersonaToRoster(item: Omit<PersonaItem, 'id' | 'create
         // Replace temp ID with backend UUID
         const finalUpdated = updated.map((p) => (p.id === newId ? savedFromServer : p));
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(finalUpdated));
+        notifyListeners(finalUpdated);
         return savedFromServer;
       }
     }
@@ -183,16 +210,17 @@ export async function savePersonaToRoster(item: Omit<PersonaItem, 'id' | 'create
 }
 
 export async function deletePersonaFromRoster(id: string): Promise<boolean> {
-  // 1. Remove from local AsyncStorage
+  // 1. Remove from local AsyncStorage and notify all subscribers immediately (INSTANT 0ms UI UPDATE)
   try {
     const current = await getStoredPersonas();
     const updated = current.filter((p) => p.id !== id);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    notifyListeners(updated);
   } catch (err) {
     console.warn('[PersonaService] Local delete error:', err);
   }
 
-  // 2. Attempt server delete
+  // 2. Attempt server delete in parallel
   try {
     await tryServerFetch(`/memory/personas/${id}/`, {
       method: 'DELETE',
