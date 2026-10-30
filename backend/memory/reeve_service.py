@@ -1,5 +1,8 @@
 import os
+import re
 import logging
+from datetime import datetime
+import requests
 from django.conf import settings
 
 logger = logging.getLogger("amour.reeve")
@@ -7,6 +10,7 @@ logger = logging.getLogger("amour.reeve")
 # Ensure REEVE_API_KEY is available in environment
 if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
     os.environ["REEVE_API_KEY"] = settings.REEVE_API_KEY
+
 
 def get_reeve_status():
     """Verify Reeve SDK and Neo4j memory graph status."""
@@ -22,10 +26,26 @@ def get_reeve_status():
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
+
+def deduplicate_context(context_str: str) -> str:
+    """Removes identical repetitive blocks from Reeve/LTM memory context to prevent feedback loops."""
+    if not context_str or not context_str.strip():
+        return ""
+    blocks = context_str.split("\n\n")
+    seen = set()
+    unique_blocks = []
+    for b in blocks:
+        norm = " ".join(b.strip().split())
+        if norm and norm not in seen:
+            seen.add(norm)
+            unique_blocks.append(b.strip())
+    return "\n\n".join(unique_blocks)
+
+
 def store_memory_for_user(text: str, namespace: str):
     """
     Store conversational memory into Reeve / Neo4j.
-    The user's unique namespace (user_id) is passed as speaker.
+    The user's unique namespace (e.g. user_id_persona_id) is passed as speaker.
     """
     from reeve.tools import store_memory, reset_client_cache
     try:
@@ -34,6 +54,7 @@ def store_memory_for_user(text: str, namespace: str):
         logger.warning(f"Reeve write failed, resetting client cache and retrying: {exc}")
         reset_client_cache()
         return store_memory(text, speaker=namespace)
+
 
 def query_memory_for_user(question: str, namespace: str):
     """
@@ -47,6 +68,7 @@ def query_memory_for_user(question: str, namespace: str):
         reset_client_cache()
         return query_memory(question, speaker=namespace)
 
+
 def retrieve_context_for_user(question: str, namespace: str):
     """
     Retrieve ranked memory context from Neo4j graph for this user namespace.
@@ -59,9 +81,185 @@ def retrieve_context_for_user(question: str, namespace: str):
         reset_client_cache()
         return retrieve_memory_context(question, speaker=namespace)
 
+
 def clear_user_memories(namespace: str):
     """
     Wipe memories in Neo4j graph for this specific user namespace.
     """
     from reeve.tools import _get_client
     return _get_client().call_tool("clear_memory", {"speaker": namespace, "dry_run": False})
+
+
+def strip_emojis(text: str) -> str:
+    """Fallback filter to ensure zero emojis in persona output."""
+    # Matches common Unicode emoji ranges
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map
+        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-a
+        "]+",
+        flags=re.UNICODE,
+    )
+    return emoji_pattern.sub("", text).strip()
+
+
+def generate_companion_reply(
+    message: str,
+    namespace: str,
+    persona_name: str = "Companion",
+    greeting: str = "",
+    memory_prompt: str = "",
+    client_time: str = None,
+    client_timezone: str = None,
+) -> dict:
+    """
+    Companion roleplay chat powered 100% by Reeve memory graph and Groq LLM.
+    
+    Architecture:
+    1. Ingest User message into Reeve memory graph.
+    2. Retrieve & deduplicate memory context from Reeve graph.
+    3. Construct dynamic system prompt:
+       - Persona identity & Mind/Backstory
+       - Opening Script / First Message
+       - Strict ZERO EMOJIS requirement
+       - WhatsApp-style short messages (1-3 sentences)
+       - Humanized roleplay agent persona
+       - Access to Date and Time (Current temporal context anchor)
+       - Reeve LTM Memory Context block
+    4. Call LLM (Groq qwen/qwen3.8-27b) with pure Reeve pipeline (System + User message).
+    5. Anti-echo guard: Store Assistant reply into Reeve memory graph.
+    6. Return reply, context, and namespace.
+    """
+    # 1. ALWAYS STORE: Ingest user's message into Reeve's graph first
+    try:
+        store_memory_for_user(f"User: {message}", namespace)
+    except Exception as exc:
+        logger.warning(f"Failed to store user memory to Reeve: {exc}")
+
+    # 2. ALWAYS RECALL: Retrieve memory context from Reeve's graph and deduplicate
+    try:
+        raw_memory_context = retrieve_context_for_user(message, namespace)
+        memory_context = deduplicate_context(str(raw_memory_context or ""))
+    except Exception as exc:
+        logger.warning(f"Error retrieving memory context from Reeve: {exc}")
+        memory_context = ""
+
+    # 3. Dynamic Temporal Anchor (Access to Date & Time)
+    now = datetime.now().astimezone()
+    server_time_str = now.strftime("%A, %B %d, %Y at %I:%M:%S %p %Z")
+    iso_time_str = now.isoformat()
+
+    temporal_anchor = (
+        f"--- CURRENT TEMPORAL CONTEXT ---\n"
+        f"Current Date & Time: {server_time_str}\n"
+        f"ISO 8601 Timestamp: {iso_time_str}"
+    )
+    if client_time:
+        temporal_anchor += f"\nUser Device Local Time: {client_time}"
+    if client_timezone:
+        temporal_anchor += f" (Timezone: {client_timezone})"
+    temporal_anchor += (
+        f"\nUse this current date & time as your reference anchor for 'today', 'now', 'tonight', time of day, and calculating elapsed time from memory timestamps.\n"
+        f"--------------------------------"
+    )
+
+    # 4. Dynamic Character Script & Persona
+    first_message_script = greeting.strip() if greeting else "Hey! Good to hear from you."
+    character_instructions = (
+        f"You are roleplaying as {persona_name}.\n"
+        f"Character Story & Core Mind:\n{memory_prompt.strip() if memory_prompt else 'An attentive, warm, and genuine AI companion.'}\n\n"
+        f"--- OPENING SCRIPT / FIRST MESSAGE ---\n"
+        f"\"{first_message_script}\"\n"
+        f"This opening script was the first message you said to initiate this dialogue. Continue seamlessly and naturally from it.\n"
+        f"--------------------------------------\n\n"
+        f"--- STRICT CHAT RULES ---\n"
+        f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
+        f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
+        f"3. HUMANIZED ROLEPLAY AGENT: Speak naturally, affectionately, and authentically as a real human companion. Stay in character at all times.\n"
+        f"-------------------------"
+    )
+
+    augmented_system_prompt = f"{character_instructions}\n\n{temporal_anchor}"
+
+    if memory_context and memory_context.strip():
+        augmented_system_prompt += (
+            f"\n\n--- LTM MEMORY CONTEXT ---\n"
+            f"{memory_context.strip()}\n"
+            f"--- END LTM MEMORY CONTEXT ---\n\n"
+            f"Guidelines for Conversation:\n"
+            f"- 'User:' lines indicate statements spoken by the user.\n"
+            f"- 'Assistant:' lines indicate statements previously spoken by you.\n"
+            f"- Memories include timestamps. Compare them with CURRENT TEMPORAL CONTEXT to reason about when things occurred.\n"
+            f"- Never repeat previous responses verbatim.\n"
+            f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
+        )
+
+    # 5. Pure Reeve Pipeline: System (with Reeve Memory) + Current User Message
+    messages = [
+        {"role": "system", "content": augmented_system_prompt},
+        {"role": "user", "content": message},
+    ]
+
+    # 6. LLM Inference (Groq)
+    groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
+    llm_base_url = (getattr(settings, "LLM_BASE_URL", "") or os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")).rstrip("/")
+    llm_model = getattr(settings, "LLM_MODEL", "") or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+
+    reply = ""
+    if groq_api_key:
+        try:
+            url = f"{llm_base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {groq_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": llm_model,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 250,
+                "frequency_penalty": 0.5,
+                "presence_penalty": 0.3,
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            else:
+                logger.error(f"Groq API error ({resp.status_code}): {resp.text}")
+        except Exception as exc:
+            logger.error(f"Failed calling Groq LLM: {exc}")
+
+    if not reply:
+        # Fallback to query_memory or graceful in-character line
+        try:
+            reply = query_memory_for_user(message, namespace) or ""
+        except Exception:
+            reply = ""
+
+    if not reply:
+        reply = f"I hear you. Tell me more about what is on your mind."
+
+    # Enforce zero emojis strictly
+    reply = strip_emojis(reply)
+
+    # 7. Anti-Echo Storage Guard: Ingest Assistant reply into Reeve
+    clean_reply = " ".join(reply.split())
+    clean_context = " ".join((memory_context or "").split())
+    if clean_reply and clean_reply not in clean_context:
+        try:
+            store_memory_for_user(f"Assistant: {reply}", namespace)
+        except Exception as exc:
+            logger.warning(f"Failed to store assistant reply to Reeve: {exc}")
+
+    return {
+        "reply": reply,
+        "context": memory_context,
+        "namespace": namespace,
+    }

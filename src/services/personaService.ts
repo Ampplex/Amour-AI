@@ -204,6 +204,58 @@ export async function savePersonaToRoster(
   return newPersona;
 }
 
+export async function updatePersonaMemory(
+  id: string,
+  updates: { memory_prompt?: string; greeting?: string; name?: string; tagline?: string },
+  userId?: string
+): Promise<PersonaItem | null> {
+  const storageKey = getStorageKey(userId);
+  const current = await getStoredPersonas(userId);
+  let updatedPersona: PersonaItem | null = null;
+
+  const updatedList = current.map((p) => {
+    if (p.id === id) {
+      updatedPersona = {
+        ...p,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+      return updatedPersona;
+    }
+    return p;
+  });
+
+  if (updatedPersona) {
+    await AsyncStorage.setItem(storageKey, JSON.stringify(updatedList));
+    notifyListeners(updatedList);
+  }
+
+  // Sync update with backend & Reeve
+  try {
+    const res = await tryServerFetch(`/memory/personas/${id}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...updates,
+        user_id: userId,
+      }),
+    });
+    if (res && res.ok) {
+      const serverUpdated: PersonaItem = await res.json();
+      if (serverUpdated && serverUpdated.id) {
+        const finalUpdated = updatedList.map((p) => (p.id === id ? serverUpdated : p));
+        await AsyncStorage.setItem(storageKey, JSON.stringify(finalUpdated));
+        notifyListeners(finalUpdated);
+        return serverUpdated;
+      }
+    }
+  } catch (err) {
+    console.warn('[PersonaService] Server memory update notice:', err);
+  }
+
+  return updatedPersona;
+}
+
 export async function deletePersonaFromRoster(id: string, userId?: string): Promise<void> {
   const storageKey = getStorageKey(userId);
   const current = await getStoredPersonas(userId);

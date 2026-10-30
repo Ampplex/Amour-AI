@@ -11,11 +11,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
-import { PersonaItem } from '../services/personaService';
+import { PersonaItem, updatePersonaMemory } from '../services/personaService';
 import { API_CONFIG } from '../constants/authConfig';
 import { useAuth } from '../context/AuthContext';
 
@@ -35,6 +36,27 @@ function SendIcon({ size = 18, color = '#F43F5E' }: { size?: number; color?: str
   );
 }
 
+function BrainIcon({ size = 18, color = '#F43F5E' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M9.5 2A2.5 2.5 0 0 0 7 4.5V5A3 3 0 0 0 4 8v1a3 3 0 0 0-1 2.25c0 1.25.75 2.3 1.83 2.75A3 3 0 0 0 4 16v1a3 3 0 0 0 3 3h.5A2.5 2.5 0 0 0 10 22h.5a2.5 2.5 0 0 0 2.5-2.5V19a2.5 2.5 0 0 0-2.5-2.5H10v-3h1.5A2.5 2.5 0 0 0 14 11V8.5A2.5 2.5 0 0 0 11.5 6H10V4.5A2.5 2.5 0 0 0 7.5 2h2z"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M14.5 2A2.5 2.5 0 0 1 17 4.5V5a3 3 0 0 1 3 3v1a3 3 0 0 1 1 2.25c0 1.25-.75 2.3-1.83 2.75A3 3 0 0 1 20 16v1a3 3 0 0 1-3 3h-.5A2.5 2.5 0 0 1 14 22h-.5a2.5 2.5 0 0 1-2.5-2.5V19a2.5 2.5 0 0 1 2.5-2.5H14v-3h-1.5A2.5 2.5 0 0 1 10 11V8.5A2.5 2.5 0 0 1 12.5 6H14V4.5A2.5 2.5 0 0 1 16.5 2h-2z"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 interface ChatMessage {
   id: string;
   sender: 'user' | 'bot';
@@ -48,25 +70,67 @@ interface CompanionChatModalProps {
   onClose: () => void;
 }
 
+const CANDIDATE_URLS = [
+  'http://127.0.0.1:8000/api',
+  'http://192.168.1.4:8000/api',
+  API_CONFIG.baseUrl,
+  'http://10.104.217.217:8000/api',
+  'http://192.168.1.2:8000/api',
+];
+
+async function tryChatFetch(payload: any, token?: string): Promise<{ reply?: string } | null> {
+  for (const base of CANDIDATE_URLS) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(`${base}/memory/chat/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // try next candidate endpoint
+    }
+  }
+  return null;
+}
+
 export default function CompanionChatModal({
   visible,
   persona,
   onClose,
 }: CompanionChatModalProps) {
   const { user } = useAuth();
+  const [activePersona, setActivePersona] = useState<PersonaItem | null>(persona);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
+  const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
+  const [memoryInput, setMemoryInput] = useState<string>('');
+  const [greetingInput, setGreetingInput] = useState<string>('');
+  const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
   const flatListRef = useRef<FlatList>(null);
 
-  // Initialize with persona's customized greeting
+  // Initialize with persona's customized greeting (opening script)
   useEffect(() => {
     if (!visible || !persona) {
       setMessages([]);
       return;
     }
 
-    const initialGreeting = persona.greeting || `*smiles gently* Hello! I am ${persona.name}. How are you today?`;
+    setActivePersona(persona);
+    setMemoryInput(persona.memory_prompt || '');
+    setGreetingInput(persona.greeting || '');
+
+    const initialGreeting = persona.greeting || `Hello! I am ${persona.name}. How are you today?`;
     setMessages([
       {
         id: 'msg-greeting',
@@ -77,9 +141,32 @@ export default function CompanionChatModal({
     ]);
   }, [visible, persona]);
 
+  const handleSaveMemoryModal = async () => {
+    if (!activePersona) return;
+    setIsSavingMemory(true);
+    try {
+      const updated = await updatePersonaMemory(
+        activePersona.id,
+        {
+          greeting: greetingInput.trim(),
+          memory_prompt: memoryInput.trim(),
+        },
+        user?.id
+      );
+      if (updated) {
+        setActivePersona(updated);
+        setShowMemoryModal(false);
+      }
+    } catch (e) {
+      console.warn('[CompanionChatModal] Error saving memory:', e);
+    } finally {
+      setIsSavingMemory(false);
+    }
+  };
+
   const handleSend = async () => {
     const text = inputText.trim();
-    if (!text || !persona || isTyping) return;
+    if (!text || !activePersona || isTyping) return;
 
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
@@ -96,30 +183,34 @@ export default function CompanionChatModal({
       flatListRef.current?.scrollToEnd({ animated: true });
     }, 100);
 
-    try {
-      const res = await fetch(`${API_CONFIG.baseUrl}/memory/chat/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(user?.token ? { Authorization: `Bearer ${user.token}` } : {}),
-        },
-        body: JSON.stringify({
-          message: text,
-          persona_id: persona.id,
-          persona_name: persona.name,
-          memory_prompt: persona.memory_prompt,
-        }),
-      });
+    const clientTime = new Date().toLocaleString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
 
-      let replyText = '';
-      if (res.ok) {
-        const data = await res.json();
-        replyText = data.reply || data.generation || '';
-      }
+    const payload = {
+      message: text,
+      persona_id: activePersona.id,
+      persona_name: activePersona.name,
+      greeting: activePersona.greeting,
+      memory_prompt: activePersona.memory_prompt,
+      client_time: clientTime,
+      client_timezone: clientTimezone,
+      user_id: user?.id,
+    };
+
+    try {
+      const data = await tryChatFetch(payload, user?.token);
+      let replyText = data?.reply || '';
 
       if (!replyText) {
-        // In-character thoughtful fallback
-        replyText = `*listens attentively and nods* I hear you deeply. With everything you just shared, I am right here with you.`;
+        replyText = "I hear you. Tell me more about what is on your mind.";
       }
 
       const botReply: ChatMessage = {
@@ -134,7 +225,7 @@ export default function CompanionChatModal({
       const fallbackReply: ChatMessage = {
         id: `bot-fallback-${Date.now()}`,
         sender: 'bot',
-        text: `*offers a gentle, supportive smile* I am listening closely. Tell me more about what you are thinking.`,
+        text: "I am listening closely. Tell me more about what you are thinking.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, fallbackReply]);
@@ -146,8 +237,8 @@ export default function CompanionChatModal({
     }
   };
 
-  if (!persona) return null;
-  const borderColor = persona.border_color || '#F43F5E';
+  if (!activePersona) return null;
+  const borderColor = activePersona.border_color || '#F43F5E';
 
   return (
     <Modal
@@ -170,24 +261,31 @@ export default function CompanionChatModal({
 
             <View style={styles.headerAvatarCol}>
               <View style={[styles.headerSquircle, { borderColor }]}>
-                {persona.image_url ? (
-                  <Image source={{ uri: persona.image_url }} style={styles.headerAvatarImg} />
+                {activePersona.image_url ? (
+                  <Image source={{ uri: activePersona.image_url }} style={styles.headerAvatarImg} />
                 ) : (
                   <View style={[styles.headerAvatarImg, { backgroundColor: borderColor }]}>
                     <Text style={styles.headerAvatarLetter}>
-                      {persona.name.charAt(0).toUpperCase()}
+                      {activePersona.name.charAt(0).toUpperCase()}
                     </Text>
                   </View>
                 )}
               </View>
 
               <View style={styles.headerTextCol}>
-                <Text style={styles.headerBotName}>{persona.name}</Text>
-                <Text style={styles.headerStatusText}>Online · Amour Companion</Text>
+                <Text style={styles.headerBotName}>{activePersona.name}</Text>
+                <Text style={styles.headerStatusText}>Online · Reeve Memory</Text>
               </View>
             </View>
 
-            <View style={{ width: 36 }} />
+            <TouchableOpacity
+              onPress={() => setShowMemoryModal(true)}
+              style={styles.memoryHeaderBtn}
+              activeOpacity={0.7}
+              accessibilityLabel="View persona memory"
+            >
+              <BrainIcon size={18} color={borderColor} />
+            </TouchableOpacity>
           </View>
 
           {/* Messages Flow */}
@@ -207,11 +305,11 @@ export default function CompanionChatModal({
                 >
                   {!isUser && (
                     <View style={[styles.miniAvatarSquircle, { borderColor }]}>
-                      {persona.image_url ? (
-                        <Image source={{ uri: persona.image_url }} style={styles.miniAvatarImg} />
+                      {activePersona.image_url ? (
+                        <Image source={{ uri: activePersona.image_url }} style={styles.miniAvatarImg} />
                       ) : (
                         <View style={[styles.miniAvatarImg, { backgroundColor: borderColor }]}>
-                          <Text style={styles.miniAvatarLetter}>{persona.name.charAt(0)}</Text>
+                          <Text style={styles.miniAvatarLetter}>{activePersona.name.charAt(0)}</Text>
                         </View>
                       )}
                     </View>
@@ -241,7 +339,7 @@ export default function CompanionChatModal({
                   </View>
                   <View style={styles.typingBubble}>
                     <ActivityIndicator size="small" color={borderColor} />
-                    <Text style={styles.typingText}>{persona.name} is thinking...</Text>
+                    <Text style={styles.typingText}>{activePersona.name} is typing...</Text>
                   </View>
                 </View>
               ) : undefined
@@ -252,7 +350,7 @@ export default function CompanionChatModal({
           <View style={styles.inputBar}>
             <TextInput
               style={styles.chatTextInput}
-              placeholder={`Message ${persona.name}...`}
+              placeholder={`Message ${activePersona.name}...`}
               placeholderTextColor="#6B7280"
               value={inputText}
               onChangeText={setInputText}
@@ -263,16 +361,88 @@ export default function CompanionChatModal({
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                (!inputText.trim() || isTyping) && styles.sendBtnDisabled,
+                { backgroundColor: inputText.trim() ? borderColor : '#1E1E28' },
               ]}
               onPress={handleSend}
               disabled={!inputText.trim() || isTyping}
-              activeOpacity={0.7}
+              activeOpacity={0.8}
             >
-              <SendIcon size={18} color={inputText.trim() ? borderColor : '#4B5563'} />
+              <SendIcon size={16} color={inputText.trim() ? '#FFFFFF' : '#4B5563'} />
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+
+        {/* Live In-Chat Memory Tuning Sheet */}
+        <Modal
+          visible={showMemoryModal}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setShowMemoryModal(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalSheetCard}>
+              <View style={styles.modalSheetHeader}>
+                <View style={styles.modalSheetTitleRow}>
+                  <BrainIcon size={18} color={borderColor} />
+                  <Text style={styles.modalSheetTitle}>Companion Memory (Reeve)</Text>
+                </View>
+                <TouchableOpacity onPress={() => setShowMemoryModal(false)} style={styles.sheetCloseBtn}>
+                  <CloseIcon size={18} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalSheetBody} showsVerticalScrollIndicator={false}>
+                <Text style={styles.sheetFieldLabel}>FIRST MESSAGE / OPENING SCRIPT</Text>
+                <TextInput
+                  style={styles.sheetInput}
+                  value={greetingInput}
+                  onChangeText={setGreetingInput}
+                  placeholder="First message opening script..."
+                  placeholderTextColor="#6B7280"
+                  multiline
+                  numberOfLines={2}
+                />
+
+                <Text style={[styles.sheetFieldLabel, { marginTop: 14 }]}>
+                  PERSONALITY & STORY (REEVE GRAPH)
+                </Text>
+                <TextInput
+                  style={[styles.sheetInput, { minHeight: 90 }]}
+                  value={memoryInput}
+                  onChangeText={setMemoryInput}
+                  placeholder="Backstory and memory..."
+                  placeholderTextColor="#6B7280"
+                  multiline
+                  numberOfLines={4}
+                />
+                <Text style={styles.sheetSubHint}>
+                  100% stored into Reeve. Changes take effect on the very next message.
+                </Text>
+
+                <View style={styles.sheetActionRow}>
+                  <TouchableOpacity
+                    style={styles.sheetCancelBtn}
+                    onPress={() => setShowMemoryModal(false)}
+                  >
+                    <Text style={styles.sheetCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.sheetSaveBtn, { backgroundColor: borderColor }]}
+                    onPress={handleSaveMemoryModal}
+                    disabled={isSavingMemory}
+                  >
+                    {isSavingMemory ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.sheetSaveText}>Save to Reeve</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </Modal>
   );
@@ -287,32 +457,35 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topHeader: {
-    height: 58,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#1A1A24',
-    backgroundColor: '#09090D',
+    borderBottomColor: '#16161D',
   },
   closeBtn: {
-    padding: 6,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#161620',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#262634',
   },
   headerAvatarCol: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    flex: 1,
-    marginLeft: 8,
+    gap: 12,
   },
   headerSquircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     borderWidth: 1.5,
     overflow: 'hidden',
-    backgroundColor: '#1E1E2A',
   },
   headerAvatarImg: {
     width: '100%',
@@ -321,49 +494,57 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerAvatarLetter: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 18,
     color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
   },
   headerTextCol: {
-    flex: 1,
+    justifyContent: 'center',
   },
   headerBotName: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 17,
     color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
+    letterSpacing: 0.3,
   },
   headerStatusText: {
-    color: '#10B981',
     fontSize: 11,
-    fontWeight: '500',
+    color: '#10B981',
+    marginTop: 2,
   },
-
+  memoryHeaderBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#161620',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#262634',
+  },
   messagesList: {
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 12,
+    paddingVertical: 16,
+    gap: 14,
   },
   messageBubbleRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
-    marginBottom: 8,
+    gap: 10,
+    maxWidth: '85%',
   },
   userBubbleRow: {
-    justifyContent: 'flex-end',
+    alignSelf: 'flex-end',
   },
   botBubbleRow: {
-    justifyContent: 'flex-start',
+    alignSelf: 'flex-start',
   },
-
   miniAvatarSquircle: {
     width: 28,
     height: 28,
-    borderRadius: 10,
-    borderWidth: 1,
+    borderRadius: 8,
+    borderWidth: 1.2,
     overflow: 'hidden',
-    backgroundColor: '#1E1E2A',
   },
   miniAvatarImg: {
     width: '100%',
@@ -372,90 +553,177 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   miniAvatarLetter: {
-    color: '#FFFFFF',
-    fontWeight: '700',
+    fontFamily: 'ChangaOne-Regular',
     fontSize: 12,
+    color: '#FFFFFF',
   },
-
   bubbleBox: {
-    maxWidth: '82%',
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 16,
   },
   userBubbleBox: {
-    backgroundColor: '#2A1820',
+    backgroundColor: '#1E1E2C',
     borderBottomRightRadius: 4,
-    borderWidth: 1,
-    borderColor: '#4A2834',
   },
   botBubbleBox: {
-    backgroundColor: '#12121C',
+    backgroundColor: '#12121A',
     borderBottomLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: '#1F1F2E',
   },
   userBubbleText: {
+    fontSize: 14.5,
     color: '#FFFFFF',
-    fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
   botBubbleText: {
+    fontSize: 14.5,
     color: '#E5E7EB',
-    fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
   bubbleTimestamp: {
-    color: '#6B7280',
     fontSize: 10,
-    marginTop: 4,
+    color: '#6B7280',
     alignSelf: 'flex-end',
+    marginTop: 4,
   },
-
   typingIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     marginTop: 6,
   },
   typingBubble: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 12,
+    backgroundColor: '#12121A',
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: '#12121C',
-    borderRadius: 14,
+    borderRadius: 16,
   },
   typingText: {
-    color: '#9CA3AF',
     fontSize: 12,
+    color: '#9CA3AF',
   },
-
   inputBar: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#161622',
-    backgroundColor: '#09090D',
+    alignItems: 'flex-end',
     gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#16161D',
+    backgroundColor: '#000000',
   },
   chatTextInput: {
     flex: 1,
-    color: '#FFFFFF',
-    fontSize: 14,
-    maxHeight: 100,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: '#14141E',
+    backgroundColor: '#12121A',
     borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+    fontSize: 14,
+    color: '#FFFFFF',
+    maxHeight: 100,
+    borderWidth: 1,
+    borderColor: '#222230',
   },
   sendBtn: {
-    padding: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sendBtnDisabled: {
-    opacity: 0.4,
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  modalSheetCard: {
+    backgroundColor: '#101018',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#262636',
+    padding: 18,
+    maxHeight: '80%',
+  },
+  modalSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalSheetTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modalSheetTitle: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 16,
+    color: '#FFFFFF',
+  },
+  sheetCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#1C1C28',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalSheetBody: {
+    maxHeight: 350,
+  },
+  sheetFieldLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  sheetInput: {
+    backgroundColor: '#161622',
+    borderRadius: 12,
+    padding: 12,
+    color: '#FFFFFF',
+    fontSize: 13.5,
+    borderWidth: 1,
+    borderColor: '#262636',
+    textAlignVertical: 'top',
+  },
+  sheetSubHint: {
+    fontSize: 11,
+    color: '#60A5FA',
+    marginTop: 6,
+    fontStyle: 'italic',
+  },
+  sheetActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 18,
+    marginBottom: 8,
+  },
+  sheetCancelBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1C1C28',
+  },
+  sheetCancelText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+  },
+  sheetSaveBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  sheetSaveText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

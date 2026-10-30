@@ -8,6 +8,7 @@ from .reeve_service import (
     query_memory_for_user,
     retrieve_context_for_user,
     clear_user_memories,
+    generate_companion_reply,
 )
 
 class ReeveStatusView(APIView):
@@ -19,11 +20,11 @@ class ReeveStatusView(APIView):
 
 class ChatMemoryView(APIView):
     """
-    Primary chat endpoint.
-    Retrieves or generates an intelligent response while storing the interaction
-    into the user's isolated Reeve Neo4j knowledge graph using their unique namespace.
+    Companion roleplay chat endpoint powered 100% by Reeve memory graph and Groq LLM.
+    Strictly ZERO emojis, short WhatsApp-style humanized replies, dynamic first message opening script,
+    and temporal date/time anchor.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request):
         message = request.data.get("message", "").strip()
@@ -33,31 +34,59 @@ class ChatMemoryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Unique namespace is the user's ID
-        user_namespace = request.user.namespace
+        persona_id = request.data.get("persona_id", "")
+        persona_name = request.data.get("persona_name", "")
+        greeting = request.data.get("greeting", "")
+        memory_prompt = request.data.get("memory_prompt", "")
+        client_time = request.data.get("client_time", "")
+        client_timezone = request.data.get("client_timezone", "")
+
+        user_id = request.user.id if request.user.is_authenticated else request.data.get("user_id", "guest")
+        namespace = f"{user_id}_{persona_id}" if persona_id else (getattr(request.user, "namespace", f"{user_id}_general"))
+
+        # Resolve persona from database if persona_id is provided
+        if persona_id:
+            try:
+                from .models import Persona
+                from django.db.models import F
+                persona = Persona.objects.get(id=persona_id)
+                if not persona_name:
+                    persona_name = persona.name
+                if not greeting:
+                    greeting = persona.greeting
+                if not memory_prompt:
+                    memory_prompt = persona.memory_prompt
+                # Increment chat count
+                Persona.objects.filter(id=persona_id).update(chats_count=F("chats_count") + 1)
+            except Exception:
+                pass
+
+        if not persona_name:
+            persona_name = "Companion"
 
         try:
-            # 1. Store the user statement in their memory graph
-            store_memory_for_user(f"User: {message}", user_namespace)
-
-            # 2. Query Reeve memory graph for an intelligent reply
-            answer = query_memory_for_user(message, user_namespace)
-
-            # 3. Store AI reply into memory graph
-            if answer:
-                store_memory_for_user(f"Amour AI: {answer}", user_namespace)
+            result = generate_companion_reply(
+                message=message,
+                namespace=namespace,
+                persona_name=persona_name,
+                greeting=greeting,
+                memory_prompt=memory_prompt,
+                client_time=client_time,
+                client_timezone=client_timezone,
+            )
 
             return Response(
                 {
-                    "reply": answer or "I have committed that to your private memory graph.",
-                    "namespace": user_namespace,
-                    "user_id": request.user.id,
+                    "reply": result["reply"],
+                    "context": result.get("context", ""),
+                    "namespace": namespace,
+                    "persona_id": persona_id,
                 },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
             return Response(
-                {"error": f"Memory engine error: {str(e)}"},
+                {"error": f"Companion chat error: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -538,7 +567,8 @@ class PublisherProfileView(APIView):
 
 class PersonaDetailView(APIView):
     """
-    Retrieves or deletes a single persona from the database.
+    Retrieves, updates, or deletes a single persona from the database.
+    When memory_prompt or greeting is edited, the updated memory is stored into Reeve.
     """
     permission_classes = [AllowAny]
 
@@ -551,6 +581,41 @@ class PersonaDetailView(APIView):
             return Response(PersonaSerializer(persona).data)
         except Persona.DoesNotExist:
             return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def patch(self, request, persona_id):
+        from .models import Persona
+        from .serializers import PersonaSerializer
+
+        try:
+            persona = Persona.objects.get(id=persona_id)
+        except Persona.DoesNotExist:
+            return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = PersonaSerializer(persona, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_persona = serializer.save()
+
+            # If memory_prompt or greeting was updated, ingest it into Reeve for this user's persona namespace
+            memory_prompt = request.data.get("memory_prompt")
+            greeting = request.data.get("greeting")
+            if memory_prompt or greeting:
+                user_id = request.user.id if (request.user and request.user.is_authenticated) else request.data.get("user_id", "guest")
+                namespace = f"{user_id}_{persona.id}"
+                try:
+                    summary_text = (
+                        f"Persona Profile for {updated_persona.name}: "
+                        f"Backstory & Memory: {updated_persona.memory_prompt}. "
+                        f"First message script: {updated_persona.greeting}"
+                    )
+                    store_memory_for_user(summary_text, namespace)
+                except Exception as exc:
+                    pass
+
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request, persona_id):
+        return self.patch(request, persona_id)
 
     def delete(self, request, persona_id):
         from .models import Persona

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -6,15 +6,18 @@ import {
   Modal,
   ScrollView,
   TouchableOpacity,
+  TextInput,
   Image,
   Dimensions,
   Platform,
   Share,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
-import { PersonaItem } from '../services/personaService';
+import { PersonaItem, updatePersonaMemory } from '../services/personaService';
+import { useAuth } from '../context/AuthContext';
 
 const { width } = Dimensions.get('window');
 
@@ -66,6 +69,35 @@ function DialogueIcon({ size = 15, color = '#F43F5E' }: { size?: number; color?:
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </Svg>
+  );
+}
+
+function EditIcon({ size = 14, color = '#F43F5E' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function CheckIcon({ size = 14, color = '#10B981' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M20 6L9 17l-5-5" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
   );
 }
@@ -154,22 +186,67 @@ export default function PersonaDetailModal({
   onInitiateChat,
   onDelete,
 }: PersonaDetailModalProps) {
-  if (!persona) return null;
+  const { user } = useAuth();
+  const [activePersona, setActivePersona] = useState<PersonaItem | null>(persona);
+  const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [greetingText, setGreetingText] = useState<string>('');
+  const [memoryText, setMemoryText] = useState<string>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  const borderColor = persona.border_color || '#F43F5E';
-  const isPrivate = persona.visibility === 'private';
-  const createdDate = formatDate(persona.created_at);
+  useEffect(() => {
+    if (persona) {
+      setActivePersona(persona);
+      setGreetingText(persona.greeting || '');
+      setMemoryText(persona.memory_prompt || '');
+      setIsEditing(false);
+    }
+  }, [persona, visible]);
+
+  if (!activePersona) return null;
+
+  const borderColor = activePersona.border_color || '#F43F5E';
+  const isPrivate = activePersona.visibility === 'private';
+  const createdDate = formatDate(activePersona.created_at);
 
   const handleShare = async () => {
     try {
-      const shareUrl = `https://amour.ai/p/${persona.id}`;
-      const intro = persona.tagline || persona.greeting || 'Meet my AI companion on Amour!';
+      const shareUrl = `https://amour.ai/p/${activePersona.id}`;
+      const intro = activePersona.tagline || activePersona.greeting || 'Meet my AI companion on Amour!';
       await Share.share({
-        title: `Chat with ${persona.name}`,
-        message: `Chat with ${persona.name} on Amour AI!\n\n"${intro}"\n\n${shareUrl}`,
+        title: `Chat with ${activePersona.name}`,
+        message: `Chat with ${activePersona.name} on Amour AI!\n\n"${intro}"\n\n${shareUrl}`,
       });
     } catch (err) {
       console.warn('[Share] Error sharing persona:', err);
+    }
+  };
+
+  const handleSaveMemory = async (andStartChat: boolean = false) => {
+    if (!activePersona) return;
+    setIsSaving(true);
+    try {
+      const updated = await updatePersonaMemory(
+        activePersona.id,
+        {
+          greeting: greetingText.trim(),
+          memory_prompt: memoryText.trim(),
+        },
+        user?.id
+      );
+      if (updated) {
+        setActivePersona(updated);
+        setIsEditing(false);
+        if (andStartChat) {
+          onClose();
+          setTimeout(() => {
+            onInitiateChat(updated);
+          }, 150);
+        }
+      }
+    } catch (e) {
+      console.warn('[PersonaDetailModal] Error updating memory:', e);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -197,6 +274,15 @@ export default function PersonaDetailModal({
           <View style={styles.topBarRight}>
             <TouchableOpacity
               style={styles.headerActionBtn}
+              onPress={() => setIsEditing(!isEditing)}
+              activeOpacity={0.7}
+              accessibilityLabel="Edit memory"
+            >
+              <EditIcon size={16} color={isEditing ? borderColor : '#FFFFFF'} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerActionBtn}
               onPress={handleShare}
               activeOpacity={0.7}
               accessibilityLabel="Share persona"
@@ -210,7 +296,7 @@ export default function PersonaDetailModal({
                 onPress={() => {
                   onClose();
                   setTimeout(() => {
-                    onDelete(persona.id, persona.name);
+                    onDelete(activePersona.id, activePersona.name);
                   }, 150);
                 }}
                 activeOpacity={0.7}
@@ -227,29 +313,36 @@ export default function PersonaDetailModal({
           style={styles.scrollBody}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
           {/* Hero Portrait Section */}
           <View style={styles.heroSection}>
             <View style={[styles.avatarFrame, { borderColor }]}>
-              {persona.image_url ? (
-                <Image source={{ uri: persona.image_url }} style={styles.avatarImage} />
+              {activePersona.image_url ? (
+                <Image source={{ uri: activePersona.image_url }} style={styles.avatarImage} />
               ) : (
                 <View style={[styles.avatarFallback, { backgroundColor: borderColor + '20' }]}>
                   <Text style={[styles.avatarInitial, { color: borderColor }]}>
-                    {persona.name ? persona.name.charAt(0).toUpperCase() : 'A'}
+                    {activePersona.name ? activePersona.name.charAt(0).toUpperCase() : 'A'}
                   </Text>
                 </View>
               )}
             </View>
 
-            <Text style={styles.heroName}>{persona.name}</Text>
+            <Text style={styles.heroName}>{activePersona.name}</Text>
 
-            {persona.tagline ? (
-              <Text style={styles.heroTagline}>{persona.tagline}</Text>
+            {activePersona.tagline ? (
+              <Text style={styles.heroTagline}>{activePersona.tagline}</Text>
             ) : null}
 
             {/* Badges Row */}
             <View style={styles.badgesRow}>
+              {/* Reeve Memory Synced Badge */}
+              <View style={[styles.badge, { backgroundColor: 'rgba(59, 130, 246, 0.12)', borderColor: 'rgba(59, 130, 246, 0.35)' }]}>
+                <BrainIcon size={11} color="#60A5FA" />
+                <Text style={[styles.badgeText, { color: '#60A5FA' }]}>Reeve Memory</Text>
+              </View>
+
               {/* Visibility Badge */}
               <View
                 style={[
@@ -269,7 +362,7 @@ export default function PersonaDetailModal({
               {/* Creator Badge */}
               <View style={styles.neutralBadge}>
                 <Text style={styles.neutralBadgeText}>
-                  {persona.creator_name || 'Created by you'}
+                  {activePersona.creator_name || 'Created by you'}
                 </Text>
               </View>
 
@@ -282,33 +375,124 @@ export default function PersonaDetailModal({
 
           {/* Section: Opening Dialogue / First Message */}
           <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <DialogueIcon size={15} color={borderColor} />
-              <Text style={styles.sectionLabel}>FIRST MESSAGE</Text>
+            <View style={styles.sectionHeaderRow}>
+              <View style={styles.sectionHeader}>
+                <DialogueIcon size={15} color={borderColor} />
+                <Text style={styles.sectionLabel}>FIRST MESSAGE / SCRIPT</Text>
+              </View>
+              {!isEditing ? (
+                <TouchableOpacity
+                  style={styles.editPencilBtn}
+                  onPress={() => setIsEditing(true)}
+                  activeOpacity={0.7}
+                >
+                  <EditIcon size={13} color={borderColor} />
+                  <Text style={[styles.editPencilText, { color: borderColor }]}>Edit</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-            <View style={[styles.dialogueBox, { borderLeftColor: borderColor }]}>
-              {persona.greeting ? (
-                <MarkdownText content={persona.greeting} style={styles.dialogueText} />
-              ) : (
-                <Text style={styles.emptyFieldText}>No greeting message provided.</Text>
-              )}
-            </View>
+
+            {isEditing ? (
+              <View style={styles.editInputBox}>
+                <TextInput
+                  style={styles.textInputArea}
+                  value={greetingText}
+                  onChangeText={setGreetingText}
+                  placeholder="Enter persona's opening dialogue script..."
+                  placeholderTextColor="#6B7280"
+                  multiline
+                  numberOfLines={3}
+                />
+              </View>
+            ) : (
+              <View style={[styles.dialogueBox, { borderLeftColor: borderColor }]}>
+                {activePersona.greeting ? (
+                  <MarkdownText content={activePersona.greeting} style={styles.dialogueText} />
+                ) : (
+                  <Text style={styles.emptyFieldText}>No greeting message provided.</Text>
+                )}
+              </View>
+            )}
           </View>
 
           {/* Section: Core Memory Profile & Mind */}
           <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <BrainIcon size={15} color={borderColor} />
-              <Text style={styles.sectionLabel}>PERSONALITY AND STORY</Text>
+            <View style={styles.sectionHeaderRow}>
+              <View style={styles.sectionHeader}>
+                <BrainIcon size={15} color={borderColor} />
+                <Text style={styles.sectionLabel}>PERSONALITY AND STORY (REEVE MEMORY)</Text>
+              </View>
+              {!isEditing ? (
+                <TouchableOpacity
+                  style={styles.editPencilBtn}
+                  onPress={() => setIsEditing(true)}
+                  activeOpacity={0.7}
+                >
+                  <EditIcon size={13} color={borderColor} />
+                  <Text style={[styles.editPencilText, { color: borderColor }]}>Edit</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-            <View style={styles.memoryBox}>
-              {persona.memory_prompt ? (
-                <Text style={styles.memoryText}>{persona.memory_prompt}</Text>
-              ) : (
-                <Text style={styles.emptyFieldText}>No backstory added yet.</Text>
-              )}
-            </View>
+
+            {isEditing ? (
+              <View style={styles.editInputBox}>
+                <TextInput
+                  style={[styles.textInputArea, { minHeight: 110 }]}
+                  value={memoryText}
+                  onChangeText={setMemoryText}
+                  placeholder="Describe backstory, mannerisms, personal history, and memory profile..."
+                  placeholderTextColor="#6B7280"
+                  multiline
+                  numberOfLines={5}
+                />
+                <Text style={styles.reeveHint}>
+                  100% stored into Reeve Neo4j knowledge graph. This memory defines the companion during chat.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.memoryBox}>
+                {activePersona.memory_prompt ? (
+                  <Text style={styles.memoryText}>{activePersona.memory_prompt}</Text>
+                ) : (
+                  <Text style={styles.emptyFieldText}>No backstory added yet.</Text>
+                )}
+              </View>
+            )}
           </View>
+
+          {/* Inline Edit Action Buttons */}
+          {isEditing ? (
+            <View style={styles.editActionRow}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => {
+                  setGreetingText(activePersona.greeting || '');
+                  setMemoryText(activePersona.memory_prompt || '');
+                  setIsEditing(false);
+                }}
+                disabled={isSaving}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.saveBtn, { backgroundColor: borderColor }]}
+                onPress={() => handleSaveMemory(false)}
+                disabled={isSaving}
+                activeOpacity={0.8}
+              >
+                {isSaving ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <CheckIcon size={14} color="#FFFFFF" />
+                    <Text style={styles.saveBtnText}>Save Memory</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           {/* Section: Simple Details Card */}
           <View style={styles.specsCard}>
@@ -318,6 +502,11 @@ export default function PersonaDetailModal({
               <Text style={styles.specValue}>
                 {isPrivate ? 'Only You (Private)' : 'Community Shared'}
               </Text>
+            </View>
+            <View style={styles.specDivider} />
+            <View style={styles.specRow}>
+              <Text style={styles.specKey}>Memory Storage</Text>
+              <Text style={styles.specValue}>Reeve Knowledge Graph</Text>
             </View>
             <View style={styles.specDivider} />
             <View style={styles.specRow}>
@@ -331,11 +520,26 @@ export default function PersonaDetailModal({
         <View style={styles.actionBar}>
           <TouchableOpacity
             style={[styles.chatActionBtn, { backgroundColor: borderColor }]}
-            onPress={() => onInitiateChat(persona)}
+            onPress={() => {
+              if (isEditing) {
+                handleSaveMemory(true);
+              } else {
+                onInitiateChat(activePersona);
+              }
+            }}
+            disabled={isSaving}
             activeOpacity={0.85}
           >
-            <MessageIcon size={16} color="#FFFFFF" />
-            <Text style={styles.chatActionBtnText}>Chat with {persona.name}</Text>
+            {isSaving ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <MessageIcon size={16} color="#FFFFFF" />
+                <Text style={styles.chatActionBtnText}>
+                  {isEditing ? `Save & Chat with ${activePersona.name}` : `Chat with ${activePersona.name}`}
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -497,17 +701,35 @@ const styles = StyleSheet.create({
     borderColor: '#1F1F2C',
     padding: 16,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 12,
   },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
     color: '#9CA3AF',
     letterSpacing: 0.6,
+  },
+  editPencilBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: '#161622',
+  },
+  editPencilText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   dialogueBox: {
     backgroundColor: '#14141E',
@@ -529,6 +751,58 @@ const styles = StyleSheet.create({
     fontSize: 13.5,
     lineHeight: 21,
     color: '#D1D5DB',
+  },
+  editInputBox: {
+    backgroundColor: '#14141E',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2A2A3C',
+    padding: 12,
+  },
+  textInputArea: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#FFFFFF',
+    minHeight: 70,
+    textAlignVertical: 'top',
+  },
+  reeveHint: {
+    fontSize: 11,
+    color: '#60A5FA',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  editActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: -8,
+  },
+  cancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#181824',
+    borderWidth: 1,
+    borderColor: '#282838',
+  },
+  cancelBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9CA3AF',
+  },
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  saveBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   emptyFieldText: {
     fontSize: 13,
@@ -568,16 +842,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#E5E7EB',
-  },
-  colorIndicatorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  colorDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
   actionBar: {
     paddingHorizontal: 20,
