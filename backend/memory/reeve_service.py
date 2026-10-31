@@ -368,17 +368,34 @@ def generate_companion_reply(
                     "Authorization": f"Bearer {groq_api_key}",
                     "Content-Type": "application/json",
                 }
+                # Reasoning models (like gpt-oss-120b and 20b) generate internal reasoning tokens
+                # before emitting JSON, requiring higher max_tokens to prevent JSON truncation
+                token_budget = 650 if "gpt-oss" in current_model else 350
                 payload = {
                     "model": current_model,
                     "messages": messages,
                     "temperature": 0.7,
-                    "max_tokens": 250,
+                    "max_tokens": token_budget,
                     "frequency_penalty": 0.6,
                     "presence_penalty": 0.4,
                     "response_format": {"type": "json_object"},
                 }
                 t0 = time.time()
                 resp = requests.post(url, headers=headers, json=payload, timeout=20)
+
+                # Handle transient 429 rate limits (token bucket resets in ~1.5s on Groq)
+                if resp.status_code == 429:
+                    logger.info(f"Model {current_model} returned 429. Backing off 1.6s for token bucket reset...")
+                    time.sleep(1.6)
+                    resp = requests.post(url, headers=headers, json=payload, timeout=20)
+
+                # If model rejected json_object mode with 400, retry once without response_format
+                if resp.status_code == 400 and "response_format" in payload:
+                    logger.warning(f"Model {current_model} rejected json_object mode. Retrying with freeform text...")
+                    payload_freeform = dict(payload)
+                    del payload_freeform["response_format"]
+                    resp = requests.post(url, headers=headers, json=payload_freeform, timeout=20)
+
                 duration = time.time() - t0
 
                 if resp.status_code == 200:
@@ -403,13 +420,22 @@ def generate_companion_reply(
 
                     try:
                         import json
-                        parsed = json.loads(raw_content)
-                        raw_reply = parsed.get("reply", "")
-                        if "conflict_stage" in parsed:
-                            try:
+                        import re
+                        raw_reply = ""
+                        try:
+                            parsed = json.loads(raw_content)
+                            raw_reply = parsed.get("reply", "")
+                            if "conflict_stage" in parsed:
                                 new_conflict_stage = int(parsed["conflict_stage"])
-                            except (ValueError, TypeError):
-                                new_conflict_stage = current_conflict_stage
+                        except Exception:
+                            json_match = re.search(r"\{[\s\S]*?\"reply\"[\s\S]*?\}", raw_content)
+                            if json_match:
+                                parsed = json.loads(json_match.group(0))
+                                raw_reply = parsed.get("reply", "")
+                                if "conflict_stage" in parsed:
+                                    new_conflict_stage = int(parsed["conflict_stage"])
+                            else:
+                                raw_reply = raw_content
                     except Exception:
                         raw_reply = raw_content
 

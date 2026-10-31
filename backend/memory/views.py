@@ -306,10 +306,8 @@ class ChatMemoryView(APIView):
                 rel_state.save(update_fields=["conflict_stage", "updated_at"])
 
             if not reply_text:
-                return Response(
-                    {"error": "Failed to generate companion reply from model"},
-                    status=status.HTTP_502_BAD_GATEWAY,
-                )
+                logger.warning("All LLM models failed to produce reply; using in-character roleplay fallback.")
+                reply_text = "I'm right here with you, just give me a second. What did you say?"
 
             # 3. Store bot response in PostgreSQL
             try:
