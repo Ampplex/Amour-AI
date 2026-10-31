@@ -13,6 +13,7 @@ import {
   ScrollView,
   Keyboard,
   Dimensions,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -77,6 +78,91 @@ function CloseIcon({ size = 18, color = '#FFFFFF' }: { size?: number; color?: st
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M18 6L6 18M6 6l12 12" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
+  );
+}
+
+function TypingDotsAnimation({ color = '#A1A1AA' }: { color?: string }) {
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const createDotAnim = (dot: Animated.Value, delay: number) => {
+      return Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, {
+            toValue: -5,
+            duration: 260,
+            useNativeDriver: true,
+          }),
+          Animated.timing(dot, {
+            toValue: 0,
+            duration: 260,
+            useNativeDriver: true,
+          }),
+          Animated.delay(360),
+        ])
+      );
+    };
+
+    const anim1 = createDotAnim(dot1, 0);
+    const anim2 = createDotAnim(dot2, 140);
+    const anim3 = createDotAnim(dot3, 280);
+
+    anim1.start();
+    anim2.start();
+    anim3.start();
+
+    return () => {
+      anim1.stop();
+      anim2.stop();
+      anim3.stop();
+    };
+  }, [dot1, dot2, dot3]);
+
+  return (
+    <View style={styles.typingDotsContainer}>
+      <Animated.View
+        style={[
+          styles.typingDot,
+          {
+            backgroundColor: color,
+            transform: [{ translateY: dot1 }],
+            opacity: dot1.interpolate({
+              inputRange: [-5, 0],
+              outputRange: [1, 0.45],
+            }),
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.typingDot,
+          {
+            backgroundColor: color,
+            transform: [{ translateY: dot2 }],
+            opacity: dot2.interpolate({
+              inputRange: [-5, 0],
+              outputRange: [1, 0.45],
+            }),
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.typingDot,
+          {
+            backgroundColor: color,
+            transform: [{ translateY: dot3 }],
+            opacity: dot3.interpolate({
+              inputRange: [-5, 0],
+              outputRange: [1, 0.45],
+            }),
+          },
+        ]}
+      />
+    </View>
   );
 }
 
@@ -422,10 +508,9 @@ export default function CompanionChatModal({
           }}
           ListFooterComponent={
             isTyping ? (
-              <View style={styles.typingIndicatorRow}>
-                <View style={[styles.typingBubble, { borderColor: '#26263A' }]}>
-                  <ActivityIndicator size="small" color={borderColor} />
-                  <Text style={styles.typingText}>{activePersona.name} is typing...</Text>
+              <View style={[styles.messageBubbleRow, styles.botBubbleRow]}>
+                <View style={[styles.bubbleContainer, styles.botBubble, styles.typingBubbleContainer]}>
+                  <TypingDotsAnimation color={borderColor} />
                 </View>
               </View>
             ) : undefined
@@ -692,25 +777,27 @@ const styles = StyleSheet.create({
   botTimestampText: {
     color: '#64748B',
   },
-  typingIndicatorRow: {
+  typingBubbleContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    minHeight: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  typingDotsContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 8,
+    justifyContent: 'center',
+    gap: 5,
+    height: 14,
   },
-  typingBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#151520',
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 16,
-  },
-  typingText: {
-    fontSize: 12,
-    color: '#9CA3AF',
+  typingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
   inputContainer: {
     paddingHorizontal: 16,
