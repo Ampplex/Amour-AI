@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
+import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem, updatePersonaMemory } from '../services/personaService';
 import { useAuth } from '../context/AuthContext';
 
@@ -192,6 +193,7 @@ export default function PersonaDetailModal({
   const [greetingText, setGreetingText] = useState<string>('');
   const [memoryText, setMemoryText] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
 
   useEffect(() => {
     if (persona) {
@@ -318,7 +320,12 @@ export default function PersonaDetailModal({
         >
           {/* Hero Portrait Section */}
           <View style={styles.heroSection}>
-            <View style={[styles.avatarFrame, { borderColor }]}>
+            <TouchableOpacity
+              style={[styles.avatarFrame, { borderColor }]}
+              onPress={() => setIsPreviewImageOpen(true)}
+              activeOpacity={0.85}
+              accessibilityLabel={`View full photo of ${activePersona.name}`}
+            >
               {activePersona.image_url ? (
                 <Image source={{ uri: activePersona.image_url }} style={styles.avatarImage} />
               ) : (
@@ -328,7 +335,7 @@ export default function PersonaDetailModal({
                   </Text>
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
 
             <Text style={styles.heroName}>{activePersona.name}</Text>
 
@@ -540,6 +547,16 @@ export default function PersonaDetailModal({
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      {/* Fullscreen DP / Avatar Viewer */}
+      <ImagePreviewModal
+        visible={isPreviewImageOpen}
+        imageUrl={activePersona.image_url}
+        name={activePersona.name}
+        tagline={activePersona.tagline}
+        borderColor={borderColor}
+        onClose={() => setIsPreviewImageOpen(false)}
+      />
     </Modal>
   );
 }

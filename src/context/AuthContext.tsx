@@ -13,6 +13,7 @@ export interface GoogleUser {
   id: string;
   email: string;
   name: string;
+  username?: string;
   given_name?: string;
   family_name?: string;
   picture?: string;
@@ -36,9 +37,20 @@ interface AuthContextType {
   clearError: () => void;
   fetchGoogleUserInfo: (token: string) => Promise<GoogleUser | null>;
   setUser: (user: GoogleUser | null) => void;
+  updateProfile: (data: { username?: string; name?: string; picture?: string }) => Promise<{ success: boolean; error?: string; user?: GoogleUser }>;
+  uploadProfilePicture: (options: { base64?: string }) => Promise<{ success: boolean; url?: string; error?: string }>;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const CANDIDATE_URLS = [
+  'http://192.168.1.4:8000/api',
+  'http://127.0.0.1:8000/api',
+  API_CONFIG.baseUrl,
+  'http://10.104.217.217:8000/api',
+  'http://192.168.1.2:8000/api',
+];
 
 const discovery: AuthSession.DiscoveryDocument = {
   authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -68,10 +80,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('[GoogleSignin] Configured successfully with webClientId:', GOOGLE_CONFIG.clientId);
 
       GoogleSignin.signInSilently()
-        .then((currentUser) => {
+        .then(async (currentUser) => {
           if (currentUser?.data?.user) {
             const u = currentUser.data.user;
-            setUser({
+            const initialUser: GoogleUser = {
               id: u.id,
               name: u.name || `${u.givenName || ''} ${u.familyName || ''}`.trim() || 'Google User',
               email: u.email,
@@ -80,8 +92,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               family_name: u.familyName || undefined,
               verified_email: true,
               namespace: u.id,
-            });
+            };
+            setUser(initialUser);
             console.log('[GoogleSignin] Restored active session for:', u.email);
+
+            // Hydrate profile from PostgreSQL backend (custom S3 avatar, unique username, display name)
+            for (const base of CANDIDATE_URLS) {
+              try {
+                const res = await fetch(`${base}/auth/profile/?user_id=${u.id}`, {
+                  headers: { Accept: 'application/json' },
+                });
+                if (res.ok) {
+                  const profile = await res.json();
+                  setUser((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          username: profile.username || prev.username,
+                          name: profile.name || prev.name,
+                          picture: profile.picture || prev.picture,
+                        }
+                      : null
+                  );
+                  console.log('[GoogleSignin] Hydrated profile from backend. Username:', profile.username);
+                  break;
+                }
+              } catch {
+                continue;
+              }
+            }
           }
         })
         .catch(() => {
@@ -201,36 +240,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // Sync with Django PostgreSQL backend
         try {
-          const res = await fetch(`${API_CONFIG.baseUrl}/auth/google/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id_token: idToken || '',
-              profile: {
-                id: u.id,
-                email: u.email,
-                name: u.name,
-                given_name: u.givenName,
-                family_name: u.familyName,
-                picture: u.photo,
-              },
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const bUser = data.user;
-            googleUser = {
-              id: bUser.id,
-              name: bUser.name,
-              email: bUser.email,
-              picture: bUser.picture,
-              given_name: bUser.given_name,
-              family_name: bUser.family_name,
-              verified_email: bUser.verified_email,
-              namespace: bUser.namespace,
-              token: data.access_token,
-            };
-            console.log('[Auth] Django PostgreSQL registration saved, namespace:', bUser.namespace);
+          for (const base of CANDIDATE_URLS) {
+            try {
+              const res = await fetch(`${base}/auth/google/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id_token: idToken || '',
+                  profile: {
+                    id: u.id,
+                    email: u.email,
+                    name: u.name,
+                    given_name: u.givenName,
+                    family_name: u.familyName,
+                    picture: u.photo,
+                  },
+                }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                const bUser = data.user;
+                googleUser = {
+                  id: bUser.id,
+                  name: bUser.name,
+                  email: bUser.email,
+                  picture: bUser.picture,
+                  given_name: bUser.given_name,
+                  family_name: bUser.family_name,
+                  verified_email: bUser.verified_email,
+                  namespace: bUser.namespace,
+                  username: bUser.username,
+                  token: data.access_token,
+                };
+                console.log('[Auth] Django PostgreSQL registration saved, username:', bUser.username);
+                break;
+              }
+            } catch {
+              continue;
+            }
           }
         } catch (syncErr) {
           console.warn('[Auth] Django backend sync notice:', syncErr);
@@ -360,6 +407,121 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPendingGoogleSession(false);
   };
 
+  const updateProfile = async (data: {
+    username?: string;
+    name?: string;
+    picture?: string;
+  }): Promise<{ success: boolean; error?: string; user?: GoogleUser }> => {
+    if (!user) return { success: false, error: 'No authenticated user' };
+
+    let lastError = 'Network request failed';
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/profile/`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(user.token ? { Authorization: `Bearer ${user.token}` } : {}),
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            username: data.username,
+            name: data.name,
+            picture: data.picture,
+          }),
+        });
+
+        const resData = await res.json();
+        if (res.ok) {
+          const updatedUser: GoogleUser = {
+            ...user,
+            username: resData.username ?? user.username,
+            name: resData.name ?? user.name,
+            picture: resData.picture ?? user.picture,
+          };
+          setUser(updatedUser);
+          return { success: true, user: updatedUser };
+        } else {
+          return {
+            success: false,
+            error: resData.error || resData.detail || 'Failed to update profile',
+          };
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Connection error';
+      }
+    }
+    return { success: false, error: lastError };
+  };
+
+  const uploadProfilePicture = async (options: {
+    base64?: string;
+  }): Promise<{ success: boolean; url?: string; error?: string }> => {
+    if (!user) return { success: false, error: 'No authenticated user' };
+    if (!options.base64) return { success: false, error: 'No image data provided' };
+
+    let lastError = 'Upload request failed';
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/profile/upload-picture/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(user.token ? { Authorization: `Bearer ${user.token}` } : {}),
+          },
+          body: JSON.stringify({
+            user_id: user.id,
+            image_base64: options.base64,
+          }),
+        });
+
+        const resData = await res.json();
+        if (res.ok && resData.url) {
+          const updatedUser: GoogleUser = {
+            ...user,
+            picture: resData.url,
+            username: resData.user?.username ?? user.username,
+          };
+          setUser(updatedUser);
+          return { success: true, url: resData.url };
+        } else {
+          return {
+            success: false,
+            error: resData.error || 'Failed to upload profile picture to S3',
+          };
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Connection error';
+      }
+    }
+    return { success: false, error: lastError };
+  };
+
+  const refreshProfile = async () => {
+    if (!user) return;
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/profile/?user_id=${user.id}`);
+        if (res.ok) {
+          const profile = await res.json();
+          setUser((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  username: profile.username || prev.username,
+                  name: profile.name || prev.name,
+                  picture: profile.picture || prev.picture,
+                }
+              : null
+          );
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  };
+
   const logout = async () => {
     try {
       await GoogleSignin.signOut();
@@ -391,6 +553,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearError,
         fetchGoogleUserInfo,
         setUser,
+        updateProfile,
+        uploadProfilePicture,
+        refreshProfile,
       }}
     >
       {children}

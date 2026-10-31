@@ -8,6 +8,7 @@ class UserSerializer(serializers.ModelSerializer):
             "id",
             "namespace",
             "email",
+            "username",
             "name",
             "given_name",
             "family_name",

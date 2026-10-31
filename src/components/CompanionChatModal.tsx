@@ -18,6 +18,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
+import PersonaDetailModal from './PersonaDetailModal';
+import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem } from '../services/personaService';
 import { fetchChatHistory, sendChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
@@ -195,6 +197,8 @@ export default function CompanionChatModal({
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
   const [historyPage, setHistoryPage] = useState<number>(1);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
   const flatListRef = useRef<FlatList>(null);
 
   // Dynamic keyboard tracker that elevates the input box perfectly above the keyboard
@@ -402,7 +406,13 @@ export default function CompanionChatModal({
           </TouchableOpacity>
 
           <View style={styles.headerProfileCol}>
-            <View style={[styles.headerSquircle, { borderColor }]}>
+            {/* Persona DP / Avatar - Tap to View Fullscreen Image */}
+            <TouchableOpacity
+              style={[styles.headerSquircle, { borderColor }]}
+              onPress={() => setIsPreviewImageOpen(true)}
+              activeOpacity={0.8}
+              accessibilityLabel={`View full photo of ${activePersona.name}`}
+            >
               {activePersona.image_url ? (
                 <Image source={{ uri: activePersona.image_url }} style={styles.headerAvatarImg} />
               ) : (
@@ -412,15 +422,26 @@ export default function CompanionChatModal({
                   </Text>
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
 
-            <View style={styles.headerTextCol}>
-              <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}</Text>
+            {/* Persona Details - Tap to Open Persona Details Profile */}
+            <TouchableOpacity
+              style={styles.headerTextCol}
+              onPress={() => setIsDetailModalOpen(true)}
+              activeOpacity={0.7}
+              accessibilityLabel={`View profile details of ${activePersona.name}`}
+            >
+              <View style={styles.nameWithBadgeRow}>
+                <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}</Text>
+                <View style={styles.headerInfoPill}>
+                  <Text style={styles.headerInfoText}>i</Text>
+                </View>
+              </View>
               <View style={styles.statusRow}>
                 <View style={styles.onlineDot} />
-                <Text style={styles.headerStatusText}>Online</Text>
+                <Text style={styles.headerStatusText}>Online · Details</Text>
               </View>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* Symmetrical header spacer */}
@@ -568,6 +589,24 @@ export default function CompanionChatModal({
           </View>
         </View>
       </SafeAreaView>
+
+      {/* Fullscreen DP / Avatar Viewer */}
+      <ImagePreviewModal
+        visible={isPreviewImageOpen}
+        imageUrl={activePersona.image_url}
+        name={activePersona.name}
+        tagline={activePersona.tagline}
+        borderColor={borderColor}
+        onClose={() => setIsPreviewImageOpen(false)}
+      />
+
+      {/* Persona Details & Mind Profile Modal */}
+      <PersonaDetailModal
+        visible={isDetailModalOpen}
+        persona={activePersona}
+        onClose={() => setIsDetailModalOpen(false)}
+        onInitiateChat={() => setIsDetailModalOpen(false)}
+      />
     </Modal>
   );
 }
@@ -632,6 +671,28 @@ const styles = StyleSheet.create({
     fontSize: 16.5,
     color: '#FFFFFF',
     letterSpacing: 0.3,
+  },
+  nameWithBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  headerInfoPill: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#1E1E2A',
+    borderColor: '#323244',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerInfoText: {
+    color: '#9CA3AF',
+    fontSize: 10,
+    fontWeight: '700',
+    fontStyle: 'italic',
+    lineHeight: 12,
   },
   statusRow: {
     flexDirection: 'row',

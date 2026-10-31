@@ -1,8 +1,15 @@
 import logging
+import os
+import io
+import uuid
+import base64
+import boto3
+import re
 from django.conf import settings
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from google.oauth2 import id_token as google_id_token
@@ -96,10 +103,10 @@ class GoogleAuthView(APIView):
             )
             logger.info(f"Created new Google user: {email} with namespace: {user.namespace}")
         else:
-            # Update latest profile details
-            if name:
+            # Update latest profile details if not customized
+            if name and not user.name:
                 user.name = name
-            if picture:
+            if picture and (not user.picture or "googleusercontent" in user.picture):
                 user.picture = picture
             if google_sub:
                 user.google_sub = google_sub
@@ -210,3 +217,147 @@ class UserListView(APIView):
                 "users": UserSerializer(users, many=True).data,
             }
         )
+
+
+class ProfileView(APIView):
+    """
+    Retrieve or update user profile (username, name, picture).
+    Ensures username is unique across all users and formatted properly.
+    Links changes to user in PostgreSQL and syncs persona handles/avatars.
+    """
+    permission_classes = [AllowAny]
+
+    def _get_user(self, request):
+        if request.user and request.user.is_authenticated:
+            return request.user
+        user_id = request.query_params.get("user_id") or request.data.get("user_id")
+        if user_id:
+            return User.objects.filter(id=user_id).first()
+        return None
+
+    def get(self, request):
+        user = self._get_user(request)
+        if not user:
+            return Response({"error": "User not found or unauthenticated"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        user = self._get_user(request)
+        if not user:
+            return Response({"error": "User not found or unauthenticated"}, status=status.HTTP_404_NOT_FOUND)
+
+        new_username = request.data.get("username")
+        new_name = request.data.get("name")
+        new_picture = request.data.get("picture")
+
+        if new_username is not None:
+            clean_username = re.sub(r"[^a-zA-Z0-9_]", "", new_username.strip().lower())
+            if len(clean_username) < 3 or len(clean_username) > 30:
+                return Response(
+                    {"error": "Username must be between 3 and 30 characters (letters, numbers, underscores)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if User.objects.filter(username__iexact=clean_username).exclude(id=user.id).exists():
+                return Response(
+                    {"error": f"Username '@{clean_username}' is already taken. Please choose another."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user.username = clean_username
+
+        if new_name is not None and new_name.strip():
+            user.name = new_name.strip()
+
+        if new_picture is not None:
+            user.picture = new_picture.strip()
+
+        user.save()
+
+        # Sync updated profile handle & avatar across user's personas
+        try:
+            from memory.models import Persona
+            update_fields = {}
+            if user.username:
+                update_fields["publisher_handle"] = f"@{user.username}"
+            if user.name:
+                update_fields["publisher_name"] = user.name
+            if user.picture:
+                update_fields["publisher_avatar"] = user.picture
+            if update_fields:
+                Persona.objects.filter(creator=user).update(**update_fields)
+        except Exception as exc:
+            logger.warning(f"Could not sync persona handles for user {user.id}: {exc}")
+
+        return Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class ProfilePictureUploadView(APIView):
+    """
+    Uploads user profile picture directly to AWS S3 and links the S3 URL to user.picture in PostgreSQL.
+    """
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        user_id = request.data.get("user_id") or (str(request.user.id) if request.user.is_authenticated else None)
+        user = User.objects.filter(id=user_id).first() if user_id else None
+        if not user:
+            return Response({"error": "Valid user_id required to link profile picture"}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_b64 = request.data.get("image_base64")
+        file_obj = request.FILES.get("image") or request.FILES.get("file")
+
+        if not image_b64 and not file_obj:
+            return Response({"error": "No image data provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if image_b64:
+                # Remove header if present (e.g. data:image/jpeg;base64,...)
+                if "," in image_b64:
+                    image_b64 = image_b64.split(",", 1)[1]
+                image_data = base64.b64decode(image_b64)
+                file_stream = io.BytesIO(image_data)
+                filename = f"user_avatars/{user.id}_{uuid.uuid4().hex[:8]}.jpg"
+                content_type = "image/jpeg"
+            else:
+                ext = file_obj.name.split(".")[-1].lower() if "." in file_obj.name else "jpg"
+                filename = f"user_avatars/{user.id}_{uuid.uuid4().hex[:8]}.{ext}"
+                content_type = file_obj.content_type or "image/jpeg"
+                file_stream = file_obj
+
+            s3 = boto3.client(
+                "s3",
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                region_name=os.getenv("AWS_REGION", "us-west-2"),
+            )
+            bucket = "reeve-devpilot-downloads-309490998255"
+            region = os.getenv("AWS_REGION", "us-west-2")
+
+            s3.upload_fileobj(
+                file_stream,
+                bucket,
+                filename,
+                ExtraArgs={"ContentType": content_type},
+            )
+            image_url = f"https://{bucket}.s3.{region}.amazonaws.com/{filename}"
+
+            # Link S3 image URL directly to user in PostgreSQL
+            user.picture = image_url
+            user.save()
+
+            # Sync persona publisher avatars
+            try:
+                from memory.models import Persona
+                Persona.objects.filter(creator=user).update(publisher_avatar=image_url)
+            except Exception:
+                pass
+
+            return Response({
+                "success": True,
+                "url": image_url,
+                "user": UserSerializer(user).data,
+            }, status=status.HTTP_200_OK)
+
+        except Exception as exc:
+            logger.error(f"S3 Profile Picture upload failed: {exc}")
+            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

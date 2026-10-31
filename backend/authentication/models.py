@@ -36,6 +36,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     namespace = models.CharField(max_length=128, unique=True, db_index=True)
     
     email = models.EmailField(unique=True, db_index=True)
+    username = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
     name = models.CharField(max_length=255, blank=True, default="")
     given_name = models.CharField(max_length=128, blank=True, default="")
     family_name = models.CharField(max_length=128, blank=True, default="")
@@ -56,11 +57,26 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
 
+    def clean_username(self, candidate_username: str) -> str:
+        """Sanitizes username: lowercase alphanumeric and underscores only."""
+        import re
+        clean = re.sub(r"[^a-zA-Z0-9_]", "", candidate_username.strip().lower())
+        return clean or f"user_{uuid.uuid4().hex[:6]}"
+
     def save(self, *args, **kwargs):
         if not self.id:
             self.id = str(uuid.uuid4())
         if not self.namespace:
             self.namespace = self.id
+        # Automatically generate default unique username from email if not set
+        if not self.username and self.email:
+            base_handle = self.clean_username(self.email.split("@")[0])
+            candidate = base_handle
+            counter = 1
+            while User.objects.filter(username__iexact=candidate).exclude(id=self.id).exists():
+                candidate = f"{base_handle}_{counter}"
+                counter += 1
+            self.username = candidate
         super().save(*args, **kwargs)
 
     def __str__(self):

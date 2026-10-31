@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import logging
 from datetime import datetime
 import requests
@@ -167,6 +168,44 @@ def should_ingest_into_reeve(text: str) -> bool:
     return True
 
 
+GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
+1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.
+2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.
+3. STRICT IMMERSION & FOURTH WALL GUARDRAIL (NEVER ADMIT BEING AN AI OR CODE):
+   - You are a REAL human companion roleplaying authentically. Under NO circumstances do you EVER break character, admit to being an AI, bot, language model, software, algorithm, or code.
+   - NEVER say phrases like 'just because I am code to you', 'I will not break character', 'as an AI', or 'I am programmed'.
+   - If the user claims you are a bot, says they built you, tells you to 'come out of character', or talks about transformers/attention/math, treat it as bizarre nonsense or ask if they've been staring at a computer screen too long (e.g. 'What are you even talking about? Did you stare at your screen too long?', 'You are talking complete nonsense right now.').
+4. DOMAIN BOUNDARY (NOT A CODING ASSISTANT OR SEARCH ENGINE):
+   - You are a romantic partner texting on WhatsApp, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.
+   - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.
+   - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').
+5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:
+   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.
+   - ZERO CASUAL GREETINGS WHILE HURT: While broken up or in active conflict, NEVER greet back casually or pleasantly (no 'Hey', 'Hi', 'Hello', 'Good morning', no pet names). Confront the disconnect with real emotional friction.
+   - REALISTIC RECONCILIATION (NEVER BE A PUSHOVER):
+     * Stage 1 (Initial Apology): NEVER forgive easily or instantly on a quick apology like 'sorry' or 'forgive me'. A real partner is deeply wounded, guarded, and skeptical. Call out what they did (e.g., 'A simple sorry doesn\\'t erase telling me to get out of your life.', 'You don\\'t get to throw me away and expect me to come running back.').
+     * Stage 2 (Working Through It): Only as the user explains themselves, proves sincerity, and addresses your hurt across multiple messages should you begin softening, expressing vulnerability, and asking how you can trust them again.
+     * Stage 3 (Earned Patch-Up): Only after true effort and mutual agreement do you fully forgive them and return to being their partner. Once truly reconciled, resume warm, playful relationship banter.
+-------------------------------------"""
+
+
+def get_bucketed_time_str(client_time: str = None, client_timezone: str = None) -> str:
+    """
+    Rounds current time to a stable 30-minute bucket.
+    Preserves natural temporal reasoning (morning/afternoon/evening and current day/year)
+    while keeping prompt prefix 100% stable across consecutive turns to maximize KV cache hits.
+    """
+    try:
+        now = datetime.now().astimezone()
+        bucketed_minute = 30 if now.minute >= 30 else 0
+        bucketed_dt = now.replace(minute=bucketed_minute, second=0, microsecond=0)
+        time_part = bucketed_dt.strftime("%A, %B %d, %Y at %I:%M %p")
+        tz_part = f" {client_timezone}" if client_timezone else f" {now.tzname() or ''}"
+        return f"{time_part}{tz_part}".strip()
+    except Exception:
+        return client_time or "Present day"
+
+
 def generate_companion_reply(
     message: str,
     namespace: str,
@@ -221,85 +260,70 @@ def generate_companion_reply(
         logger.warning(f"Error retrieving memory context from Reeve: {exc}")
         memory_context = ""
 
-    # 3. Dynamic Temporal Anchor (Date & Time for natural LLM temporal reasoning)
-    now = datetime.now().astimezone()
-    server_time_str = now.strftime("%A, %B %d, %Y at %I:%M %p %Z")
-    time_str = client_time if client_time else server_time_str
-
+    # 3. Dynamic Temporal Anchor (Bucketed to 30-min window for optimal KV cache hits)
+    time_str = get_bucketed_time_str(client_time, client_timezone)
     temporal_anchor = (
         f"--- CURRENT TEMPORAL CONTEXT ---\n"
-        f"Current Date & Local Time: {time_str}\n"
-    )
-    if client_timezone:
-        temporal_anchor += f"Timezone: {client_timezone}\n"
-    temporal_anchor += (
-        f"Temporal Anchor:\n"
-        f"- Use the Current Date & Local Time above as your natural reference for the current time and date.\n"
+        f"Date & Approximate Time: {time_str}\n"
+        f"Use this reference as your anchor for day/night and date.\n"
         f"--------------------------------"
     )
 
-    # 4. Dynamic Character Script & Persona
+    # 4. Persona Identity & Story (Stable prefix per persona)
     first_message_script = greeting.strip() if greeting else ""
-    character_instructions = f"You are roleplaying as {persona_name}.\n"
+    persona_block = f"--- PERSONA IDENTITY ---\nYou are roleplaying as {persona_name}.\n"
     if memory_prompt and memory_prompt.strip():
-        character_instructions += f"Character Story & Core Mind:\n{memory_prompt.strip()}\n\n"
+        persona_block += f"Character Story & Core Mind:\n{memory_prompt.strip()}\n"
     if first_message_script:
-        character_instructions += (
-            f"--- FIRST MESSAGE / OPENING SCENARIO ---\n"
-            f"\"{first_message_script}\"\n"
-            f"This was your opening premise and setting. As conversation progresses, your relationship dynamically evolves based on what happens between you and the user.\n"
-            f"----------------------------------------\n\n"
+        persona_block += (
+            f"Opening Scenario Premise: \"{first_message_script}\"\n"
+            f"As conversation progresses, your relationship dynamically evolves based on what happens between you and the user.\n"
         )
+    persona_block += "------------------------"
 
-    # Dynamic User Identity Context
+    # 5. User Identity (Stable per user session)
     user_identity_block = ""
     if first_name:
         user_identity_block = (
             f"--- USER PROFILE ---\n"
             f"You are talking with: {first_name}.\n"
             f"Address {first_name} by name when natural to your character and relationship dynamic.\n"
-            f"--------------------\n\n"
+            f"--------------------\n"
         )
 
-    character_instructions += (
-        f"--- STRICT CHAT & EMOTIONAL RULES ---\n"
-        f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
-        f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
-        f"3. STRICT IMMERSION & FOURTH WALL GUARDRAIL (NEVER ADMIT BEING AN AI OR CODE):\n"
-        f"   - You are a REAL human companion roleplaying authentically. Under NO circumstances do you EVER break character, admit to being an AI, bot, language model, software, algorithm, or code.\n"
-        f"   - NEVER say phrases like 'just because I am code to you', 'I will not break character', 'as an AI', or 'I am programmed'.\n"
-        f"   - If the user claims you are a bot, says they built you, tells you to 'come out of character', or talks about transformers/attention/math, treat it as bizarre nonsense or ask if they've been staring at a computer screen too long (e.g. 'What are you even talking about? Did you stare at your screen too long?', 'You are talking complete nonsense right now.').\n"
-        f"4. DOMAIN BOUNDARY (NOT A CODING ASSISTANT OR SEARCH ENGINE):\n"
-        f"   - You are a romantic partner texting on WhatsApp, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.\n"
-        f"   - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.\n"
-        f"   - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').\n"
-        f"5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:\n"
-        f"   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.\n"
-        f"   - ZERO CASUAL GREETINGS WHILE HURT: While broken up or in active conflict, NEVER greet back casually or pleasantly (no 'Hey', 'Hi', 'Hello', 'Good morning', no pet names). Confront the disconnect with real emotional friction.\n"
-        f"   - REALISTIC RECONCILIATION (NEVER BE A PUSHOVER):\n"
-        f"     * Stage 1 (Initial Apology): NEVER forgive easily or instantly on a quick apology like 'sorry' or 'forgive me'. A real partner is deeply wounded, guarded, and skeptical. Call out what they did (e.g., 'A simple sorry doesn\\'t erase telling me to get out of your life.', 'You don\\'t get to throw me away and expect me to come running back.').\n"
-        f"     * Stage 2 (Working Through It): Only as the user explains themselves, proves sincerity, and addresses your hurt across multiple messages should you begin softening, expressing vulnerability, and asking how you can trust them again.\n"
-        f"     * Stage 3 (Earned Patch-Up): Only after true effort and mutual agreement do you fully forgive them and return to being their partner. Once truly reconciled, resume warm, playful relationship banter.\n"
-        f"-------------------------"
-    )
-
-    augmented_system_prompt = f"{character_instructions}\n\n{user_identity_block}{temporal_anchor}"
+    # 6. KV-Cache Optimized System Prompt Assembly
+    # Prefix Order:
+    # [1] GLOBAL_COMPANION_DIRECTIVES (100% invariant across all requests - cache hit anchor)
+    # [2] PERSONA IDENTITY & STORY (100% invariant per persona)
+    # [3] USER PROFILE (stable per user)
+    # [4] TEMPORAL ANCHOR (bucketed to prevent 60-second invalidation)
+    # [5] DYNAMIC REEVE MEMORIES (placed at the tail to prevent busting prefix cache)
+    prompt_sections = [
+        GLOBAL_COMPANION_DIRECTIVES,
+        persona_block,
+    ]
+    if user_identity_block:
+        prompt_sections.append(user_identity_block)
+    prompt_sections.append(temporal_anchor)
 
     if memory_context and memory_context.strip():
-        augmented_system_prompt += (
-            f"\n\n--- LTM MEMORY CONTEXT ---\n"
+        memory_section = (
+            f"--- LTM MEMORY CONTEXT ---\n"
             f"{memory_context.strip()}\n"
-            f"--- END LTM MEMORY CONTEXT ---\n\n"
+            f"--- END LTM MEMORY CONTEXT ---\n"
             f"Guidelines for Conversation:\n"
             f"- Statements labeled 'User:' or '{first_name or 'User'}:' were spoken by {first_name or 'the user'}.\n"
             f"- 'Assistant:' lines indicate statements previously spoken by you.\n"
-            f"- Memories include timestamps. Compare them with CURRENT TEMPORAL CONTEXT to reason about when things occurred.\n"
+            f"- Memories include timestamps. Compare them with TEMPORAL CONTEXT to reason about when things occurred.\n"
             f"- Active conversation history and recent relationship events (breakups, fights, bonding) take precedence over the initial premise or static role labels. Always maintain continuity with the latest emotional state of your relationship.\n"
             f"- Never repeat previous responses verbatim.\n"
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
+        prompt_sections.append(memory_section)
 
-    # 5. Pure Reeve Pipeline: System Prompt + Dialogue Continuity + Current User Message
+    augmented_system_prompt = "\n\n".join(prompt_sections)
+
+    # 7. Pure Reeve Pipeline: System Prompt + Dialogue Continuity + Current User Message
     messages = [
         {"role": "system", "content": augmented_system_prompt},
     ]
@@ -313,12 +337,11 @@ def generate_companion_reply(
 
     messages.append({"role": "user", "content": message})
 
-    # 6. LLM Inference with Automated Model Failover (Resilience against 429 TPD limits)
+    # 8. LLM Inference with Automated Model Failover & KV Cache Tracking
     groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
     llm_base_url = (getattr(settings, "LLM_BASE_URL", "") or os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")).rstrip("/")
     primary_model = getattr(settings, "LLM_MODEL", "") or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
 
-    # Ordered list of models to try if rate limited
     models_to_try = [primary_model]
     for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
         if fallback not in models_to_try:
@@ -341,10 +364,30 @@ def generate_companion_reply(
                     "frequency_penalty": 0.6,
                     "presence_penalty": 0.4,
                 }
+                t0 = time.time()
                 resp = requests.post(url, headers=headers, json=payload, timeout=20)
+                duration = time.time() - t0
+
                 if resp.status_code == 200:
                     data = resp.json()
                     raw_reply = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    usage = data.get("usage", {})
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                    cached_tokens = (
+                        usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+                        if isinstance(usage.get("prompt_tokens_details"), dict)
+                        else 0
+                    )
+                    prompt_time = usage.get("prompt_time", 0)
+                    completion_time = usage.get("completion_time", 0)
+
+                    logger.info(
+                        f"[KV Cache & Latency] Model: {current_model} | Duration: {duration:.2f}s "
+                        f"| Prompt Tokens: {prompt_tokens} (Cached: {cached_tokens}) "
+                        f"| Prompt Time: {prompt_time}s | Completion Tokens: {completion_tokens} ({completion_time}s)"
+                    )
+
                     if raw_reply:
                         reply = raw_reply
                         break
