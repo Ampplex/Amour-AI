@@ -33,3 +33,21 @@ class SignupSerializer(serializers.Serializer):
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
+
+class ConfirmEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=False, allow_blank=True)
+    code = serializers.CharField(required=False, allow_blank=True)
+    token = serializers.CharField(required=False, allow_blank=True)
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+class ResetPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=False, allow_blank=True)
+    code = serializers.CharField(required=False, allow_blank=True)
+    token = serializers.CharField(required=False, allow_blank=True)
+    new_password = serializers.CharField(min_length=6, write_only=True)
+
+class ResendVerificationSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+

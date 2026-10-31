@@ -5,7 +5,12 @@ import uuid
 import base64
 import boto3
 import re
+import secrets
+from datetime import timedelta
 from django.conf import settings
+from django.utils import timezone
+from django.contrib.auth.hashers import make_password
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -15,15 +20,21 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 
-from .models import User
+from .models import User, EmailVerificationToken
 from .serializers import (
     UserSerializer,
     GoogleAuthSerializer,
     SignupSerializer,
     LoginSerializer,
+    ConfirmEmailSerializer,
+    ForgotPasswordSerializer,
+    ResetPasswordSerializer,
+    ResendVerificationSerializer,
 )
+from .email_service import send_verification_email, send_password_reset_email
 
 logger = logging.getLogger("amour.auth")
+
 
 def _verify_google_token(token_str: str):
     request = google_requests.Request()
@@ -128,6 +139,12 @@ class GoogleAuthView(APIView):
         )
 
 class SignupView(APIView):
+    """
+    Step 1 of Signup:
+    Validates user credentials, stores pending registration with hashed password,
+    and sends a verification link + 6-digit confirmation code via Brevo email.
+    The user is only inserted/activated in the database once email is confirmed.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -135,43 +152,319 @@ class SignupView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        email = serializer.validated_data["email"]
+        email = serializer.validated_data["email"].strip().lower()
         password = serializer.validated_data["password"]
-        name = serializer.validated_data["name"]
+        name = serializer.validated_data["name"].strip()
 
-        if User.objects.filter(email=email).exists():
+        # Check if an active/verified user already exists
+        existing_user = User.objects.filter(email=email).first()
+        if existing_user and existing_user.verified_email:
             return Response(
-                {"error": "An account with this email already exists."},
+                {"error": "An account with this email already exists. Please log in."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        import uuid
-        user_id = str(uuid.uuid4())
-        # User id is their namespace
-        namespace = user_id
+        # Invalidate any prior pending signup tokens for this email
+        EmailVerificationToken.objects.filter(email=email, token_type="signup", is_used=False).update(is_used=True)
 
-        user = User.objects.create_user(
+        token = secrets.token_urlsafe(32)
+        code = f"{secrets.randbelow(1000000):06d}"
+        expires_at = timezone.now() + timedelta(hours=24)
+        hashed_password = make_password(password)
+
+        EmailVerificationToken.objects.create(
             email=email,
-            password=password,
-            id=user_id,
-            namespace=namespace,
-            name=name,
-            auth_provider="local",
-            verified_email=False,
+            token=token,
+            code=code,
+            token_type="signup",
+            payload={"name": name, "password_hash": hashed_password},
+            expires_at=expires_at,
         )
+
+        base_url = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+        verification_link = f"{base_url}/api/auth/verify-email/?token={token}"
+
+        # Dispatch confirmation email via Brevo
+        email_sent = send_verification_email(
+            to_email=email,
+            name=name,
+            verification_link=verification_link,
+            code=code,
+        )
+
+        if not email_sent:
+            logger.warning(f"Could not send Brevo email to {email}, but pending token was saved.")
+
+        return Response(
+            {
+                "success": True,
+                "requires_verification": True,
+                "email": email,
+                "message": "Confirmation link and code sent to your email. Please verify to complete signup.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ConfirmEmailView(APIView):
+    """
+    Step 2 of Signup (Mobile App API):
+    Accepts 6-digit code or token, validates it, inserts the user into PostgreSQL User table,
+    and returns JWT tokens for immediate authenticated session.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ConfirmEmailSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = (serializer.validated_data.get("email") or "").strip().lower()
+        code = (serializer.validated_data.get("code") or "").strip()
+        token = (serializer.validated_data.get("token") or "").strip()
+
+        token_obj = None
+        if token:
+            token_obj = EmailVerificationToken.objects.filter(
+                token=token, token_type="signup", is_used=False
+            ).first()
+        elif code and email:
+            token_obj = EmailVerificationToken.objects.filter(
+                email__iexact=email, code=code, token_type="signup", is_used=False
+            ).order_by("-created_at").first()
+
+        if not token_obj or not token_obj.is_valid():
+            return Response(
+                {"error": "Invalid or expired confirmation code. Please request a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        target_email = token_obj.email.strip().lower()
+        payload = token_obj.payload or {}
+        name = payload.get("name", "")
+        password_hash = payload.get("password_hash")
+
+        # Fit into existing PostgreSQL User table schema
+        user = User.objects.filter(email__iexact=target_email).first()
+        if not user:
+            user_id = str(uuid.uuid4())
+            user = User(
+                id=user_id,
+                namespace=user_id,
+                email=target_email,
+                name=name,
+                auth_provider="local",
+                verified_email=True,
+                is_active=True,
+            )
+            if password_hash:
+                user.password = password_hash
+            else:
+                user.set_unusable_password()
+            user.save()
+            logger.info(f"Local user successfully inserted into DB: {user.email} (id: {user.id})")
+        else:
+            user.verified_email = True
+            user.is_active = True
+            if password_hash:
+                user.password = password_hash
+            if name and not user.name:
+                user.name = name
+            user.save()
+            logger.info(f"Existing user marked verified: {user.email}")
+
+        token_obj.is_used = True
+        token_obj.save()
 
         refresh = RefreshToken.for_user(user)
 
         return Response(
             {
+                "success": True,
                 "access_token": str(refresh.access_token),
                 "refresh_token": str(refresh),
                 "user": UserSerializer(user).data,
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_200_OK,
         )
 
+
+class WebVerifyEmailView(APIView):
+    """
+    Web landing view when user clicks confirmation link from their email client.
+    Inserts/activates user in PostgreSQL and displays an Amour AI themed success page.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = request.query_params.get("token", "").strip()
+        token_obj = EmailVerificationToken.objects.filter(
+            token=token, token_type="signup", is_used=False
+        ).first() if token else None
+
+        if not token_obj or not token_obj.is_valid():
+            html = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Link Expired - Amour AI</title>
+  <style>
+    body { background-color: #09090B; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #121216; border: 1px solid #27272A; border-radius: 16px; padding: 36px 28px; max-width: 440px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+    .badge { display: inline-block; padding: 6px 14px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; color: #EF4444; font-size: 13px; font-weight: 700; margin-bottom: 16px; }
+    h1 { font-size: 22px; margin: 0 0 10px 0; }
+    p { color: #A1A1AA; font-size: 15px; line-height: 1.5; margin: 0 0 24px 0; }
+    .btn { display: inline-block; background: #F43F5E; color: #FFFFFF; text-decoration: none; font-weight: 600; padding: 12px 28px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">LINK EXPIRED</div>
+    <h1>Verification Link Invalid</h1>
+    <p>This confirmation link has expired or has already been used. Please open the Amour app and request a new confirmation email.</p>
+    <a href="amour-ai://login" class="btn">Open Amour App</a>
+  </div>
+</body>
+</html>"""
+            return HttpResponse(html, status=400)
+
+        # Confirm and activate user in DB
+        target_email = token_obj.email.strip().lower()
+        payload = token_obj.payload or {}
+        name = payload.get("name", "")
+        password_hash = payload.get("password_hash")
+
+        user = User.objects.filter(email__iexact=target_email).first()
+        if not user:
+            user_id = str(uuid.uuid4())
+            user = User(
+                id=user_id,
+                namespace=user_id,
+                email=target_email,
+                name=name,
+                auth_provider="local",
+                verified_email=True,
+                is_active=True,
+            )
+            if password_hash:
+                user.password = password_hash
+            else:
+                user.set_unusable_password()
+            user.save()
+            logger.info(f"Web verification: inserted new user {user.email}")
+        else:
+            user.verified_email = True
+            user.is_active = True
+            if password_hash:
+                user.password = password_hash
+            if name and not user.name:
+                user.name = name
+            user.save()
+            logger.info(f"Web verification: updated user {user.email}")
+
+        token_obj.is_used = True
+        token_obj.save()
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Email Confirmed - Amour AI</title>
+  <style>
+    body {{ background-color: #09090B; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }}
+    .card {{ background: #121216; border: 1px solid #27272A; border-radius: 16px; padding: 40px 30px; max-width: 440px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }}
+    .logo {{ display: inline-block; padding: 8px 16px; background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.3); border-radius: 10px; color: #F43F5E; font-size: 16px; font-weight: 800; letter-spacing: 2.5px; margin-bottom: 20px; }}
+    .success-icon {{ width: 56px; height: 56px; line-height: 56px; border-radius: 50%; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10B981; font-size: 26px; margin: 0 auto 16px auto; }}
+    h1 {{ font-size: 24px; margin: 0 0 10px 0; font-weight: 700; }}
+    p {{ color: #A1A1AA; font-size: 15px; line-height: 1.5; margin: 0 0 28px 0; }}
+    .btn {{ display: inline-block; width: 100%; box-sizing: border-box; background: #F43F5E; color: #FFFFFF; text-decoration: none; font-size: 16px; font-weight: 600; padding: 14px 24px; border-radius: 10px; box-shadow: 0 4px 14px rgba(244, 63, 94, 0.35); }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">AMOUR AI</div>
+    <div class="success-icon">✓</div>
+    <h1>Email Confirmed!</h1>
+    <p>Your account (<strong>{user.email}</strong>) is verified and ready. You can now return to the Amour app and sign in.</p>
+    <a href="amour-ai://login" class="btn">Open Amour App</a>
+  </div>
+</body>
+</html>"""
+        return HttpResponse(html)
+
+
+class ResendVerificationView(APIView):
+    """
+    Resends email confirmation link + code for an unverified account.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ResendVerificationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = serializer.validated_data["email"].strip().lower()
+
+        existing_user = User.objects.filter(email__iexact=email).first()
+        if existing_user and existing_user.verified_email:
+            return Response(
+                {"error": "This account is already verified. Please sign in."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check pending signup token payload if user not yet created
+        latest_pending = EmailVerificationToken.objects.filter(
+            email__iexact=email, token_type="signup"
+        ).order_by("-created_at").first()
+
+        name = ""
+        payload = {}
+        if existing_user:
+            name = existing_user.name
+        elif latest_pending:
+            name = (latest_pending.payload or {}).get("name", "")
+            payload = latest_pending.payload or {}
+
+        # Invalidate previous tokens
+        EmailVerificationToken.objects.filter(email__iexact=email, token_type="signup", is_used=False).update(is_used=True)
+
+        token = secrets.token_urlsafe(32)
+        code = f"{secrets.randbelow(1000000):06d}"
+        expires_at = timezone.now() + timedelta(hours=24)
+
+        EmailVerificationToken.objects.create(
+            email=email,
+            token=token,
+            code=code,
+            token_type="signup",
+            payload=payload,
+            expires_at=expires_at,
+        )
+
+        base_url = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+        verification_link = f"{base_url}/api/auth/verify-email/?token={token}"
+
+        send_verification_email(
+            to_email=email,
+            name=name,
+            verification_link=verification_link,
+            code=code,
+        )
+
+        return Response(
+            {"success": True, "message": "A new confirmation email has been sent."},
+            status=status.HTTP_200_OK,
+        )
+
+
 class LoginView(APIView):
+    """
+    Logs in user with email and password.
+    Enforces verified_email before allowing access.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -179,14 +472,59 @@ class LoginView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        email = serializer.validated_data["email"]
+        email = serializer.validated_data["email"].strip().lower()
         password = serializer.validated_data["password"]
 
-        user = User.objects.filter(email=email).first()
-        if not user or not user.check_password(password):
+        user = User.objects.filter(email__iexact=email).first()
+
+        # If user not found, check if a pending unverified signup exists
+        if not user:
+            pending = EmailVerificationToken.objects.filter(
+                email__iexact=email, token_type="signup", is_used=False
+            ).first()
+            if pending:
+                return Response(
+                    {
+                        "error": "Please confirm your email address before logging in. Check your inbox for the confirmation link.",
+                        "unverified": True,
+                        "email": email,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             return Response(
                 {"error": "Invalid email or password."},
                 status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Helpful notice if account was originally Google OAuth with no password set
+        if user.auth_provider == "google" and not user.has_usable_password():
+            return Response(
+                {
+                    "error": "This account was created with Google Sign-In. Please tap 'Sign In with Google', or use 'Forgot password' to set a password.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user.check_password(password):
+            return Response(
+                {"error": "Invalid email or password."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not user.verified_email:
+            return Response(
+                {
+                    "error": "Please confirm your email address before logging in. Check your inbox for the confirmation link.",
+                    "unverified": True,
+                    "email": user.email,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not user.is_active:
+            return Response(
+                {"error": "This account has been deactivated. Please contact support."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         refresh = RefreshToken.for_user(user)
@@ -199,6 +537,257 @@ class LoginView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class ForgotPasswordView(APIView):
+    """
+    Initiates password reset via Brevo email.
+    Generates a secure token & 6-digit code with 1-hour expiration.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ForgotPasswordSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = serializer.validated_data["email"].strip().lower()
+        user = User.objects.filter(email__iexact=email).first()
+
+        if user:
+            # Invalidate any old password reset tokens
+            EmailVerificationToken.objects.filter(
+                email__iexact=email, token_type="password_reset", is_used=False
+            ).update(is_used=True)
+
+            token = secrets.token_urlsafe(32)
+            code = f"{secrets.randbelow(1000000):06d}"
+            expires_at = timezone.now() + timedelta(hours=1)
+
+            EmailVerificationToken.objects.create(
+                email=user.email,
+                token=token,
+                code=code,
+                token_type="password_reset",
+                expires_at=expires_at,
+            )
+
+            base_url = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+            reset_link = f"{base_url}/api/auth/reset-password-web/?token={token}"
+
+            send_password_reset_email(
+                to_email=user.email,
+                name=user.name,
+                reset_link=reset_link,
+                code=code,
+            )
+
+        # Always return generic success to prevent email enumeration
+        return Response(
+            {
+                "success": True,
+                "message": "If an account with that email exists, password reset instructions have been sent.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ResetPasswordView(APIView):
+    """
+    Step 2 of Password Reset (Mobile App API):
+    Accepts 6-digit code or token, along with new password, and updates the user's password.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = (serializer.validated_data.get("email") or "").strip().lower()
+        code = (serializer.validated_data.get("code") or "").strip()
+        token = (serializer.validated_data.get("token") or "").strip()
+        new_password = serializer.validated_data["new_password"]
+
+        token_obj = None
+        if token:
+            token_obj = EmailVerificationToken.objects.filter(
+                token=token, token_type="password_reset", is_used=False
+            ).first()
+        elif code and email:
+            token_obj = EmailVerificationToken.objects.filter(
+                email__iexact=email, code=code, token_type="password_reset", is_used=False
+            ).order_by("-created_at").first()
+
+        if not token_obj or not token_obj.is_valid():
+            return Response(
+                {"error": "Invalid or expired reset code. Please request a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(email__iexact=token_obj.email).first()
+        if not user:
+            return Response(
+                {"error": "User account associated with this token was not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        user.set_password(new_password)
+        user.verified_email = True  # Password reset through verified inbox confirms email ownership
+        user.save()
+
+        token_obj.is_used = True
+        token_obj.save()
+
+        logger.info(f"Password reset successfully completed for {user.email}")
+
+        return Response(
+            {
+                "success": True,
+                "message": "Password reset successfully. You can now log in with your new password.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class WebResetPasswordView(APIView):
+    """
+    Web landing view for password reset when opened in a browser.
+    GET: Displays password entry form.
+    POST: Updates password and displays confirmation with 'Open Amour App' button.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = request.query_params.get("token", "").strip()
+        token_obj = EmailVerificationToken.objects.filter(
+            token=token, token_type="password_reset", is_used=False
+        ).first() if token else None
+
+        if not token_obj or not token_obj.is_valid():
+            html = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reset Link Expired - Amour AI</title>
+  <style>
+    body { background-color: #09090B; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #121216; border: 1px solid #27272A; border-radius: 16px; padding: 36px 28px; max-width: 440px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+    .badge { display: inline-block; padding: 6px 14px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; color: #EF4444; font-size: 13px; font-weight: 700; margin-bottom: 16px; }
+    h1 { font-size: 22px; margin: 0 0 10px 0; }
+    p { color: #A1A1AA; font-size: 15px; line-height: 1.5; margin: 0 0 24px 0; }
+    .btn { display: inline-block; background: #F43F5E; color: #FFFFFF; text-decoration: none; font-weight: 600; padding: 12px 28px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">LINK EXPIRED</div>
+    <h1>Reset Link Invalid or Expired</h1>
+    <p>This password reset link has expired or has already been used. Please request a new password reset from the Amour app.</p>
+    <a href="amour-ai://login" class="btn">Open Amour App</a>
+  </div>
+</body>
+</html>"""
+            return HttpResponse(html, status=400)
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reset Password - Amour AI</title>
+  <style>
+    body {{ background-color: #09090B; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }}
+    .card {{ background: #121216; border: 1px solid #27272A; border-radius: 16px; padding: 36px 28px; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }}
+    .logo {{ display: inline-block; padding: 6px 14px; background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.3); border-radius: 8px; color: #F43F5E; font-size: 14px; font-weight: 800; letter-spacing: 2.5px; margin-bottom: 16px; }}
+    h1 {{ font-size: 22px; margin: 0 0 8px 0; }}
+    p.sub {{ color: #A1A1AA; font-size: 14px; line-height: 1.5; margin: 0 0 24px 0; }}
+    .group {{ margin-bottom: 18px; text-align: left; }}
+    label {{ display: block; font-size: 13px; color: #D4D4D8; margin-bottom: 6px; font-weight: 500; }}
+    input {{ width: 100%; box-sizing: border-box; background: #18181B; border: 1px solid #3F3F46; border-radius: 10px; padding: 12px 14px; color: #FFFFFF; font-size: 15px; outline: none; }}
+    input:focus {{ border-color: #F43F5E; }}
+    .btn {{ display: block; width: 100%; box-sizing: border-box; background: #F43F5E; color: #FFFFFF; border: none; font-size: 16px; font-weight: 600; padding: 14px 20px; border-radius: 10px; cursor: pointer; margin-top: 10px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="text-align: center;">
+      <div class="logo">AMOUR AI</div>
+      <h1>Create New Password</h1>
+      <p class="sub">Set a new password for <strong>{token_obj.email}</strong></p>
+    </div>
+    <form method="POST" action="/api/auth/reset-password-web/?token={token}">
+      <div class="group">
+        <label>New Password</label>
+        <input type="password" name="password" minlength="6" required placeholder="Minimum 6 characters">
+      </div>
+      <div class="group">
+        <label>Confirm Password</label>
+        <input type="password" name="confirm_password" minlength="6" required placeholder="Re-enter new password">
+      </div>
+      <button type="submit" class="btn">Update Password</button>
+    </form>
+  </div>
+</body>
+</html>"""
+        return HttpResponse(html)
+
+    def post(self, request):
+        token = request.query_params.get("token", "").strip()
+        token_obj = EmailVerificationToken.objects.filter(
+            token=token, token_type="password_reset", is_used=False
+        ).first() if token else None
+
+        if not token_obj or not token_obj.is_valid():
+            return HttpResponse("<p>Invalid or expired token.</p>", status=400)
+
+        password = request.POST.get("password", "")
+        confirm_password = request.POST.get("confirm_password", "")
+
+        if not password or len(password) < 6:
+            return HttpResponse("<p>Password must be at least 6 characters. <a href='javascript:history.back()'>Go back</a></p>", status=400)
+
+        if password != confirm_password:
+            return HttpResponse("<p>Passwords do not match. <a href='javascript:history.back()'>Go back</a></p>", status=400)
+
+        user = User.objects.filter(email__iexact=token_obj.email).first()
+        if not user:
+            return HttpResponse("<p>User account not found.</p>", status=404)
+
+        user.set_password(password)
+        user.verified_email = True
+        user.save()
+
+        token_obj.is_used = True
+        token_obj.save()
+
+        html = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Reset Complete - Amour AI</title>
+  <style>
+    body { background-color: #09090B; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #121216; border: 1px solid #27272A; border-radius: 16px; padding: 40px 30px; max-width: 440px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+    .success-icon { width: 56px; height: 56px; line-height: 56px; border-radius: 50%; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10B981; font-size: 26px; margin: 0 auto 16px auto; }
+    h1 { font-size: 24px; margin: 0 0 10px 0; font-weight: 700; }
+    p { color: #A1A1AA; font-size: 15px; line-height: 1.5; margin: 0 0 28px 0; }
+    .btn { display: inline-block; width: 100%; box-sizing: border-box; background: #F43F5E; color: #FFFFFF; text-decoration: none; font-size: 16px; font-weight: 600; padding: 14px 24px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="success-icon">✓</div>
+    <h1>Password Updated!</h1>
+    <p>Your password has been changed successfully. You can now open the Amour app and sign in with your new password.</p>
+    <a href="amour-ai://login" class="btn">Open Amour App</a>
+  </div>
+</body>
+</html>"""
+        return HttpResponse(html)
+
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]

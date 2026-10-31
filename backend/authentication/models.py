@@ -81,3 +81,32 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return f"{self.email} ({self.namespace})"
+
+
+class EmailVerificationToken(models.Model):
+    TOKEN_TYPES = (
+        ("signup", "Signup Verification"),
+        ("password_reset", "Password Reset"),
+    )
+    id = models.CharField(primary_key=True, max_length=128, default=uuid.uuid4, editable=False)
+    email = models.EmailField(db_index=True)
+    token = models.CharField(max_length=128, unique=True, db_index=True)
+    code = models.CharField(max_length=8, blank=True, default="", db_index=True)
+    token_type = models.CharField(max_length=32, choices=TOKEN_TYPES, default="signup")
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["email", "token_type", "is_used"]),
+        ]
+
+    def is_valid(self):
+        from django.utils import timezone
+        return not self.is_used and timezone.now() < self.expires_at
+
+    def __str__(self):
+        return f"{self.token_type} token for {self.email} (used={self.is_used})"
+

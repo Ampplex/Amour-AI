@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
 import * as Linking from 'expo-linking';
@@ -8,6 +9,8 @@ import { GOOGLE_CONFIG, API_CONFIG } from '../constants/authConfig';
 import { clearFeedMemoryCache } from '../services/feedService';
 
 WebBrowser.maybeCompleteAuthSession();
+
+const LOCAL_SESSION_KEY = '@amour_user_session';
 
 export interface GoogleUser {
   id: string;
@@ -30,6 +33,12 @@ interface AuthContextType {
   pendingGoogleSession: boolean;
   signInWithGoogle: () => Promise<GoogleUser | null>;
   signUpWithGoogle: () => Promise<GoogleUser | null>;
+  loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string; unverified?: boolean }>;
+  signUpWithEmail: (name: string, email: string, password: string) => Promise<{ success: boolean; requiresVerification?: boolean; error?: string; message?: string }>;
+  confirmEmail: (email: string, code: string) => Promise<{ success: boolean; error?: string; user?: GoogleUser }>;
+  resendVerification: (email: string) => Promise<{ success: boolean; error?: string; message?: string }>;
+  forgotPassword: (email: string) => Promise<{ success: boolean; error?: string; message?: string }>;
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<{ success: boolean; error?: string; message?: string }>;
   completeGoogleDevSession: (email?: string, name?: string) => void;
   submitTokenUrl: (url: string) => Promise<boolean>;
   dismissPendingSession: () => void;
@@ -41,6 +50,7 @@ interface AuthContextType {
   uploadProfilePicture: (options: { base64?: string }) => Promise<{ success: boolean; url?: string; error?: string }>;
   refreshProfile: () => Promise<void>;
 }
+
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -72,69 +82,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthReady(true);
     }, 2000);
 
-    try {
-      GoogleSignin.configure({
-        webClientId: GOOGLE_CONFIG.clientId,
-        offlineAccess: false,
-      });
-      console.log('[GoogleSignin] Configured successfully with webClientId:', GOOGLE_CONFIG.clientId);
+    const initializeAuth = async () => {
+      // 1. Try restoring stored local email session
+      try {
+        const stored = await AsyncStorage.getItem(LOCAL_SESSION_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.id) {
+            setUser(parsed);
+            setIsAuthReady(true);
+            clearTimeout(safetyTimeout);
+            return;
+          }
+        }
+      } catch (err) {
+        console.log('[Auth] Local session restore error:', err);
+      }
 
-      GoogleSignin.signInSilently()
-        .then(async (currentUser) => {
-          if (currentUser?.data?.user) {
-            const u = currentUser.data.user;
-            const initialUser: GoogleUser = {
-              id: u.id,
-              name: u.name || `${u.givenName || ''} ${u.familyName || ''}`.trim() || 'Google User',
-              email: u.email,
-              picture: u.photo || undefined,
-              given_name: u.givenName || undefined,
-              family_name: u.familyName || undefined,
-              verified_email: true,
-              namespace: u.id,
-            };
-            setUser(initialUser);
-            console.log('[GoogleSignin] Restored active session for:', u.email);
+      // 2. Try restoring Google Sign-In session
+      try {
+        GoogleSignin.configure({
+          webClientId: GOOGLE_CONFIG.clientId,
+          offlineAccess: false,
+        });
+        console.log('[GoogleSignin] Configured successfully with webClientId:', GOOGLE_CONFIG.clientId);
 
-            // Hydrate profile from PostgreSQL backend (custom S3 avatar, unique username, display name)
-            for (const base of CANDIDATE_URLS) {
-              try {
-                const res = await fetch(`${base}/auth/profile/?user_id=${u.id}`, {
-                  headers: { Accept: 'application/json' },
-                });
-                if (res.ok) {
-                  const profile = await res.json();
-                  setUser((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          username: profile.username || prev.username,
-                          name: profile.name || prev.name,
-                          picture: profile.picture || prev.picture,
-                        }
-                      : null
-                  );
-                  console.log('[GoogleSignin] Hydrated profile from backend. Username:', profile.username);
-                  break;
-                }
-              } catch {
-                continue;
+        const currentUser = await GoogleSignin.signInSilently();
+        if (currentUser?.data?.user) {
+          const u = currentUser.data.user;
+          const initialUser: GoogleUser = {
+            id: u.id,
+            name: u.name || `${u.givenName || ''} ${u.familyName || ''}`.trim() || 'Google User',
+            email: u.email,
+            picture: u.photo || undefined,
+            given_name: u.givenName || undefined,
+            family_name: u.familyName || undefined,
+            verified_email: true,
+            namespace: u.id,
+          };
+          setUser(initialUser);
+          console.log('[GoogleSignin] Restored active session for:', u.email);
+
+          // Hydrate profile from PostgreSQL backend
+          for (const base of CANDIDATE_URLS) {
+            try {
+              const res = await fetch(`${base}/auth/profile/?user_id=${u.id}`, {
+                headers: { Accept: 'application/json' },
+              });
+              if (res.ok) {
+                const profile = await res.json();
+                setUser((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        username: profile.username || prev.username,
+                        name: profile.name || prev.name,
+                        picture: profile.picture || prev.picture,
+                      }
+                    : null
+                );
+                console.log('[GoogleSignin] Hydrated profile from backend. Username:', profile.username);
+                break;
               }
+            } catch {
+              continue;
             }
           }
-        })
-        .catch(() => {
-          // No stored session
-        })
-        .finally(() => {
-          clearTimeout(safetyTimeout);
-          setIsAuthReady(true);
-        });
-    } catch (e) {
-      console.log('[GoogleSignin] configure warning:', e);
-      clearTimeout(safetyTimeout);
-      setIsAuthReady(true);
-    }
+        }
+      } catch (e) {
+        console.log('[GoogleSignin] configure/silentsignin notice:', e);
+      } finally {
+        clearTimeout(safetyTimeout);
+        setIsAuthReady(true);
+      }
+    };
+
+    initializeAuth();
 
     return () => clearTimeout(safetyTimeout);
   }, []);
@@ -522,9 +545,246 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const loginWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string; unverified?: boolean }> => {
+    setLoading(true);
+    setError(null);
+    let lastError = 'Unable to connect to server. Please check your network connection.';
+    let isUnverified = false;
+
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/login/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.user) {
+          const bUser = data.user;
+          const authedUser: GoogleUser = {
+            id: bUser.id,
+            name: bUser.name || 'User',
+            email: bUser.email,
+            picture: bUser.picture || undefined,
+            given_name: bUser.given_name || undefined,
+            family_name: bUser.family_name || undefined,
+            verified_email: bUser.verified_email,
+            namespace: bUser.namespace || bUser.id,
+            username: bUser.username,
+            token: data.access_token,
+          };
+          setUser(authedUser);
+          await AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(authedUser));
+          setLoading(false);
+          return { success: true };
+        } else {
+          lastError = data.error || data.detail || 'Login failed';
+          if (data.unverified) {
+            isUnverified = true;
+          }
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+      }
+    }
+
+    setLoading(false);
+    setError(lastError);
+    return { success: false, error: lastError, unverified: isUnverified };
+  };
+
+  const signUpWithEmail = async (
+    name: string,
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; requiresVerification?: boolean; error?: string; message?: string }> => {
+    setLoading(true);
+    setError(null);
+    let lastError = 'Unable to connect to server.';
+
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/signup/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), email: email.trim().toLowerCase(), password }),
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          setLoading(false);
+          return {
+            success: true,
+            requiresVerification: data.requires_verification ?? true,
+            message: data.message,
+          };
+        } else {
+          lastError = data.error || (data.email ? data.email[0] : null) || 'Registration failed';
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+      }
+    }
+
+    setLoading(false);
+    setError(lastError);
+    return { success: false, error: lastError };
+  };
+
+  const confirmEmail = async (
+    email: string,
+    code: string
+  ): Promise<{ success: boolean; error?: string; user?: GoogleUser }> => {
+    setLoading(true);
+    setError(null);
+    let lastError = 'Unable to connect to server.';
+
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/confirm-email/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim().toLowerCase(), code: code.trim() }),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.user) {
+          const bUser = data.user;
+          const authedUser: GoogleUser = {
+            id: bUser.id,
+            name: bUser.name || 'User',
+            email: bUser.email,
+            picture: bUser.picture || undefined,
+            given_name: bUser.given_name || undefined,
+            family_name: bUser.family_name || undefined,
+            verified_email: bUser.verified_email,
+            namespace: bUser.namespace || bUser.id,
+            username: bUser.username,
+            token: data.access_token,
+          };
+          setUser(authedUser);
+          await AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(authedUser));
+          setLoading(false);
+          return { success: true, user: authedUser };
+        } else {
+          lastError = data.error || 'Confirmation failed';
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+      }
+    }
+
+    setLoading(false);
+    setError(lastError);
+    return { success: false, error: lastError };
+  };
+
+  const resendVerification = async (
+    email: string
+  ): Promise<{ success: boolean; error?: string; message?: string }> => {
+    let lastError = 'Unable to connect to server.';
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/resend-verification/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim().toLowerCase() }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          return { success: true, message: data.message };
+        } else {
+          lastError = data.error || 'Failed to resend confirmation email';
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+      }
+    }
+    return { success: false, error: lastError };
+  };
+
+  const forgotPassword = async (
+    email: string
+  ): Promise<{ success: boolean; error?: string; message?: string }> => {
+    setLoading(true);
+    setError(null);
+    let lastError = 'Unable to connect to server.';
+
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/forgot-password/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim().toLowerCase() }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setLoading(false);
+          return { success: true, message: data.message };
+        } else {
+          lastError = data.error || 'Failed to send reset email';
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+      }
+    }
+    setLoading(false);
+    setError(lastError);
+    return { success: false, error: lastError };
+  };
+
+  const resetPassword = async (
+    email: string,
+    code: string,
+    newPassword: string
+  ): Promise<{ success: boolean; error?: string; message?: string }> => {
+    setLoading(true);
+    setError(null);
+    let lastError = 'Unable to connect to server.';
+
+    for (const base of CANDIDATE_URLS) {
+      try {
+        const res = await fetch(`${base}/auth/reset-password/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email.trim().toLowerCase(),
+            code: code.trim(),
+            new_password: newPassword,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setLoading(false);
+          return { success: true, message: data.message };
+        } else {
+          lastError = data.error || 'Password reset failed';
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || 'Network error';
+      }
+    }
+    setLoading(false);
+    setError(lastError);
+    return { success: false, error: lastError };
+  };
+
   const logout = async () => {
     try {
       await GoogleSignin.signOut();
+    } catch {}
+    try {
+      await AsyncStorage.removeItem(LOCAL_SESSION_KEY);
     } catch {}
     clearFeedMemoryCache();
     setUser(null);
@@ -546,6 +806,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         pendingGoogleSession,
         signInWithGoogle: triggerGoogleAuth,
         signUpWithGoogle: triggerGoogleAuth,
+        loginWithEmail,
+        signUpWithEmail,
+        confirmEmail,
+        resendVerification,
+        forgotPassword,
+        resetPassword,
         completeGoogleDevSession,
         submitTokenUrl,
         dismissPendingSession,
@@ -561,6 +827,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+
 }
 
 export function useAuth() {

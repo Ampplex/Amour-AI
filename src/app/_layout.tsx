@@ -71,6 +71,12 @@ export default function RootLayout() {
             }}
           />
           <Stack.Screen
+            name="forgot-password"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
             name="(tabs)"
             options={{
               headerShown: false,

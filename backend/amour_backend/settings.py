@@ -160,3 +160,10 @@ GOOGLE_CLIENT_IDS = [
     os.environ.get("GOOGLE_WEB_CLIENT_ID", "665738151857-0f765nnvu4no6qhbdbua132vfv2iu10k.apps.googleusercontent.com"),
     os.environ.get("GOOGLE_ANDROID_CLIENT_ID", "665738151857-epjtqdvodprak901bkmi2k9t68t15830.apps.googleusercontent.com"),
 ]
+
+# Brevo Email Service & Public App URL
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+BREVO_SENDER_EMAIL = os.environ.get("BREVO_SENDER_EMAIL", "ankesh3905222@gmail.com")
+BREVO_SENDER_NAME = os.environ.get("BREVO_SENDER_NAME", "Amour AI")
+BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://192.168.1.4:8000")
+

@@ -23,10 +23,12 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [isUnverified, setIsUnverified] = useState<boolean>(false);
 
   const {
     user,
     signInWithGoogle,
+    loginWithEmail,
     loading: googleLoading,
     error: googleError,
     pendingGoogleSession,
@@ -47,20 +49,28 @@ export default function LoginScreen() {
     }
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setError('');
+    setIsUnverified(false);
     if (!email.trim() || !password.trim()) {
       setError('Please enter both email and password.');
       return;
     }
 
     setLoading(true);
-    // Simulated authentication call
-    setTimeout(() => {
-      setLoading(false);
+    const result = await loginWithEmail(email, password);
+    setLoading(false);
+
+    if (result.success) {
       router.replace('/(tabs)');
-    }, 1000);
+    } else {
+      setError(result.error || 'Login failed. Please check your credentials.');
+      if (result.unverified) {
+        setIsUnverified(true);
+      }
+    }
   };
+
 
   const displayError = error || googleError;
 
@@ -92,6 +102,22 @@ export default function LoginScreen() {
           {displayError ? (
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>{displayError}</Text>
+              {isUnverified ? (
+                <TouchableOpacity
+                  onPress={() =>
+                    router.push({
+                      pathname: '/signup',
+                      params: { prefillEmail: email, initialStep: 'confirm' },
+                    })
+                  }
+                  style={styles.unverifiedPromptButton}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.unverifiedPromptText}>
+                    Enter 6-digit confirmation code ›
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           ) : null}
 
@@ -117,9 +143,7 @@ export default function LoginScreen() {
               <View style={styles.passwordLabelRow}>
                 <Text style={styles.label}>Password</Text>
                 <TouchableOpacity
-                  onPress={() => {
-                    // Future: forgot password route
-                  }}
+                  onPress={() => router.push('/forgot-password')}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.forgotText}>Forgot password?</Text>
@@ -249,6 +273,17 @@ const styles = StyleSheet.create({
     color: theme.colors.error,
     fontSize: 13,
     fontWeight: '500',
+  },
+  unverifiedPromptButton: {
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  unverifiedPromptText: {
+    color: '#FB7185',
+    fontSize: 13,
+    fontWeight: '600',
   },
   form: {
     gap: 20,
