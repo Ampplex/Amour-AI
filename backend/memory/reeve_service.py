@@ -348,13 +348,15 @@ def generate_companion_reply(
                     if raw_reply:
                         reply = raw_reply
                         break
-                elif resp.status_code == 429:
-                    logger.warning(f"Groq 429 Rate Limit for model {current_model}. Falling back to next candidate model...")
-                    continue
+                    else:
+                        logger.warning(f"Model {current_model} returned empty response. Trying fallback...")
+                        continue
                 else:
-                    logger.error(f"Groq API error ({resp.status_code}) for model {current_model}: {resp.text}")
+                    logger.warning(f"Groq API error ({resp.status_code}) for model {current_model}: {resp.text[:120]}. Falling back...")
+                    continue
             except Exception as exc:
-                logger.error(f"Failed calling Groq LLM with model {current_model}: {exc}")
+                logger.error(f"Failed calling Groq LLM with model {current_model}: {exc}. Trying fallback...")
+                continue
 
     # Enforce zero emojis, no raw code blocks, and clean formatting
     if reply:
