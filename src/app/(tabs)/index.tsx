@@ -345,7 +345,7 @@ export default function HomeScreen() {
     }
 
     try {
-      const resp = await fetchFeedPage(1, 4, isRefresh, user?.id);
+      const resp = await fetchFeedPage(1, 20, isRefresh, user?.id);
       setFeedItems(resp.results);
       setPage(1);
       setHasMore(resp.has_more);
@@ -368,7 +368,7 @@ export default function HomeScreen() {
 
     try {
       const nextPage = page + 1;
-      const resp = await fetchFeedPage(nextPage, 4, false, user?.id);
+      const resp = await fetchFeedPage(nextPage, 20, false, user?.id);
       if (resp.results.length > 0) {
         setFeedItems((prev) => {
           // Merge avoiding duplicates by id

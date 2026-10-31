@@ -22,7 +22,8 @@ export interface PaginatedFeedResponse {
 
 const LIKED_STORAGE_KEY = '@amour_liked_persona_ids';
 const FOLLOWED_STORAGE_KEY = '@amour_followed_publishers';
-const FEED_CACHE_KEY = '@amour_feed_cache_window';
+const FEED_CACHE_KEY = '@amour_feed_cache_window_v4';
+const OLD_FEED_CACHE_KEY = '@amour_feed_cache_window';
 const ANON_DEVICE_ID_KEY = '@amour_anon_device_id';
 
 let cachedDeviceId: string | null = null;
@@ -46,8 +47,8 @@ export async function getAnonymousDeviceId(): Promise<string> {
 
 // Candidate URLs for reliable connection over USB, wireless ADB, or local network
 const CANDIDATE_URLS = [
-  'http://192.168.1.4:8000/api',
   'http://127.0.0.1:8000/api',
+  'http://192.168.1.4:8000/api',
   API_CONFIG.baseUrl,
   'http://10.104.217.217:8000/api',
   'http://192.168.1.2:8000/api',
@@ -84,7 +85,7 @@ async function tryServerFetch(path: string, options: RequestInit = {}): Promise<
   for (const base of CANDIDATE_URLS) {
     try {
       const url = `${base}${path}`;
-      const res = await fetchWithTimeout(url, options, 2500);
+      const res = await fetchWithTimeout(url, options, 10000);
       if (res.ok) return res;
     } catch {
       // try next candidate
@@ -213,6 +214,8 @@ export async function fetchFeedPage(
 
   if (forceRefresh) {
     inMemoryPageCache.clear();
+    AsyncStorage.removeItem(FEED_CACHE_KEY).catch(() => {});
+    AsyncStorage.removeItem(OLD_FEED_CACHE_KEY).catch(() => {});
   } else if (inMemoryPageCache.has(page)) {
     const cachedItems = inMemoryPageCache.get(page)!;
     return {

@@ -23,7 +23,7 @@ export interface PersonaItem {
   updated_at?: string;
 }
 
-const BASE_STORAGE_KEY = '@amour_personas_roster';
+const BASE_STORAGE_KEY = '@amour_personas_roster_v4';
 
 function getStorageKey(userId?: string): string {
   return userId ? `${BASE_STORAGE_KEY}_${userId}` : BASE_STORAGE_KEY;
@@ -62,14 +62,14 @@ const DUMMY_IDS = new Set<string>([
 
 // Helper to attempt fetch across candidate endpoints (adb reverse or local Wi-Fi)
 const CANDIDATE_URLS = [
-  'http://192.168.1.4:8000/api',
   'http://127.0.0.1:8000/api',
+  'http://192.168.1.4:8000/api',
   API_CONFIG.baseUrl,
   'http://10.104.217.217:8000/api',
   'http://192.168.1.2:8000/api',
 ];
 
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 2500): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 10000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -86,7 +86,7 @@ async function tryServerFetch(path: string, options: RequestInit = {}): Promise<
   for (const base of CANDIDATE_URLS) {
     try {
       const url = `${base}${path}`;
-      const res = await fetchWithTimeout(url, options, 2500);
+      const res = await fetchWithTimeout(url, options, 10000);
       if (res.ok) return res;
     } catch {
       // try next candidate
