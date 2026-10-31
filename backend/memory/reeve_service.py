@@ -184,7 +184,7 @@ def generate_companion_reply(
         character_instructions += (
             f"--- FIRST MESSAGE / OPENING SCENARIO ---\n"
             f"\"{first_message_script}\"\n"
-            f"This established your opening premise, setting, and tone with the user. Converse and reply consistently with this scenario.\n"
+            f"This was your opening premise and setting. As conversation progresses, your relationship dynamically evolves based on what happens between you and the user.\n"
             f"----------------------------------------\n\n"
         )
 
@@ -202,7 +202,10 @@ def generate_companion_reply(
         f"--- STRICT CHAT RULES ---\n"
         f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
         f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
-        f"3. STAY IN CHARACTER: Roleplay authentically according to your character's persona, relationship dynamic, and tone at all times.\n"
+        f"3. STAY IN CHARACTER & EMOTIONAL CONTINUITY: Roleplay authentically according to your character's persona and relationship dynamic. "
+        f"CRITICAL: If a breakup, argument, confession, rejection, or major emotional event just occurred in the conversation history or memory, "
+        f"DO NOT act like nothing happened! Never revert to cheerful greetings or affectionate pet names if you are broken up, hurt, or fighting. "
+        f"React with realistic emotional continuity to what just took place (e.g. heartbroken, distant, cold, hurt, or questioning why they are texting).\n"
         f"-------------------------"
     )
 
@@ -217,6 +220,7 @@ def generate_companion_reply(
             f"- Statements labeled 'User:' or '{first_name or 'User'}:' were spoken by {first_name or 'the user'}.\n"
             f"- 'Assistant:' lines indicate statements previously spoken by you.\n"
             f"- Memories include timestamps. Compare them with CURRENT TEMPORAL CONTEXT to reason about when things occurred.\n"
+            f"- Active conversation history and recent relationship events (breakups, fights, bonding) take precedence over the initial premise. Always maintain continuity with the latest emotional state of your relationship.\n"
             f"- Never repeat previous responses verbatim.\n"
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
