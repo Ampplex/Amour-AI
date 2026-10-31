@@ -49,6 +49,50 @@ export interface SendMessageResponse {
   user_id: string;
 }
 
+const CANDIDATE_URLS = [
+  'http://192.168.1.4:8000/api',
+  'http://127.0.0.1:8000/api',
+  API_CONFIG.baseUrl,
+];
+
+let activeBaseUrl = API_CONFIG.baseUrl || 'http://192.168.1.4:8000/api';
+
+async function resolveActiveBaseUrl(): Promise<string> {
+  const probeController = new AbortController();
+  const probeTimer = setTimeout(() => probeController.abort(), 1200);
+  try {
+    const probe = await fetch(`${activeBaseUrl}/memory/status/`, {
+      method: 'GET',
+      signal: probeController.signal,
+    });
+    clearTimeout(probeTimer);
+    if (probe.ok) return activeBaseUrl;
+  } catch {
+    clearTimeout(probeTimer);
+  }
+
+  for (const candidate of CANDIDATE_URLS) {
+    if (candidate === activeBaseUrl) continue;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1200);
+    try {
+      const probe = await fetch(`${candidate}/memory/status/`, {
+        method: 'GET',
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      if (probe.ok) {
+        activeBaseUrl = candidate;
+        return candidate;
+      }
+    } catch {
+      clearTimeout(t);
+    }
+  }
+
+  return activeBaseUrl;
+}
+
 /**
  * Fetch paginated chat history for a specific persona and user.
  * Direct single-endpoint GET with 12s timeout.
@@ -65,7 +109,8 @@ export async function fetchChatHistory(
   const timer = setTimeout(() => controller.abort(), 12000);
 
   try {
-    const res = await fetch(`${API_CONFIG.baseUrl}/memory/chat/?${query}`, {
+    const baseUrl = await resolveActiveBaseUrl();
+    const res = await fetch(`${baseUrl}/memory/chat/?${query}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -100,7 +145,8 @@ export async function sendChatMessage(
   const timer = setTimeout(() => controller.abort(), 45000);
 
   try {
-    const res = await fetch(`${API_CONFIG.baseUrl}/memory/chat/`, {
+    const baseUrl = await resolveActiveBaseUrl();
+    const res = await fetch(`${baseUrl}/memory/chat/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

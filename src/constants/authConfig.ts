@@ -4,5 +4,5 @@ export const GOOGLE_CONFIG = {
 };
 
 export const API_CONFIG = {
-  baseUrl: 'http://127.0.0.1:8000/api',
+  baseUrl: 'http://192.168.1.4:8000/api',
 };
