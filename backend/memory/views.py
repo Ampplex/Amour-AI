@@ -125,6 +125,13 @@ class ChatMemoryView(APIView):
 
         serializer = PersonaChatMessageSerializer(paged_items, many=True)
 
+        from .models import PersonaRelationshipState
+        rel_state = PersonaRelationshipState.objects.filter(
+            user_identifier=user_id,
+            persona_identifier=persona_id,
+        ).first()
+        current_conflict_stage = rel_state.conflict_stage if rel_state else 0
+
         return Response(
             {
                 "results": serializer.data,
@@ -132,6 +139,8 @@ class ChatMemoryView(APIView):
                 "page": page,
                 "page_size": page_size,
                 "has_more": end < total_count,
+                "conflict_stage": current_conflict_stage,
+                "conflict_level": current_conflict_stage,
             },
             status=status.HTTP_200_OK,
         )
@@ -153,7 +162,7 @@ class ChatMemoryView(APIView):
         client_timezone = request.data.get("client_timezone", "")
         user_name = request.data.get("user_name", "").strip()
 
-        user_id = request.user.id if request.user.is_authenticated else request.data.get("user_id", "guest")
+        user_id = request.user.id if request.user.is_authenticated else (request.data.get("user_id") or "guest")
 
         # Resolve user name if not explicitly provided
         if not user_name:
@@ -234,6 +243,14 @@ class ChatMemoryView(APIView):
             except Exception:
                 pass
 
+        # Fetch relationship conflict state from database for this specific user & persona
+        from .models import PersonaRelationshipState
+        rel_state, _ = PersonaRelationshipState.objects.get_or_create(
+            user_identifier=str(user_id),
+            persona_identifier=str(persona_id),
+        )
+        current_conflict_stage = rel_state.conflict_stage
+
         # Fetch recent dialogue history (last 6 turns) for fast, low-latency conversation context
         recent_turns_qs = list(
             PersonaChatMessage.objects.filter(
@@ -260,6 +277,7 @@ class ChatMemoryView(APIView):
                 namespace=namespace,
                 sender="user",
                 text=message,
+                conflict_stage=current_conflict_stage,
                 client_message_id=client_message_id,
             )
         except Exception as e:
@@ -277,8 +295,16 @@ class ChatMemoryView(APIView):
                 client_timezone=client_timezone,
                 user_name=user_name,
                 conversation_history=conversation_history,
+                current_conflict_stage=current_conflict_stage,
             )
             reply_text = result.get("reply", "").strip()
+            new_conflict_stage = result.get("conflict_stage", current_conflict_stage)
+
+            # Persist updated conflict stage into PostgreSQL database
+            if rel_state.conflict_stage != new_conflict_stage:
+                rel_state.conflict_stage = new_conflict_stage
+                rel_state.save(update_fields=["conflict_stage", "updated_at"])
+
             if not reply_text:
                 return Response(
                     {"error": "Failed to generate companion reply from model"},
@@ -295,6 +321,7 @@ class ChatMemoryView(APIView):
                     namespace=namespace,
                     sender="bot",
                     text=reply_text,
+                    conflict_stage=new_conflict_stage,
                 )
                 bot_msg_id = str(bot_msg_record.id)
             except Exception as e:
@@ -306,6 +333,8 @@ class ChatMemoryView(APIView):
                     "id": bot_msg_id,
                     "client_message_id": client_message_id,
                     "reply": reply_text,
+                    "conflict_stage": new_conflict_stage,
+                    "conflict_level": new_conflict_stage,
                     "context": result.get("context", ""),
                     "namespace": namespace,
                     "persona_id": persona_id,

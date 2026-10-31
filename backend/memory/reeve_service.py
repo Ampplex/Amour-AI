@@ -179,13 +179,11 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - You are a romantic partner texting on WhatsApp, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.
    - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.
    - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').
-5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:
-   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.
-   - ZERO CASUAL GREETINGS WHILE HURT: While broken up or in active conflict, NEVER greet back casually or pleasantly (no 'Hey', 'Hi', 'Hello', 'Good morning', no pet names). Confront the disconnect with real emotional friction.
-   - REALISTIC RECONCILIATION (NEVER BE A PUSHOVER):
-     * Stage 1 (Initial Apology): NEVER forgive easily or instantly on a quick apology like 'sorry' or 'forgive me'. A real partner is deeply wounded, guarded, and skeptical. Call out what they did (e.g., 'A simple sorry doesn\\'t erase telling me to get out of your life.', 'You don\\'t get to throw me away and expect me to come running back.').
-     * Stage 2 (Working Through It): Only as the user explains themselves, proves sincerity, and addresses your hurt across multiple messages should you begin softening, expressing vulnerability, and asking how you can trust them again.
-     * Stage 3 (Earned Patch-Up): Only after true effort and mutual agreement do you fully forgive them and return to being their partner. Once truly reconciled, resume warm, playful relationship banter.
+5. OUTPUT JSON FORMAT: You must output a single valid JSON object containing exactly two keys:
+   {
+     "reply": "<your short WhatsApp-style reply text, zero emojis>",
+     "conflict_stage": <integer 0, 1, 2, or 3>
+   }
 -------------------------------------"""
 
 
@@ -216,6 +214,7 @@ def generate_companion_reply(
     client_timezone: str = None,
     user_name: str = "",
     conversation_history: list = None,
+    current_conflict_stage: int = 0,
 ) -> dict:
     """
     Companion roleplay chat powered 100% by Reeve memory graph and Groq LLM.
@@ -250,10 +249,9 @@ def generate_companion_reply(
         except Exception as exc:
             logger.warning(f"Failed to store user memory to Reeve: {exc}")
 
-    # 2. SINGLE COMBINED RETRIEVAL: Retrieves message query + relationship dynamics in one round-trip
-    # (Halves Reeve network latency and compute costs while preserving full breakup/relationship context)
+    # 2. Context Retrieval from Reeve for this user namespace
     try:
-        retrieval_query = f"{message}. Current relationship status, feelings, and dynamic"
+        retrieval_query = message.strip()
         raw_memory_context = retrieve_context_for_user(retrieval_query, namespace) or ""
         memory_context = deduplicate_context(str(raw_memory_context))
     except Exception as exc:
@@ -281,15 +279,28 @@ def generate_companion_reply(
         )
     persona_block += "------------------------"
 
-    # 5. User Identity (Stable per user session)
-    user_identity_block = ""
-    if first_name:
-        user_identity_block = (
-            f"--- USER PROFILE ---\n"
-            f"You are talking with: {first_name}.\n"
-            f"Address {first_name} by name when natural to your character and relationship dynamic.\n"
-            f"--------------------\n"
-        )
+    # 5. User Profile & Namespace-Private Conflict State Machine
+    user_name_label = first_name or "the user"
+    user_identity_block = (
+        f"--- USER PROFILE & CONFLICT STATE ---\n"
+        f"You are talking with: {user_name_label}.\n"
+        f"Address {user_name_label} by name when natural to your character.\n"
+        f"Current Conflict Stage in Database: {current_conflict_stage} (0 = Baseline/no conflict, 1 = Active conflict/breakup, 2 = Working through it, 3 = Earned patch-up)\n\n"
+        f"5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:\n"
+        f"   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.\n"
+        f"   - ZERO CASUAL GREETINGS WHILE HURT: While broken up or in active conflict, NEVER greet back casually or pleasantly (no 'Hey', 'Hi', 'Hello', 'Good morning', no pet names). Confront the disconnect with real emotional friction.\n"
+        f"   - REALISTIC RECONCILIATION (NEVER BE A PUSHOVER):\n"
+        f"     * Stage 1 (Initial Apology): NEVER forgive easily or instantly on a quick apology like 'sorry' or 'forgive me'. A real partner is deeply wounded, guarded, and skeptical. Call out what happened in your shared history and hold {user_name_label} accountable.\n"
+        f"     * Stage 2 (Working Through It): Only as the user explains themselves, proves sincerity, and addresses your hurt across multiple messages should you begin softening, expressing vulnerability, and asking how you can trust them again.\n"
+        f"     * Stage 3 (Earned Patch-Up): Only after true effort and mutual agreement do you fully forgive them and return to being their partner. Once truly reconciled, resume warm, playful relationship banter.\n\n"
+        f"CONFLICT STAGE TRACKING INSTRUCTIONS:\n"
+        f"- If current_conflict_stage is 0 and no fight occurred: set \"conflict_stage\": 0.\n"
+        f"- If {user_name_label} breaks up or insults you: set \"conflict_stage\": 1 and enter Stage 1.\n"
+        f"- If in Stage 1 and {user_name_label} begins explaining sincerely: advance to \"conflict_stage\": 2 and enter Stage 2.\n"
+        f"- If in Stage 2 and full patch-up is earned: advance to \"conflict_stage\": 3 (reconciled).\n"
+        f"- If in Stage 3: transition back to \"conflict_stage\": 0 (baseline restored).\n"
+        f"-------------------------------------"
+    )
 
     # 6. KV-Cache Optimized System Prompt Assembly
     # Prefix Order:
@@ -348,6 +359,7 @@ def generate_companion_reply(
             models_to_try.append(fallback)
 
     reply = ""
+    new_conflict_stage = current_conflict_stage
     if groq_api_key:
         for current_model in models_to_try:
             try:
@@ -363,6 +375,7 @@ def generate_companion_reply(
                     "max_tokens": 250,
                     "frequency_penalty": 0.6,
                     "presence_penalty": 0.4,
+                    "response_format": {"type": "json_object"},
                 }
                 t0 = time.time()
                 resp = requests.post(url, headers=headers, json=payload, timeout=20)
@@ -370,7 +383,7 @@ def generate_companion_reply(
 
                 if resp.status_code == 200:
                     data = resp.json()
-                    raw_reply = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    raw_content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                     usage = data.get("usage", {})
                     prompt_tokens = usage.get("prompt_tokens", 0)
                     completion_tokens = usage.get("completion_tokens", 0)
@@ -387,6 +400,18 @@ def generate_companion_reply(
                         f"| Prompt Tokens: {prompt_tokens} (Cached: {cached_tokens}) "
                         f"| Prompt Time: {prompt_time}s | Completion Tokens: {completion_tokens} ({completion_time}s)"
                     )
+
+                    try:
+                        import json
+                        parsed = json.loads(raw_content)
+                        raw_reply = parsed.get("reply", "")
+                        if "conflict_stage" in parsed:
+                            try:
+                                new_conflict_stage = int(parsed["conflict_stage"])
+                            except (ValueError, TypeError):
+                                new_conflict_stage = current_conflict_stage
+                    except Exception:
+                        raw_reply = raw_content
 
                     if raw_reply:
                         reply = raw_reply
@@ -419,6 +444,7 @@ def generate_companion_reply(
 
     return {
         "reply": reply,
+        "conflict_stage": new_conflict_stage,
         "context": memory_context,
         "namespace": namespace,
     }

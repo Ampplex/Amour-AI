@@ -109,6 +109,7 @@ class PersonaChatMessage(models.Model):
     namespace = models.CharField(max_length=255, db_index=True)
     sender = models.CharField(max_length=16, db_index=True)  # 'user' or 'bot'
     text = models.TextField()
+    conflict_stage = models.IntegerField(default=0, db_index=True)
     client_message_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
@@ -130,4 +131,32 @@ class PersonaChatMessage(models.Model):
 
     def __str__(self):
         return f"[{self.sender}] {self.user_identifier} <-> {self.persona_identifier} ({self.created_at.strftime('%Y-%m-%d %H:%M')})"
+
+
+class PersonaRelationshipState(models.Model):
+    """
+    Tracks private relationship dynamic and conflict stage between a specific user and persona.
+    Stored in Neon PostgreSQL for 100% user-isolated emotional continuity.
+    Stage 0: Normal / Affectionate baseline (no conflict)
+    Stage 1: Active conflict / Breakup / Hurt
+    Stage 2: Softening / Working through it / Reconciling
+    Stage 3: Fully reconciled / Patched up (returns to baseline)
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_identifier = models.CharField(max_length=128, db_index=True)
+    persona_identifier = models.CharField(max_length=128, db_index=True)
+    conflict_stage = models.IntegerField(default=0, db_index=True)
+    conflict_reason = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user_identifier", "persona_identifier")
+        indexes = [
+            models.Index(fields=["user_identifier", "persona_identifier"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_identifier} <-> {self.persona_identifier} (Stage {self.conflict_stage})"
+
 

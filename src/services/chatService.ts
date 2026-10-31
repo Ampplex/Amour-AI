@@ -9,6 +9,8 @@ export interface ChatHistoryItem {
   namespace: string;
   sender: 'user' | 'bot';
   text: string;
+  conflict_stage?: number;
+  conflict_level?: number;
   created_at: string;
 }
 
@@ -18,6 +20,8 @@ export interface ChatHistoryResponse {
   page: number;
   page_size: number;
   has_more: boolean;
+  conflict_stage?: number;
+  conflict_level?: number;
 }
 
 export interface SendMessagePayload {
@@ -37,6 +41,8 @@ export interface SendMessageResponse {
   id: string;
   client_message_id?: string;
   reply: string;
+  conflict_stage?: number;
+  conflict_level?: number;
   context?: string;
   namespace: string;
   persona_id: string;

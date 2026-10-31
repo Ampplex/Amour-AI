@@ -16,6 +16,7 @@ class PersonaChatMessageSerializer(serializers.ModelSerializer):
             "namespace",
             "sender",
             "text",
+            "conflict_stage",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
