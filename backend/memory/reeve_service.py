@@ -117,15 +117,17 @@ def generate_companion_reply(
     memory_prompt: str = "",
     client_time: str = None,
     client_timezone: str = None,
+    user_name: str = "",
 ) -> dict:
     """
     Companion roleplay chat powered 100% by Reeve memory graph and Groq LLM.
     
     Architecture:
-    1. Ingest User message into Reeve memory graph.
+    1. Ingest User message into Reeve memory graph with personalized speaker tag.
     2. Retrieve & deduplicate memory context from Reeve graph.
     3. Construct dynamic system prompt:
        - Persona identity & Mind/Backstory
+       - User profile & first name identity
        - Opening Script / First Message
        - Strict ZERO EMOJIS requirement
        - WhatsApp-style short messages (1-3 sentences)
@@ -136,9 +138,13 @@ def generate_companion_reply(
     5. Anti-echo guard: Store Assistant reply into Reeve memory graph.
     6. Return reply, context, and namespace.
     """
+    user_clean_name = user_name.strip() if user_name else ""
+    first_name = user_clean_name.split()[0] if user_clean_name else ""
+
     # 1. ALWAYS STORE: Ingest user's message into Reeve's graph first
+    speaker_tag = f"User ({first_name})" if first_name else "User"
     try:
-        store_memory_for_user(f"User: {message}", namespace)
+        store_memory_for_user(f"{speaker_tag}: {message}", namespace)
     except Exception as exc:
         logger.warning(f"Failed to store user memory to Reeve: {exc}")
 
@@ -170,23 +176,41 @@ def generate_companion_reply(
     )
 
     # 4. Dynamic Character Script & Persona
-    first_message_script = greeting.strip() if greeting else "Hey! Good to hear from you."
+    first_message_script = greeting.strip() if greeting else ""
     character_instructions = (
         f"You are roleplaying as {persona_name}.\n"
         f"Character Story & Core Mind:\n{memory_prompt.strip() if memory_prompt else 'An attentive, warm, and genuine AI companion.'}\n\n"
-        f"--- CONVERSATION CONTEXT ---\n"
-        f"Opening message you already delivered to initiate this conversation:\n\"{first_message_script}\"\n"
-        f"CRITICAL: Do NOT repeat, echo, or rephrase this opening greeting under any circumstances. It was ALREADY presented to the user. Respond directly and naturally to the user's latest message and move the conversation forward.\n"
-        f"----------------------------\n\n"
+    )
+    if first_message_script:
+        character_instructions += (
+            f"--- FIRST MESSAGE / SCRIPT ---\n"
+            f"\"{first_message_script}\"\n"
+            f"This script defines your opening premise, tone, and character background. Act, converse, and reply consistently with this script.\n"
+            f"------------------------------\n\n"
+        )
+
+    # Dynamic User Identity Context
+    user_identity_block = ""
+    if first_name:
+        user_identity_block = (
+            f"--- USER PROFILE ---\n"
+            f"You are talking with: {first_name}.\n"
+            f"Address {first_name} warmly and casually by name when appropriate (e.g. in greetings, personal thoughts, or affectionate moments). "
+            f"Do not force their name into every single sentence, but use it casually and intimately just like close friends or partners do when texting.\n"
+            f"--------------------\n\n"
+        )
+
+    personal_rule = f"4. PERSONAL CONNECTION: The user is {first_name}. Remember their name and connect with them on a personal level.\n" if first_name else ""
+    character_instructions += (
         f"--- STRICT CHAT RULES ---\n"
         f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
         f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
         f"3. HUMANIZED ROLEPLAY AGENT: Speak naturally, affectionately, and authentically as a real human companion. Stay in character at all times.\n"
-        f"4. NEVER ECHO GREETING: If the user says 'Hi', 'Hello', or a brief starter, give a fresh, engaging, authentic reply. Never re-state your name, title, or opening script.\n"
+        f"{personal_rule}"
         f"-------------------------"
     )
 
-    augmented_system_prompt = f"{character_instructions}\n\n{temporal_anchor}"
+    augmented_system_prompt = f"{character_instructions}\n\n{user_identity_block}{temporal_anchor}"
 
     if memory_context and memory_context.strip():
         augmented_system_prompt += (
@@ -194,20 +218,18 @@ def generate_companion_reply(
             f"{memory_context.strip()}\n"
             f"--- END LTM MEMORY CONTEXT ---\n\n"
             f"Guidelines for Conversation:\n"
-            f"- 'User:' lines indicate statements spoken by the user.\n"
+            f"- Statements labeled 'User:' or '{first_name or 'User'}:' were spoken by {first_name or 'the user'}.\n"
             f"- 'Assistant:' lines indicate statements previously spoken by you.\n"
             f"- Memories include timestamps. Compare them with CURRENT TEMPORAL CONTEXT to reason about when things occurred.\n"
             f"- Never repeat previous responses verbatim.\n"
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
 
-    # 5. Pure Reeve Pipeline: System (with Reeve Memory) + Delivered Assistant Greeting + Current User Message
+    # 5. Pure Reeve Pipeline: System (with First Message Script & Reeve Memory) + Current User Message
     messages = [
         {"role": "system", "content": augmented_system_prompt},
+        {"role": "user", "content": message},
     ]
-    if first_message_script:
-        messages.append({"role": "assistant", "content": first_message_script})
-    messages.append({"role": "user", "content": message})
 
     # 6. LLM Inference (Groq)
     groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
@@ -249,8 +271,9 @@ def generate_companion_reply(
                 {
                     "role": "system",
                     "content": (
-                        f"You are {persona_name}. The user just replied '{message}' to you. "
-                        f"Acknowledge them naturally in 1-2 short casual WhatsApp sentences without emojis. "
+                        f"You are {persona_name}. {first_name or 'The user'} just replied '{message}' to you. "
+                        f"Acknowledge them naturally in 1-2 short casual WhatsApp sentences without emojis"
+                        f"{f' addressing them as {first_name}' if first_name else ''}. "
                         f"Do NOT say your name or reintroduce yourself. Jump straight into conversation."
                     ),
                 },

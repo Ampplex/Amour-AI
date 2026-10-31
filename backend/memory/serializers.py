@@ -1,5 +1,23 @@
 from rest_framework import serializers
-from .models import Persona
+from .models import Persona, PersonaChatMessage
+
+
+class PersonaChatMessageSerializer(serializers.ModelSerializer):
+    user_id = serializers.CharField(source="user_identifier", read_only=True)
+    persona_id = serializers.CharField(source="persona_identifier", read_only=True)
+
+    class Meta:
+        model = PersonaChatMessage
+        fields = [
+            "id",
+            "user_id",
+            "persona_id",
+            "namespace",
+            "sender",
+            "text",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
 
 
 class PersonaSerializer(serializers.ModelSerializer):

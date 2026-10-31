@@ -126,6 +126,37 @@ async function tryChatFetch(payload: any, token?: string): Promise<{ reply?: str
   return null;
 }
 
+async function tryGetChatHistory(
+  personaId: string,
+  userId: string,
+  page: number = 1,
+  pageSize: number = 30,
+  token?: string
+): Promise<{ results: any[]; count: number; page: number; has_more: boolean } | null> {
+  const query = `persona_id=${encodeURIComponent(personaId)}&user_id=${encodeURIComponent(userId)}&page=${page}&page_size=${pageSize}`;
+  for (const base of CANDIDATE_URLS) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(`${base}/memory/chat/?${query}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // try next candidate endpoint
+    }
+  }
+  return null;
+}
+
 export default function CompanionChatModal({
   visible,
   persona,
@@ -137,10 +168,10 @@ export default function CompanionChatModal({
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
-  const [showMemoryModal, setShowMemoryModal] = useState<boolean>(false);
-  const [memoryInput, setMemoryInput] = useState<string>('');
-  const [greetingInput, setGreetingInput] = useState<string>('');
-  const [isSavingMemory, setIsSavingMemory] = useState<boolean>(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
+  const [historyPage, setHistoryPage] = useState<number>(1);
   const flatListRef = useRef<FlatList>(null);
 
   // Dynamic keyboard tracker that elevates the input box perfectly above the keyboard
@@ -165,7 +196,7 @@ export default function CompanionChatModal({
     };
   }, []);
 
-  // Initialize with persona's customized greeting (opening script)
+  // Fetch paginated chat history for this (user_id, persona_id) conversation
   useEffect(() => {
     if (!visible || !persona) {
       setMessages([]);
@@ -173,40 +204,64 @@ export default function CompanionChatModal({
     }
 
     setActivePersona(persona);
-    setMemoryInput(persona.memory_prompt || '');
-    setGreetingInput(persona.greeting || '');
+    setMessages([]);
+    setHistoryPage(1);
+    setHasMoreHistory(false);
+    setIsLoadingHistory(true);
 
-    const initialGreeting = persona.greeting || `Hello! I am ${persona.name}. How are you today?`;
-    setMessages([
-      {
-        id: `msg-greeting-${persona.id}`,
-        sender: 'bot',
-        text: initialGreeting,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      },
-    ]);
-  }, [visible, persona?.id]);
-
-  const handleSaveMemoryModal = async () => {
-    if (!activePersona) return;
-    setIsSavingMemory(true);
-    try {
-      const updated = await updatePersonaMemory(
-        activePersona.id,
-        {
-          greeting: greetingInput.trim(),
-          memory_prompt: memoryInput.trim(),
-        },
-        user?.id
-      );
-      if (updated) {
-        setActivePersona(updated);
-        setShowMemoryModal(false);
+    const loadHistory = async () => {
+      try {
+        const uId = user?.id || 'guest';
+        const data = await tryGetChatHistory(persona.id, uId, 1, 30, user?.token);
+        if (data?.results && Array.isArray(data.results) && data.results.length > 0) {
+          const loaded: ChatMessage[] = data.results.map((item: any) => ({
+            id: item.id || `msg-${Math.random()}`,
+            sender: item.sender === 'user' ? 'user' : 'bot',
+            text: item.text,
+            timestamp: item.created_at
+              ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }));
+          setMessages(loaded);
+          setHasMoreHistory(Boolean(data.has_more));
+        }
+      } catch (err) {
+        console.warn('Failed loading chat history:', err);
+      } finally {
+        setIsLoadingHistory(false);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 80);
       }
-    } catch (e) {
-      console.warn('[CompanionChatModal] Error saving memory:', e);
+    };
+
+    loadHistory();
+  }, [visible, persona?.id, user?.id]);
+
+  const handleLoadEarlier = async () => {
+    if (isLoadingMore || !hasMoreHistory || !activePersona) return;
+    setIsLoadingMore(true);
+    const nextPage = historyPage + 1;
+    try {
+      const uId = user?.id || 'guest';
+      const data = await tryGetChatHistory(activePersona.id, uId, nextPage, 30, user?.token);
+      if (data?.results && Array.isArray(data.results) && data.results.length > 0) {
+        const older: ChatMessage[] = data.results.map((item: any) => ({
+          id: item.id || `msg-${Math.random()}`,
+          sender: item.sender === 'user' ? 'user' : 'bot',
+          text: item.text,
+          timestamp: item.created_at
+            ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }));
+        setMessages((prev) => [...older, ...prev]);
+        setHistoryPage(nextPage);
+        setHasMoreHistory(Boolean(data.has_more));
+      } else {
+        setHasMoreHistory(false);
+      }
+    } catch (err) {
+      console.warn('Failed loading earlier messages:', err);
     } finally {
-      setIsSavingMemory(false);
+      setIsLoadingMore(false);
     }
   };
 
@@ -239,6 +294,7 @@ export default function CompanionChatModal({
       second: '2-digit',
     });
     const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
+    const userDisplayName = user?.given_name || (user?.name ? user.name.split(' ')[0] : '') || user?.name || '';
 
     const payload = {
       message: text,
@@ -249,6 +305,7 @@ export default function CompanionChatModal({
       client_time: clientTime,
       client_timezone: clientTimezone,
       user_id: user?.id,
+      user_name: userDisplayName,
     };
 
     try {
@@ -323,22 +380,13 @@ export default function CompanionChatModal({
               <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}</Text>
               <View style={styles.statusRow}>
                 <View style={styles.onlineDot} />
-                <Text style={styles.headerStatusText}>Online · Reeve Memory</Text>
+                <Text style={styles.headerStatusText}>Online</Text>
               </View>
             </View>
           </View>
 
-          {/* High-Tech Memory Pill */}
-          <TouchableOpacity
-            onPress={() => setShowMemoryModal(true)}
-            style={styles.memoryPillBtn}
-            activeOpacity={0.7}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityLabel="View persona memory"
-          >
-            <BrainIcon size={13} color="#60A5FA" />
-            <Text style={styles.memoryPillText}>Memory</Text>
-          </TouchableOpacity>
+          {/* Symmetrical header spacer */}
+          <View style={styles.headerSpacer} />
         </View>
 
         {/* Messages Flow */}
@@ -346,9 +394,55 @@ export default function CompanionChatModal({
           ref={flatListRef}
           data={messages}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.messagesList}
+          contentContainerStyle={[
+            styles.messagesList,
+            messages.length === 0 && styles.emptyMessagesList,
+          ]}
           keyboardShouldPersistTaps="handled"
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          ListHeaderComponent={
+            hasMoreHistory ? (
+              <TouchableOpacity
+                style={styles.loadEarlierBtn}
+                onPress={handleLoadEarlier}
+                disabled={isLoadingMore}
+                activeOpacity={0.7}
+              >
+                {isLoadingMore ? (
+                  <ActivityIndicator size="small" color="#9CA3AF" />
+                ) : (
+                  <Text style={styles.loadEarlierText}>Load earlier messages</Text>
+                )}
+              </TouchableOpacity>
+            ) : undefined
+          }
+          ListEmptyComponent={
+            isLoadingHistory ? (
+              <View style={styles.emptyContainer}>
+                <ActivityIndicator size="small" color={borderColor} />
+                <Text style={[styles.emptyHintText, { marginTop: 12 }]}>Loading chat history...</Text>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <View style={[styles.emptySquircle, { borderColor }]}>
+                  {activePersona.image_url ? (
+                    <Image source={{ uri: activePersona.image_url }} style={styles.emptyAvatarImg} />
+                  ) : (
+                    <View style={[styles.emptyAvatarFallback, { backgroundColor: borderColor }]}>
+                      <Text style={styles.emptyAvatarLetter}>{activePersona.name.charAt(0)}</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.emptyPersonaName}>{activePersona.name}</Text>
+                {activePersona.greeting ? (
+                  <Text style={styles.emptyTagline}>"{activePersona.greeting}"</Text>
+                ) : (
+                  <Text style={styles.emptyTagline}>Always here to talk</Text>
+                )}
+                <Text style={styles.emptyHintText}>Send a message to start chatting</Text>
+              </View>
+            )
+          }
           renderItem={({ item }) => {
             const isUser = item.sender === 'user';
             return (
@@ -436,83 +530,6 @@ export default function CompanionChatModal({
             </TouchableOpacity>
           </View>
         </View>
-
-        {/* Live In-Chat Memory Tuning Sheet */}
-        <Modal
-          visible={showMemoryModal}
-          animationType="fade"
-          transparent={true}
-          statusBarTranslucent={true}
-          onRequestClose={() => setShowMemoryModal(false)}
-        >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalSheetCard}>
-              <View style={styles.modalSheetHeader}>
-                <View style={styles.modalSheetTitleRow}>
-                  <BrainIcon size={16} color="#60A5FA" />
-                  <Text style={styles.modalSheetTitle}>Companion Memory (Reeve)</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setShowMemoryModal(false)}
-                  style={styles.sheetCloseBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <CloseIcon size={16} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView style={styles.modalSheetBody} showsVerticalScrollIndicator={false}>
-                <Text style={styles.sheetFieldLabel}>FIRST MESSAGE / SCRIPT</Text>
-                <TextInput
-                  style={styles.sheetInput}
-                  value={greetingInput}
-                  onChangeText={setGreetingInput}
-                  placeholder="First message opening script..."
-                  placeholderTextColor="#6B7280"
-                  multiline
-                  numberOfLines={2}
-                />
-
-                <Text style={[styles.sheetFieldLabel, { marginTop: 14 }]}>
-                  PERSONALITY & STORY (REEVE GRAPH)
-                </Text>
-                <TextInput
-                  style={[styles.sheetInput, { minHeight: 90 }]}
-                  value={memoryInput}
-                  onChangeText={setMemoryInput}
-                  placeholder="Backstory and memory..."
-                  placeholderTextColor="#6B7280"
-                  multiline
-                  numberOfLines={4}
-                />
-                <Text style={styles.sheetSubHint}>
-                  100% stored in Reeve memory graph. Changes apply on the next turn.
-                </Text>
-
-                <View style={styles.sheetActionRow}>
-                  <TouchableOpacity
-                    style={styles.sheetCancelBtn}
-                    onPress={() => setShowMemoryModal(false)}
-                  >
-                    <Text style={styles.sheetCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.sheetSaveBtn, { backgroundColor: borderColor }]}
-                    onPress={handleSaveMemoryModal}
-                    disabled={isSavingMemory}
-                  >
-                    {isSavingMemory ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <Text style={styles.sheetSaveText}>Save to Reeve</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
       </SafeAreaView>
     </Modal>
   );
@@ -596,28 +613,87 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     fontWeight: '500',
   },
-  memoryPillBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: 'rgba(59, 130, 246, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.35)',
-  },
-  memoryPillText: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#60A5FA',
-    letterSpacing: 0.3,
+  headerSpacer: {
+    width: 38,
   },
   messagesList: {
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 20,
     gap: 12,
+  },
+  emptyMessagesList: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    paddingVertical: 40,
+  },
+  emptySquircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 26,
+    borderWidth: 2,
+    overflow: 'hidden',
+    backgroundColor: '#14141E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  emptyAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  emptyAvatarFallback: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyAvatarLetter: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 32,
+    color: '#FFFFFF',
+  },
+  emptyPersonaName: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 22,
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+    marginBottom: 8,
+  },
+  emptyTagline: {
+    fontSize: 14,
+    color: '#94A3B8',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    lineHeight: 20,
+    marginBottom: 16,
+    paddingHorizontal: 12,
+  },
+  emptyHintText: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  loadEarlierBtn: {
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 14,
+    backgroundColor: '#151522',
+    borderWidth: 1,
+    borderColor: '#262638',
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  loadEarlierText: {
+    fontSize: 11.5,
+    color: '#9CA3AF',
+    fontWeight: '500',
   },
   messageBubbleRow: {
     width: '100%',
@@ -725,96 +801,5 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  modalSheetCard: {
-    backgroundColor: '#101018',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#262636',
-    padding: 18,
-    maxHeight: '80%',
-  },
-  modalSheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  modalSheetTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  modalSheetTitle: {
-    fontFamily: 'ChangaOne-Regular',
-    fontSize: 16,
-    color: '#FFFFFF',
-  },
-  sheetCloseBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#1C1C28',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalSheetBody: {
-    maxHeight: 350,
-  },
-  sheetFieldLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#9CA3AF',
-    letterSpacing: 0.5,
-    marginBottom: 6,
-  },
-  sheetInput: {
-    backgroundColor: '#161622',
-    borderRadius: 12,
-    padding: 12,
-    color: '#FFFFFF',
-    fontSize: 13.5,
-    borderWidth: 1,
-    borderColor: '#262636',
-    textAlignVertical: 'top',
-  },
-  sheetSubHint: {
-    fontSize: 11,
-    color: '#60A5FA',
-    marginTop: 6,
-    fontStyle: 'italic',
-  },
-  sheetActionRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-    marginTop: 18,
-    marginBottom: 8,
-  },
-  sheetCancelBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#1C1C28',
-  },
-  sheetCancelText: {
-    fontSize: 13,
-    color: '#9CA3AF',
-  },
-  sheetSaveBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  sheetSaveText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
   },
 });

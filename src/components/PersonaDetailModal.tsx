@@ -338,12 +338,6 @@ export default function PersonaDetailModal({
 
             {/* Badges Row */}
             <View style={styles.badgesRow}>
-              {/* Reeve Memory Synced Badge */}
-              <View style={[styles.badge, { backgroundColor: 'rgba(59, 130, 246, 0.12)', borderColor: 'rgba(59, 130, 246, 0.35)' }]}>
-                <BrainIcon size={11} color="#60A5FA" />
-                <Text style={[styles.badgeText, { color: '#60A5FA' }]}>Reeve Memory</Text>
-              </View>
-
               {/* Visibility Badge */}
               <View
                 style={[
@@ -422,7 +416,7 @@ export default function PersonaDetailModal({
             <View style={styles.sectionHeaderRow}>
               <View style={styles.sectionHeader}>
                 <BrainIcon size={15} color={borderColor} />
-                <Text style={styles.sectionLabel}>PERSONALITY AND STORY (REEVE MEMORY)</Text>
+                <Text style={styles.sectionLabel}>PERSONALITY AND STORY</Text>
               </View>
               {!isEditing ? (
                 <TouchableOpacity
@@ -448,8 +442,8 @@ export default function PersonaDetailModal({
                   multiline
                   numberOfLines={5}
                 />
-                <Text style={styles.reeveHint}>
-                  100% stored into Reeve Neo4j knowledge graph. This memory defines the companion during chat.
+                <Text style={styles.memorySubHint}>
+                  This backstory and mannerism profile defines how your companion speaks and remembers.
                 </Text>
               </View>
             ) : (
@@ -508,8 +502,8 @@ export default function PersonaDetailModal({
             </View>
             <View style={styles.specDivider} />
             <View style={styles.specRow}>
-              <Text style={styles.specKey}>Memory Storage</Text>
-              <Text style={styles.specValue}>Reeve Knowledge Graph</Text>
+              <Text style={styles.specKey}>Mind & Backstory</Text>
+              <Text style={styles.specValue}>Adaptive Companion Memory</Text>
             </View>
             <View style={styles.specDivider} />
             <View style={styles.specRow}>
@@ -769,7 +763,7 @@ const styles = StyleSheet.create({
     minHeight: 70,
     textAlignVertical: 'top',
   },
-  reeveHint: {
+  memorySubHint: {
     fontSize: 11,
     color: '#60A5FA',
     marginTop: 8,

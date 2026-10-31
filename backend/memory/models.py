@@ -83,3 +83,49 @@ class PublisherFollow(models.Model):
     class Meta:
         unique_together = ("publisher_handle", "user_identifier")
 
+
+class PersonaChatMessage(models.Model):
+    """
+    Persistent chat log for Persona conversations stored in PostgreSQL.
+    Relates messages directly to user_id, persona_id, and unique Reeve namespace.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="persona_chat_messages",
+    )
+    user_identifier = models.CharField(max_length=128, db_index=True)
+    persona = models.ForeignKey(
+        Persona,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="chat_messages",
+    )
+    persona_identifier = models.CharField(max_length=128, db_index=True)
+    namespace = models.CharField(max_length=255, db_index=True)
+    sender = models.CharField(max_length=16, db_index=True)  # 'user' or 'bot'
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["user_identifier", "persona_identifier", "created_at"]),
+            models.Index(fields=["namespace", "created_at"]),
+        ]
+
+    @property
+    def user_id(self):
+        return self.user_identifier
+
+    @property
+    def persona_id(self):
+        return self.persona_identifier
+
+    def __str__(self):
+        return f"[{self.sender}] {self.user_identifier} <-> {self.persona_identifier} ({self.created_at.strftime('%Y-%m-%d %H:%M')})"
+

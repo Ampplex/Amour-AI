@@ -1,3 +1,5 @@
+import logging
+import time
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -11,6 +13,8 @@ from .reeve_service import (
     generate_companion_reply,
 )
 
+logger = logging.getLogger(__name__)
+
 class ReeveStatusView(APIView):
     permission_classes = [AllowAny]
 
@@ -23,8 +27,59 @@ class ChatMemoryView(APIView):
     Companion roleplay chat endpoint powered 100% by Reeve memory graph and Groq LLM.
     Strictly ZERO emojis, short WhatsApp-style humanized replies, dynamic first message opening script,
     and temporal date/time anchor.
+    Fully isolates Reeve memory namespaces per (user_id, persona_id) and persists chat logs in PostgreSQL.
     """
     permission_classes = [AllowAny]
+
+    def get(self, request):
+        """
+        Retrieve paginated chat history for a specific (user_id, persona_id) conversation.
+        """
+        persona_id = request.query_params.get("persona_id", "").strip()
+        user_id = (request.user.id if request.user.is_authenticated else request.query_params.get("user_id", "")).strip()
+
+        if not persona_id or not user_id:
+            return Response(
+                {"results": [], "count": 0, "page": 1, "has_more": False},
+                status=status.HTTP_200_OK,
+            )
+
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+        except ValueError:
+            page = 1
+        try:
+            page_size = min(100, max(1, int(request.query_params.get("page_size", 30))))
+        except ValueError:
+            page_size = 30
+
+        from .models import PersonaChatMessage
+        from .serializers import PersonaChatMessageSerializer
+
+        qs = PersonaChatMessage.objects.filter(
+            persona_identifier=persona_id,
+            user_identifier=user_id,
+        ).order_by("-created_at")
+
+        total_count = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged_items = list(qs[start:end])
+
+        # Return chronologically (oldest to newest) for smooth mobile rendering
+        paged_items.reverse()
+        serializer = PersonaChatMessageSerializer(paged_items, many=True)
+
+        return Response(
+            {
+                "results": serializer.data,
+                "count": total_count,
+                "page": page,
+                "page_size": page_size,
+                "has_more": end < total_count,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def post(self, request):
         message = request.data.get("message", "").strip()
@@ -34,36 +89,82 @@ class ChatMemoryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        persona_id = request.data.get("persona_id", "")
+        persona_id = request.data.get("persona_id", "").strip()
         persona_name = request.data.get("persona_name", "")
         greeting = request.data.get("greeting", "")
         memory_prompt = request.data.get("memory_prompt", "")
         client_time = request.data.get("client_time", "")
         client_timezone = request.data.get("client_timezone", "")
+        user_name = request.data.get("user_name", "").strip()
 
         user_id = request.user.id if request.user.is_authenticated else request.data.get("user_id", "guest")
-        namespace = f"{user_id}_{persona_id}" if persona_id else (getattr(request.user, "namespace", f"{user_id}_general"))
+
+        # Resolve user name if not explicitly provided
+        if not user_name:
+            if request.user.is_authenticated:
+                user_name = getattr(request.user, "given_name", "") or getattr(request.user, "name", "")
+            elif user_id and user_id != "guest":
+                try:
+                    from authentication.models import User
+                    u = User.objects.filter(id=user_id).first()
+                    if u:
+                        user_name = u.given_name or (u.name.split()[0] if u.name else "") or u.name
+                except Exception:
+                    pass
+
+        # Strict isolation: Combine user_id + persona_id into a unique, deterministic Reeve namespace
+        clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
+        clean_persona_id = str(persona_id).strip().replace(":", "_").replace("/", "_") if persona_id else "default"
+        namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
 
         # Resolve persona from database if persona_id is provided
+        persona_obj = None
         if persona_id:
             try:
                 from .models import Persona
                 from django.db.models import F
-                persona = Persona.objects.get(id=persona_id)
-                if not persona_name:
-                    persona_name = persona.name
-                if not greeting:
-                    greeting = persona.greeting
-                if not memory_prompt:
-                    memory_prompt = persona.memory_prompt
-                # Increment chat count
-                Persona.objects.filter(id=persona_id).update(chats_count=F("chats_count") + 1)
+                persona_obj = Persona.objects.filter(id=persona_id).first()
+                if persona_obj:
+                    if not persona_name:
+                        persona_name = persona_obj.name
+                    if not greeting:
+                        greeting = persona_obj.greeting
+                    if not memory_prompt:
+                        memory_prompt = persona_obj.memory_prompt
+                    # Increment chat count
+                    Persona.objects.filter(id=persona_id).update(chats_count=F("chats_count") + 1)
             except Exception:
                 pass
 
         if not persona_name:
             persona_name = "Companion"
 
+        # Resolve User model instance
+        user_obj = request.user if request.user.is_authenticated else None
+        if not user_obj and user_id and user_id != "guest":
+            try:
+                from authentication.models import User
+                user_obj = User.objects.filter(id=user_id).first()
+            except Exception:
+                pass
+
+        from .models import PersonaChatMessage
+
+        # 1. Store user message in PostgreSQL
+        try:
+            PersonaChatMessage.objects.create(
+                user=user_obj,
+                user_identifier=str(user_id),
+                persona=persona_obj,
+                persona_identifier=str(persona_id),
+                namespace=namespace,
+                sender="user",
+                text=message,
+            )
+        except Exception as e:
+            logger.warning(f"Could not persist user message to DB: {e}")
+
+        # 2. Generate companion reply (100% Reeve memory graph storage, recall, and Groq LLM)
         try:
             result = generate_companion_reply(
                 message=message,
@@ -73,18 +174,39 @@ class ChatMemoryView(APIView):
                 memory_prompt=memory_prompt,
                 client_time=client_time,
                 client_timezone=client_timezone,
+                user_name=user_name,
             )
+            reply_text = result["reply"]
+
+            # 3. Store bot response in PostgreSQL
+            try:
+                bot_msg_record = PersonaChatMessage.objects.create(
+                    user=user_obj,
+                    user_identifier=str(user_id),
+                    persona=persona_obj,
+                    persona_identifier=str(persona_id),
+                    namespace=namespace,
+                    sender="bot",
+                    text=reply_text,
+                )
+                bot_msg_id = str(bot_msg_record.id)
+            except Exception as e:
+                logger.warning(f"Could not persist bot message to DB: {e}")
+                bot_msg_id = f"bot-{int(time.time() * 1000)}"
 
             return Response(
                 {
-                    "reply": result["reply"],
+                    "id": bot_msg_id,
+                    "reply": reply_text,
                     "context": result.get("context", ""),
                     "namespace": namespace,
                     "persona_id": persona_id,
+                    "user_id": str(user_id),
                 },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.error(f"Companion chat error: {e}")
             return Response(
                 {"error": f"Companion chat error: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
