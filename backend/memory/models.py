@@ -109,6 +109,7 @@ class PersonaChatMessage(models.Model):
     namespace = models.CharField(max_length=255, db_index=True)
     sender = models.CharField(max_length=16, db_index=True)  # 'user' or 'bot'
     text = models.TextField()
+    client_message_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
@@ -116,6 +117,7 @@ class PersonaChatMessage(models.Model):
         indexes = [
             models.Index(fields=["user_identifier", "persona_identifier", "created_at"]),
             models.Index(fields=["namespace", "created_at"]),
+            models.Index(fields=["client_message_id"]),
         ]
 
     @property

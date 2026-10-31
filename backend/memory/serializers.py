@@ -10,6 +10,7 @@ class PersonaChatMessageSerializer(serializers.ModelSerializer):
         model = PersonaChatMessage
         fields = [
             "id",
+            "client_message_id",
             "user_id",
             "persona_id",
             "namespace",

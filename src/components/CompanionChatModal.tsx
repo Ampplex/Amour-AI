@@ -17,8 +17,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
-import { PersonaItem, updatePersonaMemory } from '../services/personaService';
-import { API_CONFIG } from '../constants/authConfig';
+import { PersonaItem } from '../services/personaService';
+import { fetchChatHistory, sendChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 
 const { width } = Dimensions.get('window');
@@ -93,70 +93,6 @@ interface CompanionChatModalProps {
   onClose: () => void;
 }
 
-const CANDIDATE_URLS = [
-  'http://127.0.0.1:8000/api',
-  'http://192.168.1.4:8000/api',
-  API_CONFIG.baseUrl,
-  'http://10.104.217.217:8000/api',
-  'http://192.168.1.2:8000/api',
-];
-
-async function tryChatFetch(payload: any, token?: string): Promise<{ reply?: string } | null> {
-  for (const base of CANDIDATE_URLS) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(`${base}/memory/chat/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // try next candidate endpoint
-    }
-  }
-  return null;
-}
-
-async function tryGetChatHistory(
-  personaId: string,
-  userId: string,
-  page: number = 1,
-  pageSize: number = 30,
-  token?: string
-): Promise<{ results: any[]; count: number; page: number; has_more: boolean } | null> {
-  const query = `persona_id=${encodeURIComponent(personaId)}&user_id=${encodeURIComponent(userId)}&page=${page}&page_size=${pageSize}`;
-  for (const base of CANDIDATE_URLS) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch(`${base}/memory/chat/?${query}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // try next candidate endpoint
-    }
-  }
-  return null;
-}
-
 export default function CompanionChatModal({
   visible,
   persona,
@@ -209,14 +145,17 @@ export default function CompanionChatModal({
     setHasMoreHistory(false);
     setIsLoadingHistory(true);
 
+    let isMounted = true;
     const loadHistory = async () => {
       try {
         const uId = user?.id || 'guest';
-        const data = await tryGetChatHistory(persona.id, uId, 1, 30, user?.token);
-        if (data?.results && Array.isArray(data.results) && data.results.length > 0) {
-          const loaded: ChatMessage[] = data.results.map((item: any) => ({
-            id: item.id || `msg-${Math.random()}`,
-            sender: item.sender === 'user' ? 'user' : 'bot',
+        const data = await fetchChatHistory(persona.id, uId, 1, 30, user?.token);
+        if (!isMounted) return;
+
+        if (data?.results && Array.isArray(data.results)) {
+          const loaded: ChatMessage[] = data.results.map((item) => ({
+            id: item.id,
+            sender: item.sender,
             text: item.text,
             timestamp: item.created_at
               ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -226,14 +165,19 @@ export default function CompanionChatModal({
           setHasMoreHistory(Boolean(data.has_more));
         }
       } catch (err) {
-        console.warn('Failed loading chat history:', err);
+        console.warn('[CompanionChat] History read error:', err);
       } finally {
-        setIsLoadingHistory(false);
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 80);
+        if (isMounted) {
+          setIsLoadingHistory(false);
+          setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 80);
+        }
       }
     };
 
     loadHistory();
+    return () => {
+      isMounted = false;
+    };
   }, [visible, persona?.id, user?.id]);
 
   const handleLoadEarlier = async () => {
@@ -242,11 +186,11 @@ export default function CompanionChatModal({
     const nextPage = historyPage + 1;
     try {
       const uId = user?.id || 'guest';
-      const data = await tryGetChatHistory(activePersona.id, uId, nextPage, 30, user?.token);
+      const data = await fetchChatHistory(activePersona.id, uId, nextPage, 30, user?.token);
       if (data?.results && Array.isArray(data.results) && data.results.length > 0) {
-        const older: ChatMessage[] = data.results.map((item: any) => ({
-          id: item.id || `msg-${Math.random()}`,
-          sender: item.sender === 'user' ? 'user' : 'bot',
+        const older: ChatMessage[] = data.results.map((item) => ({
+          id: item.id,
+          sender: item.sender,
           text: item.text,
           timestamp: item.created_at
             ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -259,7 +203,7 @@ export default function CompanionChatModal({
         setHasMoreHistory(false);
       }
     } catch (err) {
-      console.warn('Failed loading earlier messages:', err);
+      console.warn('[CompanionChat] Earlier messages load error:', err);
     } finally {
       setIsLoadingMore(false);
     }
@@ -269,8 +213,10 @@ export default function CompanionChatModal({
     const text = inputText.trim();
     if (!text || !activePersona || isTyping) return;
 
+    const clientMsgId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
     const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
+      id: clientMsgId,
       sender: 'user',
       text,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -296,30 +242,27 @@ export default function CompanionChatModal({
     const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
     const userDisplayName = user?.given_name || (user?.name ? user.name.split(' ')[0] : '') || user?.name || '';
 
-    const payload = {
-      message: text,
-      persona_id: activePersona.id,
-      persona_name: activePersona.name,
-      greeting: activePersona.greeting,
-      memory_prompt: activePersona.memory_prompt,
-      client_time: clientTime,
-      client_timezone: clientTimezone,
-      user_id: user?.id,
-      user_name: userDisplayName,
-    };
-
     try {
-      const data = await tryChatFetch(payload, user?.token);
-      let replyText = data?.reply || '';
-
-      if (!replyText) {
-        replyText = "I hear you. Tell me more about what is on your mind.";
-      }
+      const data = await sendChatMessage(
+        {
+          client_message_id: clientMsgId,
+          message: text,
+          persona_id: activePersona.id,
+          persona_name: activePersona.name,
+          greeting: activePersona.greeting,
+          memory_prompt: activePersona.memory_prompt,
+          client_time: clientTime,
+          client_timezone: clientTimezone,
+          user_id: user?.id,
+          user_name: userDisplayName,
+        },
+        user?.token
+      );
 
       const botReply: ChatMessage = {
-        id: `bot-${Date.now()}`,
+        id: data?.id || `bot-${Date.now()}`,
         sender: 'bot',
-        text: replyText,
+        text: data?.reply || "I hear you. Tell me more about what is on your mind.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 

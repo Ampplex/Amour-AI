@@ -1,0 +1,120 @@
+import * as Crypto from 'expo-crypto';
+import { API_CONFIG } from '../constants/authConfig';
+
+export interface ChatHistoryItem {
+  id: string;
+  client_message_id?: string;
+  user_id: string;
+  persona_id: string;
+  namespace: string;
+  sender: 'user' | 'bot';
+  text: string;
+  created_at: string;
+}
+
+export interface ChatHistoryResponse {
+  results: ChatHistoryItem[];
+  count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export interface SendMessagePayload {
+  client_message_id?: string;
+  message: string;
+  persona_id: string;
+  persona_name: string;
+  greeting?: string;
+  memory_prompt?: string;
+  client_time: string;
+  client_timezone: string;
+  user_id?: string;
+  user_name?: string;
+}
+
+export interface SendMessageResponse {
+  id: string;
+  client_message_id?: string;
+  reply: string;
+  context?: string;
+  namespace: string;
+  persona_id: string;
+  user_id: string;
+}
+
+/**
+ * Fetch paginated chat history for a specific persona and user.
+ * Direct single-endpoint GET with 12s timeout.
+ */
+export async function fetchChatHistory(
+  personaId: string,
+  userId: string,
+  page: number = 1,
+  pageSize: number = 30,
+  token?: string
+): Promise<ChatHistoryResponse | null> {
+  const query = `persona_id=${encodeURIComponent(personaId)}&user_id=${encodeURIComponent(userId)}&page=${page}&page_size=${pageSize}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const res = await fetch(`${API_CONFIG.baseUrl}/memory/chat/?${query}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[chatService] fetchChatHistory HTTP ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err: any) {
+    clearTimeout(timer);
+    console.warn('[chatService] fetchChatHistory error:', err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Send a chat message with a unique client_message_id for guaranteed idempotency.
+ * Single request with 45s timeout to allow full LLM inference + Reeve memory indexing.
+ * Never loops over candidate URLs for state-mutating requests.
+ */
+export async function sendChatMessage(
+  payload: SendMessagePayload,
+  token?: string
+): Promise<SendMessageResponse | null> {
+  const clientMessageId = payload.client_message_id || Crypto.randomUUID();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45000);
+
+  try {
+    const res = await fetch(`${API_CONFIG.baseUrl}/memory/chat/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        ...payload,
+        client_message_id: clientMessageId,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[chatService] sendChatMessage HTTP ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err: any) {
+    clearTimeout(timer);
+    console.warn('[chatService] sendChatMessage error:', err?.message || err);
+    return null;
+  }
+}

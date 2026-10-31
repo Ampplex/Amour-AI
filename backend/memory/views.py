@@ -65,9 +65,8 @@ class ChatMemoryView(APIView):
         start = (page - 1) * page_size
         end = start + page_size
         paged_items = list(qs[start:end])
-
-        # Return chronologically (oldest to newest) for smooth mobile rendering
         paged_items.reverse()
+
         serializer = PersonaChatMessageSerializer(paged_items, many=True)
 
         return Response(
@@ -89,6 +88,7 @@ class ChatMemoryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        client_message_id = request.data.get("client_message_id", "").strip()
         persona_id = request.data.get("persona_id", "").strip()
         persona_name = request.data.get("persona_name", "")
         greeting = request.data.get("greeting", "")
@@ -116,6 +116,36 @@ class ChatMemoryView(APIView):
         clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
         clean_persona_id = str(persona_id).strip().replace(":", "_").replace("/", "_") if persona_id else "default"
         namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+
+        from .models import PersonaChatMessage
+
+        # Root Cause Fix: Client Message ID Idempotency Check
+        if client_message_id:
+            existing_msg = PersonaChatMessage.objects.filter(
+                client_message_id=client_message_id
+            ).first()
+            if existing_msg:
+                logger.info(f"Idempotency hit for client_message_id={client_message_id}")
+                bot_reply = PersonaChatMessage.objects.filter(
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="bot",
+                    created_at__gte=existing_msg.created_at,
+                ).order_by("created_at").first()
+
+                if bot_reply:
+                    return Response(
+                        {
+                            "id": str(bot_reply.id),
+                            "client_message_id": client_message_id,
+                            "reply": bot_reply.text,
+                            "context": "",
+                            "namespace": namespace,
+                            "persona_id": persona_id,
+                            "user_id": str(user_id),
+                        },
+                        status=status.HTTP_200_OK,
+                    )
 
         # Resolve persona from database if persona_id is provided
         persona_obj = None
@@ -148,8 +178,6 @@ class ChatMemoryView(APIView):
             except Exception:
                 pass
 
-        from .models import PersonaChatMessage
-
         # 1. Store user message in PostgreSQL
         try:
             PersonaChatMessage.objects.create(
@@ -160,7 +188,10 @@ class ChatMemoryView(APIView):
                 namespace=namespace,
                 sender="user",
                 text=message,
+                client_message_id=client_message_id,
             )
+        except Exception as e:
+            logger.warning(f"Could not persist user message to DB: {e}")
         except Exception as e:
             logger.warning(f"Could not persist user message to DB: {e}")
 
@@ -197,6 +228,7 @@ class ChatMemoryView(APIView):
             return Response(
                 {
                     "id": bot_msg_id,
+                    "client_message_id": client_message_id,
                     "reply": reply_text,
                     "context": result.get("context", ""),
                     "namespace": namespace,
