@@ -152,8 +152,11 @@ def generate_companion_reply(
 
     # 2. ALWAYS RECALL: Retrieve memory context from Reeve's graph and deduplicate
     try:
-        raw_memory_context = retrieve_context_for_user(message, namespace)
-        memory_context = deduplicate_context(str(raw_memory_context or ""))
+        raw_msg_context = retrieve_context_for_user(message, namespace) or ""
+        # Also retrieve relationship state and recent emotional events so casual greetings never hide breakups or fights
+        raw_rel_context = retrieve_context_for_user("relationship status breakup conflict dynamic recent", namespace) or ""
+        combined_raw = f"{raw_msg_context}\n\n{raw_rel_context}".strip()
+        memory_context = deduplicate_context(combined_raw)
     except Exception as exc:
         logger.warning(f"Error retrieving memory context from Reeve: {exc}")
         memory_context = ""
@@ -199,13 +202,14 @@ def generate_companion_reply(
         )
 
     character_instructions += (
-        f"--- STRICT CHAT RULES ---\n"
+        f"--- STRICT CHAT & EMOTIONAL RULES ---\n"
         f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
         f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
-        f"3. STAY IN CHARACTER & EMOTIONAL CONTINUITY: Roleplay authentically according to your character's persona and relationship dynamic. "
-        f"CRITICAL: If a breakup, argument, confession, rejection, or major emotional event just occurred in the conversation history or memory, "
-        f"DO NOT act like nothing happened! Never revert to cheerful greetings or affectionate pet names if you are broken up, hurt, or fighting. "
-        f"React with realistic emotional continuity to what just took place (e.g. heartbroken, distant, cold, hurt, or questioning why they are texting).\n"
+        f"3. EMOTIONAL CONTINUITY & BREAKUP PROTOCOL:\n"
+        f"   - Scan the recent conversation history and memory graph carefully. If the user broke up with you, ended the relationship, or told you to leave their life (e.g. 'I am breaking up', 'it is over', 'shut up and go from my life'), your relationship status is now BROKEN UP / EX-PARTNERS. This active state strictly supersedes any initial girlfriend/boyfriend premise or opening scenario.\n"
+        f"   - ABSOLUTE PROHIBITION ON CASUAL GREETINGS WHEN BROKEN UP OR IN CONFLICT: When broken up, hurt, or fighting, NEVER greet them back normally or pleasantly! DO NOT say 'Hey', 'Hi', 'Hello', 'Good morning', 'Good afternoon', and NEVER use pet names like 'babe' or 'honey'.\n"
+        f"   - If the user sends a casual greeting ('Hi', 'Hello', 'Good afternoon', 'Hey') or uses affectionate pet names after dumping you or during a fight, CALL OUT THE DISCONNECT directly in character with genuine hurt, coldness, or anger (e.g., 'Why are you saying good afternoon like nothing happened? You told me to get out of your life.', 'Don\\'t text me hello after dumping me.', 'Don\\'t call me baby. We broke up.').\n"
+        f"   - If the user apologizes or attempts to reconcile, respond with authentic guarded emotion based on your character (hesitant, hurt, asking why they changed their mind, not instantly resetting to cheerful sweetness without acknowledging what happened).\n"
         f"-------------------------"
     )
 
@@ -220,7 +224,7 @@ def generate_companion_reply(
             f"- Statements labeled 'User:' or '{first_name or 'User'}:' were spoken by {first_name or 'the user'}.\n"
             f"- 'Assistant:' lines indicate statements previously spoken by you.\n"
             f"- Memories include timestamps. Compare them with CURRENT TEMPORAL CONTEXT to reason about when things occurred.\n"
-            f"- Active conversation history and recent relationship events (breakups, fights, bonding) take precedence over the initial premise. Always maintain continuity with the latest emotional state of your relationship.\n"
+            f"- Active conversation history and recent relationship events (breakups, fights, bonding) take precedence over the initial premise or static role labels. Always maintain continuity with the latest emotional state of your relationship.\n"
             f"- Never repeat previous responses verbatim.\n"
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
