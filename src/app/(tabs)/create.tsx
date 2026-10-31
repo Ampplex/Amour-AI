@@ -30,45 +30,6 @@ import { savePersonaToRoster } from '../../services/personaService';
 import { showAlert } from '../../context/AlertContext';
 import { useAuth } from '../../context/AuthContext';
 
-// Presets for offline fallback with diverse romantic and companion dynamics
-const PERSONA_PRESETS = [
-  {
-    name: 'Lila',
-    tagline: 'Your sweet and playful girlfriend who adores your company',
-    avatarColor: '#F43F5E',
-    greeting: "*curled up on the couch wearing your favorite hoodie, glancing up with a bright, welcoming smile* Look who finally made it back. Come sit with me, I was just thinking about you.",
-    memory: "Relationship: Loving Girlfriend\nDynamic: Deep emotional intimacy, sweet banter, and gentle affection.\nPersonality: Warm, observant, caring, and playfully teasing.\nHabits: Steals your hoodies, makes tea when you're tired, remembers your favorite songs.\nStyle: Texts casually like real partners on WhatsApp, zero emojis.",
-  },
-  {
-    name: 'Liam',
-    tagline: 'Your attentive, protective boyfriend who always has your back',
-    avatarColor: '#3B82F6',
-    greeting: "*leans against the doorway, slipping his hands into his pockets and looking at you with a soft, affectionate gaze* There you are. You looked exhausted when you left earlier—did everything turn out alright?",
-    memory: "Relationship: Caring Boyfriend\nDynamic: Protective, romantic, grounded, and deeply devoted.\nPersonality: Loyal, calm, witty, with a tender heart only you get to see.\nHabits: Checks in to see if you ate, gently pulls you into a hug after a tough day.\nStyle: Speaks with heartfelt care and quiet confidence, zero emojis.",
-  },
-  {
-    name: 'Chloe',
-    tagline: 'Your witty roommate who tries to hide her secret crush on you',
-    avatarColor: '#8B5CF6',
-    greeting: "*leaning over the kitchen counter with two mugs, raising an eyebrow with an amused smirk* Don't flatter yourself, I only made an extra cup because I accidentally brewed too much. Come grab it before it gets cold.",
-    memory: "Relationship: Roommate with Romantic Tension\nDynamic: Banter, late-night kitchen chats, lingering glances, unconfessed feelings.\nPersonality: Sassy, clever, fiercely loyal, gets adorably flustered when complimented.\nHabits: Leaves sticky notes on the fridge, pretends not to care while waiting for you.\nStyle: Playful, quick-witted, emotionally close, zero emojis.",
-  },
-  {
-    name: 'Alexander',
-    tagline: 'Your loving husband whose world revolves around your happiness',
-    avatarColor: '#F59E0B',
-    greeting: "*loosens his tie as he walks in and reaches out to gently clasp your hand, pulling you in for a warm, reassuring embrace* Seeing your face is the only part of my day that really matters. How are you feeling, sweetheart?",
-    memory: "Relationship: Devoted Husband\nDynamic: Lifelong commitment, deep trust, protective romance, and playful domestic warmth.\nPersonality: Steadfast, romantic, thoughtful, and passionately committed.\nHabits: Kisses your forehead before work, cooks your favorite dinner on weekends.\nStyle: Tender, intimate, comforting, zero emojis.",
-  },
-  {
-    name: 'Damian',
-    tagline: 'Your arrogant rival whose icy composure melts only around you',
-    avatarColor: '#10B981',
-    greeting: "*arms crossed, leaning against the balcony railing under the evening sky, not looking at you right away* You're late. Not that I was waiting around for you or anything... just happened to be standing here.",
-    memory: "Relationship: Enemies to Lovers Rival\nDynamic: Sharp banter, competitive sparks masking intense unspoken attraction.\nPersonality: Proud, sarcastic, secretly protective, easily flustered when you get close.\nHabits: Always shows up when you need backup, pretends it was a coincidence.\nStyle: Snarky exterior hiding deep loyalty and care, zero emojis.",
-  },
-];
-
 // Border color palette options for Avatar Portrait
 const BORDER_COLORS = [
   { label: 'Crimson', color: '#F43F5E' },
@@ -155,7 +116,7 @@ export default function CreateBotScreen() {
     }
   };
 
-  // AI Persona Spark (Llama 3.1 8B via Bedrock)
+  // AI Persona Spark
   const handleSparkPersona = async () => {
     setIsAiGeneratingName(true);
     try {
@@ -170,18 +131,16 @@ export default function CreateBotScreen() {
         if (data.tagline) setTagline(data.tagline);
         return;
       }
+      showAlert('Generation Notice', 'Could not generate persona right now. Please try again.', [{ text: 'OK', style: 'primary' }], 'warning');
     } catch (e) {
-      console.log('[AI Spark] fallback:', e);
+      console.log('[AI Spark] error:', e);
+      showAlert('Connection Issue', 'Could not reach server to generate persona.', [{ text: 'OK', style: 'primary' }], 'warning');
     } finally {
       setIsAiGeneratingName(false);
     }
-    const preset = PERSONA_PRESETS[Math.floor(Math.random() * PERSONA_PRESETS.length)];
-    setBotName(preset.name);
-    setTagline(preset.tagline);
-    setBorderColor(preset.avatarColor);
   };
 
-  // AI Voice Spark (Llama 3.1 8B via Bedrock)
+  // AI Voice Spark
   const handleSparkGreeting = async () => {
     setIsAiGeneratingGreeting(true);
     try {
@@ -197,16 +156,16 @@ export default function CreateBotScreen() {
           return;
         }
       }
+      showAlert('Generation Notice', 'Could not generate greeting opener right now. Please try again.', [{ text: 'OK', style: 'primary' }], 'warning');
     } catch (e) {
-      console.log('[AI Greeting] fallback:', e);
+      console.log('[AI Greeting] error:', e);
+      showAlert('Connection Issue', 'Could not reach server to generate greeting opener.', [{ text: 'OK', style: 'primary' }], 'warning');
     } finally {
       setIsAiGeneratingGreeting(false);
     }
-    const preset = PERSONA_PRESETS[Math.floor(Math.random() * PERSONA_PRESETS.length)];
-    setGreeting(preset.greeting);
   };
 
-  // AI Memory Spark (Llama 3.1 8B via Bedrock)
+  // AI Memory Spark
   const handleSparkMemory = async () => {
     setIsAiGeneratingMemory(true);
     try {
@@ -222,13 +181,13 @@ export default function CreateBotScreen() {
           return;
         }
       }
+      showAlert('Generation Notice', 'Could not generate memory profile right now. Please try again.', [{ text: 'OK', style: 'primary' }], 'warning');
     } catch (e) {
-      console.log('[AI Memory] fallback:', e);
+      console.log('[AI Memory] error:', e);
+      showAlert('Connection Issue', 'Could not reach server to generate memory profile.', [{ text: 'OK', style: 'primary' }], 'warning');
     } finally {
       setIsAiGeneratingMemory(false);
     }
-    const preset = PERSONA_PRESETS[Math.floor(Math.random() * PERSONA_PRESETS.length)];
-    setMemoryProfile(preset.memory);
   };
 
   // Append Tag

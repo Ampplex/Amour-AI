@@ -265,60 +265,19 @@ def generate_companion_reply(
         except Exception as exc:
             logger.error(f"Failed calling Groq LLM: {exc}")
 
-    # Guard against duplicate greeting echo
-    if reply and first_message_script:
-        clean_rep = " ".join(strip_emojis(reply).lower().replace("*", "").split())
-        clean_greet = " ".join(strip_emojis(first_message_script).lower().replace("*", "").split())
-        if clean_rep and (clean_rep == clean_greet or (len(clean_rep) > 12 and clean_greet.startswith(clean_rep[:22]))):
-            logger.warning("Detected duplicate greeting echo from LLM, regenerating reply...")
-            recovery_messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        f"You are {persona_name}. {first_name or 'The user'} just replied '{message}' to you. "
-                        f"Acknowledge them naturally in 1-2 short casual WhatsApp sentences without emojis"
-                        f"{f' addressing them as {first_name}' if first_name else ''}. "
-                        f"Do NOT say your name or reintroduce yourself. Jump straight into conversation."
-                    ),
-                },
-                {"role": "user", "content": message},
-            ]
-            try:
-                rec_resp = requests.post(
-                    f"{llm_base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {groq_api_key}", "Content-Type": "application/json"},
-                    json={"model": llm_model, "messages": recovery_messages, "temperature": 0.8, "max_tokens": 150},
-                    timeout=10,
-                )
-                if rec_resp.status_code == 200:
-                    rec_data = rec_resp.json()
-                    rec_reply = rec_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                    if rec_reply:
-                        reply = rec_reply
-            except Exception as e:
-                logger.error(f"Recovery generation failed: {e}")
-
-    if not reply:
-        # Fallback to query_memory or graceful in-character line
-        try:
-            reply = query_memory_for_user(message, namespace) or ""
-        except Exception:
-            reply = ""
-
-    if not reply:
-        reply = f"I hear you. Tell me more about what is on your mind."
-
     # Enforce zero emojis strictly
-    reply = strip_emojis(reply)
+    if reply:
+        reply = strip_emojis(reply)
 
-    # 7. Anti-Echo Storage Guard: Ingest Assistant reply into Reeve
-    clean_reply = " ".join(reply.split())
-    clean_context = " ".join((memory_context or "").split())
-    if clean_reply and clean_reply not in clean_context:
-        try:
-            store_memory_for_user(f"Assistant: {reply}", namespace)
-        except Exception as exc:
-            logger.warning(f"Failed to store assistant reply to Reeve: {exc}")
+    # Anti-Echo Storage Guard: Ingest authentic Assistant reply into Reeve graph
+    if reply:
+        clean_reply = " ".join(reply.split())
+        clean_context = " ".join((memory_context or "").split())
+        if clean_reply and clean_reply not in clean_context:
+            try:
+                store_memory_for_user(f"Assistant: {reply}", namespace)
+            except Exception as exc:
+                logger.warning(f"Failed to store assistant reply to Reeve: {exc}")
 
     return {
         "reply": reply,

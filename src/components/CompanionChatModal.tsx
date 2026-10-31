@@ -21,6 +21,7 @@ import MarkdownText from './MarkdownText';
 import { PersonaItem } from '../services/personaService';
 import { fetchChatHistory, sendChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
+import { showAlert } from '../context/AlertContext';
 
 const { width } = Dimensions.get('window');
 
@@ -345,22 +346,30 @@ export default function CompanionChatModal({
         user?.token
       );
 
-      const botReply: ChatMessage = {
-        id: data?.id || `bot-${Date.now()}`,
-        sender: 'bot',
-        text: data?.reply || "I hear you. Tell me more about what is on your mind.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      setMessages((prev) => [...prev, botReply]);
+      if (data?.reply) {
+        const botReply: ChatMessage = {
+          id: data.id || `bot-${Date.now()}`,
+          sender: 'bot',
+          text: data.reply,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages((prev) => [...prev, botReply]);
+      } else {
+        showAlert(
+          'Response Unavailable',
+          'Could not receive a response from companion. Please try again.',
+          [{ text: 'OK', style: 'primary' }],
+          'warning'
+        );
+      }
     } catch (err) {
-      const fallbackReply: ChatMessage = {
-        id: `bot-fallback-${Date.now()}`,
-        sender: 'bot',
-        text: "I am listening closely. Tell me more about what you are thinking.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => [...prev, fallbackReply]);
+      console.warn('[CompanionChat] Send error:', err);
+      showAlert(
+        'Connection Issue',
+        'Failed to deliver message. Please check your network connection.',
+        [{ text: 'OK', style: 'primary' }],
+        'warning'
+      );
     } finally {
       setIsTyping(false);
       setTimeout(() => {

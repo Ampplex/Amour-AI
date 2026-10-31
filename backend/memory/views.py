@@ -222,7 +222,12 @@ class ChatMemoryView(APIView):
                 user_name=user_name,
                 conversation_history=conversation_history,
             )
-            reply_text = result["reply"]
+            reply_text = result.get("reply", "").strip()
+            if not reply_text:
+                return Response(
+                    {"error": "Failed to generate companion reply from model"},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
 
             # 3. Store bot response in PostgreSQL
             try:
@@ -491,9 +496,11 @@ class GenerateAvatarPersonaView(APIView):
             raw = json.loads(resp["body"].read())
             gen_text = raw.get("generation", "").strip()
 
-            json_match = re.search(r"\{.*\}", gen_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(0))
+            clean_str = gen_text.strip()
+            start_idx = clean_str.find("{")
+            end_idx = clean_str.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                parsed = json.loads(clean_str[start_idx : end_idx + 1])
                 for k, v in parsed.items():
                     if isinstance(v, str):
                         parsed[k] = strip_emojis(v).strip()
