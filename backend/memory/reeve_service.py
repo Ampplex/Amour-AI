@@ -389,13 +389,6 @@ def generate_companion_reply(
                     time.sleep(1.6)
                     resp = requests.post(url, headers=headers, json=payload, timeout=20)
 
-                # If model rejected json_object mode with 400, retry once without response_format
-                if resp.status_code == 400 and "response_format" in payload:
-                    logger.warning(f"Model {current_model} rejected json_object mode. Retrying with freeform text...")
-                    payload_freeform = dict(payload)
-                    del payload_freeform["response_format"]
-                    resp = requests.post(url, headers=headers, json=payload_freeform, timeout=20)
-
                 duration = time.time() - t0
 
                 if resp.status_code == 200:
@@ -420,22 +413,13 @@ def generate_companion_reply(
 
                     try:
                         import json
-                        import re
-                        raw_reply = ""
-                        try:
-                            parsed = json.loads(raw_content)
-                            raw_reply = parsed.get("reply", "")
-                            if "conflict_stage" in parsed:
+                        parsed = json.loads(raw_content)
+                        raw_reply = parsed.get("reply", "")
+                        if "conflict_stage" in parsed:
+                            try:
                                 new_conflict_stage = int(parsed["conflict_stage"])
-                        except Exception:
-                            json_match = re.search(r"\{[\s\S]*?\"reply\"[\s\S]*?\}", raw_content)
-                            if json_match:
-                                parsed = json.loads(json_match.group(0))
-                                raw_reply = parsed.get("reply", "")
-                                if "conflict_stage" in parsed:
-                                    new_conflict_stage = int(parsed["conflict_stage"])
-                            else:
-                                raw_reply = raw_content
+                            except (ValueError, TypeError):
+                                new_conflict_stage = current_conflict_stage
                     except Exception:
                         raw_reply = raw_content
 
