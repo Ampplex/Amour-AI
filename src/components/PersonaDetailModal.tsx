@@ -14,13 +14,12 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path, Circle, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
-import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem, updatePersonaMemory } from '../services/personaService';
 import { useAuth } from '../context/AuthContext';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 interface PersonaDetailModalProps {
   visible: boolean;
@@ -30,7 +29,7 @@ interface PersonaDetailModalProps {
   onDelete?: (id: string, name: string) => void;
 }
 
-// Clean Minimalist SVG Vectors - Strictly Zero Emojis
+// Minimalist Clean SVG Icons
 function CloseIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -193,7 +192,6 @@ export default function PersonaDetailModal({
   const [greetingText, setGreetingText] = useState<string>('');
   const [memoryText, setMemoryText] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
 
   useEffect(() => {
     if (persona) {
@@ -252,133 +250,166 @@ export default function PersonaDetailModal({
     }
   };
 
+  const handleStartChat = () => {
+    onClose();
+    setTimeout(() => {
+      onInitiateChat(activePersona);
+    }, 100);
+  };
+
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      statusBarTranslucent={true}
       onRequestClose={onClose}
     >
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        {/* Top Navigation Header */}
-        <View style={styles.topBar}>
-          <TouchableOpacity
-            style={styles.closeBtn}
-            onPress={onClose}
-            activeOpacity={0.7}
-            accessibilityLabel="Close persona details"
-          >
-            <CloseIcon size={18} color="#FFFFFF" />
-          </TouchableOpacity>
-
-          <Text style={styles.topBarTitle}>PROFILE</Text>
-
-          <View style={styles.topBarRight}>
-            <TouchableOpacity
-              style={styles.headerActionBtn}
-              onPress={() => setIsEditing(!isEditing)}
-              activeOpacity={0.7}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              accessibilityLabel="Edit memory"
-            >
-              <EditIcon size={16} color={isEditing ? borderColor : '#FFFFFF'} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.headerActionBtn}
-              onPress={handleShare}
-              activeOpacity={0.7}
-              accessibilityLabel="Share persona"
-            >
-              <ShareIcon size={17} color="#FFFFFF" />
-            </TouchableOpacity>
-
-            {onDelete ? (
-              <TouchableOpacity
-                style={styles.deleteHeaderBtn}
-                onPress={() => {
-                  onClose();
-                  setTimeout(() => {
-                    onDelete(activePersona.id, activePersona.name);
-                  }, 150);
-                }}
-                activeOpacity={0.7}
-                accessibilityLabel="Delete persona"
-              >
-                <TrashIcon size={18} color="#EF4444" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </View>
-
-        {/* Scrollable Details Body */}
+      <View style={styles.container}>
         <ScrollView
           style={styles.scrollBody}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Hero Portrait Section */}
-          <View style={styles.heroSection}>
-            <TouchableOpacity
-              style={[styles.avatarFrame, { borderColor }]}
-              onPress={() => setIsPreviewImageOpen(true)}
-              activeOpacity={0.85}
-              accessibilityLabel={`View full photo of ${activePersona.name}`}
-            >
-              {activePersona.image_url ? (
-                <Image source={{ uri: activePersona.image_url }} style={styles.avatarImage} />
-              ) : (
-                <View style={[styles.avatarFallback, { backgroundColor: borderColor + '20' }]}>
-                  <Text style={[styles.avatarInitial, { color: borderColor }]}>
-                    {activePersona.name ? activePersona.name.charAt(0).toUpperCase() : 'A'}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
+          {/* Widescreen Hero Section - Photo Widely Covers Screen Width with Dark Low-Opacity Vignette */}
+          <View style={styles.heroFrame}>
+            {/* Edge-to-edge Wide Photo */}
+            {activePersona.image_url ? (
+              <Image
+                source={{ uri: activePersona.image_url }}
+                style={styles.widescreenImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={[styles.fallbackHeroFrame, { backgroundColor: '#14141E' }]}>
+                <Text style={[styles.fallbackInitial, { color: borderColor }]}>
+                  {activePersona.name ? activePersona.name.charAt(0).toUpperCase() : 'A'}
+                </Text>
+              </View>
+            )}
 
-            <Text style={styles.heroName}>{activePersona.name}{activePersona.age ? `, ${activePersona.age}` : ''}</Text>
+            {/* Dark Low-Opacity Overlay - Dark colors with low opacity over photo */}
+            <View style={styles.darkTintOverlay} />
 
-            {activePersona.tagline ? (
-              <Text style={styles.heroTagline}>{activePersona.tagline}</Text>
+            {/* Cinematic Gradient Vignettes: Deep top & bottom dark fades */}
+            <Svg height="100%" width="100%" style={StyleSheet.absoluteFill}>
+              <Defs>
+                <LinearGradient id="heroTopVignette" x1="0" y1="0" x2="0" y2="0.38">
+                  <Stop offset="0" stopColor="#000000" stopOpacity="0.82" />
+                  <Stop offset="1" stopColor="#000000" stopOpacity="0" />
+                </LinearGradient>
+                <LinearGradient id="heroBottomVignette" x1="0" y1="0.45" x2="0" y2="1">
+                  <Stop offset="0" stopColor="#000000" stopOpacity="0" />
+                  <Stop offset="0.65" stopColor="#07070A" stopOpacity="0.85" />
+                  <Stop offset="1" stopColor="#07070A" stopOpacity="1" />
+                </LinearGradient>
+              </Defs>
+              <Rect x="0" y="0" width="100%" height="100%" fill="url(#heroTopVignette)" />
+              <Rect x="0" y="0" width="100%" height="100%" fill="url(#heroBottomVignette)" />
+            </Svg>
+
+            {/* Top Bar Floating Controls */}
+            <View style={styles.floatingTopBar}>
+              <TouchableOpacity
+                style={styles.glassCircleBtn}
+                onPress={onClose}
+                activeOpacity={0.7}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityLabel="Close persona profile"
+              >
+                <CloseIcon size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+
+              <View style={styles.topBarRight}>
+                <TouchableOpacity
+                  style={styles.glassCircleBtn}
+                  onPress={() => setIsEditing(!isEditing)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Edit memory"
+                >
+                  <EditIcon size={16} color={isEditing ? borderColor : '#FFFFFF'} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.glassCircleBtn}
+                  onPress={handleShare}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Share persona"
+                >
+                  <ShareIcon size={17} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                {onDelete ? (
+                  <TouchableOpacity
+                    style={[styles.glassCircleBtn, styles.deleteCircleBtn]}
+                    onPress={() => {
+                      onClose();
+                      setTimeout(() => {
+                        onDelete(activePersona.id, activePersona.name);
+                      }, 150);
+                    }}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Delete persona"
+                  >
+                    <TrashIcon size={17} color="#EF4444" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+
+            {/* Bottom Info Floating over the Photo */}
+            <View style={styles.heroBottomMeta}>
+              {/* Persona Title in Bold Display Typography */}
+              <Text style={styles.heroName} numberOfLines={1}>
+                {activePersona.name}{activePersona.age ? `, ${activePersona.age}` : ''}
+              </Text>
+
+              {/* Persona Tagline */}
+              {activePersona.tagline ? (
+                <Text style={styles.heroTagline} numberOfLines={2}>
+                  {activePersona.tagline}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+
+          {/* Metadata Chips Row */}
+          <View style={styles.badgesRow}>
+            {activePersona.age ? (
+              <View style={[styles.badge, { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderColor: 'rgba(255, 255, 255, 0.2)' }]}>
+                <Text style={[styles.badgeText, { color: '#E4E4E7' }]}>
+                  {activePersona.age} yrs
+                </Text>
+              </View>
             ) : null}
 
-            {/* Badges Row */}
-            <View style={styles.badgesRow}>
-              {activePersona.age ? (
-                <View style={[styles.badge, { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderColor: 'rgba(255, 255, 255, 0.2)' }]}>
-                  <Text style={[styles.badgeText, { color: '#E4E4E7' }]}>
-                    {activePersona.age} yrs
-                  </Text>
-                </View>
-              ) : null}
-              {/* Visibility Badge */}
-              <View
-                style={[
-                  styles.badge,
-                  {
-                    backgroundColor: isPrivate ? 'rgba(244, 63, 94, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                    borderColor: isPrivate ? 'rgba(244, 63, 94, 0.35)' : 'rgba(16, 185, 129, 0.35)',
-                  },
-                ]}
-              >
-                {isPrivate ? <ShieldLockIcon size={11} color="#F43F5E" /> : <GlobeIcon size={11} color="#10B981" />}
-                <Text style={[styles.badgeText, { color: isPrivate ? '#F43F5E' : '#10B981' }]}>
-                  {isPrivate ? 'Private' : 'Community'}
-                </Text>
-              </View>
+            {/* Visibility Badge */}
+            <View
+              style={[
+                styles.badge,
+                {
+                  backgroundColor: isPrivate ? 'rgba(244, 63, 94, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                  borderColor: isPrivate ? 'rgba(244, 63, 94, 0.35)' : 'rgba(16, 185, 129, 0.35)',
+                },
+              ]}
+            >
+              {isPrivate ? <ShieldLockIcon size={11} color="#F43F5E" /> : <GlobeIcon size={11} color="#10B981" />}
+              <Text style={[styles.badgeText, { color: isPrivate ? '#F43F5E' : '#10B981' }]}>
+                {isPrivate ? 'Private' : 'Community'}
+              </Text>
+            </View>
 
-              {/* Creator Badge */}
-              <View style={styles.neutralBadge}>
-                <Text style={styles.neutralBadgeText}>
-                  {activePersona.creator_name || 'Created by you'}
-                </Text>
-              </View>
+            {/* Creator Badge */}
+            <View style={styles.neutralBadge}>
+              <Text style={styles.neutralBadgeText}>
+                {activePersona.creator_name || 'Created by you'}
+              </Text>
+            </View>
 
-              {/* Date Badge */}
-              <View style={styles.neutralBadge}>
-                <Text style={styles.neutralBadgeText}>{createdDate}</Text>
-              </View>
+            {/* Date Badge */}
+            <View style={styles.neutralBadge}>
+              <Text style={styles.neutralBadgeText}>{createdDate}</Text>
             </View>
           </View>
 
@@ -528,42 +559,34 @@ export default function PersonaDetailModal({
         </ScrollView>
 
         {/* Bottom Floating Action Bar */}
-        <View style={styles.actionBar}>
-          <TouchableOpacity
-            style={[styles.chatActionBtn, { backgroundColor: borderColor }]}
-            onPress={() => {
-              if (isEditing) {
-                handleSaveMemory(true);
-              } else {
-                onInitiateChat(activePersona);
-              }
-            }}
-            disabled={isSaving}
-            activeOpacity={0.85}
-          >
-            {isSaving ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <>
-                <MessageIcon size={16} color="#FFFFFF" />
-                <Text style={styles.chatActionBtnText}>
-                  {isEditing ? `Save & Chat with ${activePersona.name}` : `Chat with ${activePersona.name}`}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-
-      {/* Fullscreen DP / Avatar Viewer */}
-      <ImagePreviewModal
-        visible={isPreviewImageOpen}
-        imageUrl={activePersona.image_url}
-        name={activePersona.name}
-        tagline={activePersona.tagline}
-        borderColor={borderColor}
-        onClose={() => setIsPreviewImageOpen(false)}
-      />
+        <SafeAreaView edges={['bottom']} style={styles.bottomSafeArea}>
+          <View style={styles.actionBar}>
+            <TouchableOpacity
+              style={[styles.chatActionBtn, { backgroundColor: borderColor }]}
+              onPress={() => {
+                if (isEditing) {
+                  handleSaveMemory(true);
+                } else {
+                  handleStartChat();
+                }
+              }}
+              disabled={isSaving}
+              activeOpacity={0.85}
+            >
+              {isSaving ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <MessageIcon size={16} color="#FFFFFF" />
+                  <Text style={styles.chatActionBtnText}>
+                    {isEditing ? `Save & Chat with ${activePersona.name}` : `Chat with ${activePersona.name}`}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
     </Modal>
   );
 }
@@ -571,120 +594,138 @@ export default function PersonaDetailModal({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#16161D',
-  },
-  closeBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#161620',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#262634',
-  },
-  topBarTitle: {
-    fontFamily: 'ChangaOne-Regular',
-    fontSize: 17,
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  topBarRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerActionBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#161620',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#262634',
-  },
-  deleteHeaderBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.25)',
+    backgroundColor: '#07070A',
   },
   scrollBody: {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
     paddingBottom: 40,
-    gap: 20,
+    gap: 18,
   },
-  heroSection: {
-    alignItems: 'center',
-    paddingVertical: 10,
+  heroFrame: {
+    width: '100%',
+    height: 380,
+    position: 'relative',
+    backgroundColor: '#000000',
+    justifyContent: 'space-between',
   },
-  avatarFrame: {
-    width: 110,
-    height: 110,
-    borderRadius: 30,
-    borderWidth: 3,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-    ...Platform.select({
-      android: { elevation: 8 },
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 10 },
-    }),
-  },
-  avatarImage: {
+  widescreenImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
     width: '100%',
     height: '100%',
   },
-  avatarFallback: {
+  fallbackHeroFrame: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
     width: '100%',
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarInitial: {
+  fallbackInitial: {
     fontFamily: 'ChangaOne-Regular',
-    fontSize: 48,
+    fontSize: 84,
+  },
+  darkTintOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+  },
+  floatingTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: Platform.OS === 'android' ? 40 : 50,
+    zIndex: 10,
+  },
+  topBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  glassCircleBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteCircleBtn: {
+    borderColor: 'rgba(239, 68, 68, 0.35)',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+  },
+  heroBottomMeta: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    zIndex: 10,
+    gap: 6,
   },
   heroName: {
     fontFamily: 'ChangaOne-Regular',
-    fontSize: 26,
+    fontSize: 32,
     color: '#FFFFFF',
     letterSpacing: 0.4,
-    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.85)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
   },
   heroTagline: {
-    fontSize: 14,
-    color: '#9CA3AF',
-    textAlign: 'center',
-    marginTop: 6,
-    paddingHorizontal: 16,
-    lineHeight: 20,
+    fontSize: 13,
+    color: '#D4D4D8',
+    lineHeight: 18,
+    opacity: 0.9,
   },
-  badgesRow: {
+  primaryActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    marginTop: -4,
+  },
+  startChatPrimaryBtn: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 14,
+  },
+  startChatBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  editMindSecondaryBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  editMindBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  badgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
     flexWrap: 'wrap',
   },
   badge: {
@@ -721,6 +762,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1F1F2C',
     padding: 16,
+    marginHorizontal: 20,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -760,8 +802,26 @@ const styles = StyleSheet.create({
   },
   dialogueText: {
     fontSize: 14,
+    color: '#E4E4E7',
     lineHeight: 22,
-    color: '#F3F4F6',
+  },
+  emptyFieldText: {
+    fontSize: 13,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
+  editInputBox: {
+    gap: 8,
+  },
+  textInputArea: {
+    backgroundColor: '#14141E',
+    borderWidth: 1,
+    borderColor: '#2D2D3E',
+    borderRadius: 12,
+    padding: 12,
+    color: '#FFFFFF',
+    fontSize: 14,
+    textAlignVertical: 'top',
   },
   memoryBox: {
     backgroundColor: '#14141E',
@@ -769,48 +829,30 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   memoryText: {
-    fontSize: 13.5,
-    lineHeight: 21,
-    color: '#D1D5DB',
-  },
-  editInputBox: {
-    backgroundColor: '#14141E',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#2A2A3C',
-    padding: 12,
-  },
-  textInputArea: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: '#FFFFFF',
-    minHeight: 70,
-    textAlignVertical: 'top',
+    fontSize: 13,
+    color: '#D4D4D8',
+    lineHeight: 20,
   },
   memorySubHint: {
     fontSize: 11,
-    color: '#60A5FA',
-    marginTop: 8,
-    fontStyle: 'italic',
+    color: '#6B7280',
   },
   editActionRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 12,
-    marginTop: -8,
+    paddingHorizontal: 20,
   },
   cancelBtn: {
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: '#181824',
-    borderWidth: 1,
-    borderColor: '#282838',
+    backgroundColor: '#1C1C26',
   },
   cancelBtnText: {
+    color: '#9CA3AF',
     fontSize: 13,
     fontWeight: '600',
-    color: '#9CA3AF',
   },
   saveBtn: {
     flexDirection: 'row',
@@ -821,69 +863,64 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   saveBtnText: {
+    color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  emptyFieldText: {
-    fontSize: 13,
-    color: '#6B7280',
-    fontStyle: 'italic',
   },
   specsCard: {
-    backgroundColor: '#09090D',
-    borderRadius: 16,
+    backgroundColor: '#0D0D14',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#191924',
+    borderColor: '#1F1F2C',
     padding: 16,
+    marginHorizontal: 20,
+    gap: 12,
   },
   specsTitle: {
-    fontFamily: 'ChangaOne-Regular',
-    fontSize: 13,
-    color: '#6B7280',
-    letterSpacing: 0.5,
-    marginBottom: 14,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    letterSpacing: 0.6,
   },
   specRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 4,
-  },
-  specDivider: {
-    height: 1,
-    backgroundColor: '#161622',
-    marginVertical: 10,
   },
   specKey: {
     fontSize: 13,
-    color: '#9CA3AF',
+    color: '#71717A',
   },
   specValue: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#E5E7EB',
+    color: '#E4E4E7',
+  },
+  specDivider: {
+    height: 1,
+    backgroundColor: '#1A1A24',
+  },
+  bottomSafeArea: {
+    backgroundColor: '#07070A',
+    borderTopWidth: 1,
+    borderTopColor: '#161622',
   },
   actionBar: {
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#16161D',
-    backgroundColor: '#000000',
+    paddingVertical: 10,
   },
   chatActionBtn: {
     flexDirection: 'row',
-    height: 52,
-    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
   },
   chatActionBtnText: {
-    fontFamily: 'ChangaOne-Regular',
-    fontSize: 16,
     color: '#FFFFFF',
-    letterSpacing: 0.4,
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });

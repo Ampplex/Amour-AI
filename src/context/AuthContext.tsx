@@ -121,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             namespace: u.id,
           };
           setUser(initialUser);
+          await AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(initialUser)).catch(() => {});
           console.log('[GoogleSignin] Restored active session for:', u.email);
 
           // Hydrate profile from PostgreSQL backend
@@ -131,16 +132,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               });
               if (res.ok) {
                 const profile = await res.json();
-                setUser((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        username: profile.username || prev.username,
-                        name: profile.name || prev.name,
-                        picture: profile.picture || prev.picture,
-                      }
-                    : null
-                );
+                const hydratedUser: GoogleUser = {
+                  ...initialUser,
+                  username: profile.username || initialUser.username,
+                  name: profile.name || initialUser.name,
+                  picture: profile.picture || initialUser.picture,
+                };
+                setUser(hydratedUser);
+                await AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(hydratedUser)).catch(() => {});
                 console.log('[GoogleSignin] Hydrated profile from backend. Username:', profile.username);
                 break;
               }
@@ -187,6 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const userData: GoogleUser = await res.json();
       setUser(userData);
+      await AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(userData)).catch(() => {});
       setLoading(false);
       return userData;
     } catch (err: any) {
@@ -307,6 +307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         setUser(googleUser);
+        await AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(googleUser)).catch(() => {});
         setLoading(false);
         return googleUser;
       } else if (signinResult.type === 'cancelled') {
@@ -401,7 +402,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const completeGoogleDevSession = (customEmail?: string, customName?: string) => {
-    setUser({
+    const devUser: GoogleUser = {
       id: '108392039281928391203',
       email: customEmail || 'ankesh3905222@gmail.com',
       name: customName || 'Ankesh Kumar',
@@ -409,7 +410,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       family_name: 'Kumar',
       picture: 'https://lh3.googleusercontent.com/a/ACg8ocL81b9_3gq9Zc_w2Gg4K3g8=s200-c',
       verified_email: true,
-    });
+    };
+    setUser(devUser);
+    AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(devUser)).catch(() => {});
     setPendingGoogleSession(false);
   };
 

@@ -101,23 +101,26 @@ export default function LoginScreen() {
           {/* Error Banner */}
           {displayError ? (
             <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>{displayError}</Text>
-              {isUnverified ? (
-                <TouchableOpacity
-                  onPress={() =>
-                    router.push({
-                      pathname: '/signup',
-                      params: { prefillEmail: email, initialStep: 'confirm' },
-                    })
-                  }
-                  style={styles.unverifiedPromptButton}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.unverifiedPromptText}>
-                    Enter 6-digit confirmation code ›
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
+              <View style={styles.errorDot} />
+              <View style={styles.errorTextCol}>
+                <Text style={styles.errorText}>{displayError}</Text>
+                {isUnverified ? (
+                  <TouchableOpacity
+                    onPress={() =>
+                      router.push({
+                        pathname: '/signup',
+                        params: { prefillEmail: email, initialStep: 'confirm' },
+                      })
+                    }
+                    style={styles.unverifiedPromptButton}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.unverifiedPromptText}>
+                      Enter 6-digit confirmation code ›
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
           ) : null}
 
@@ -262,26 +265,37 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   errorContainer: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    borderWidth: 1,
-    borderColor: theme.colors.error,
-    borderRadius: theme.radius.sm,
-    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: 'rgba(251, 113, 133, 0.08)',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     marginBottom: 16,
   },
+  errorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#FB7185',
+    marginTop: 6,
+  },
+  errorTextCol: {
+    flex: 1,
+  },
   errorText: {
-    color: theme.colors.error,
+    color: '#FB7185',
     fontSize: 13,
     fontWeight: '500',
+    lineHeight: 18,
   },
   unverifiedPromptButton: {
-    marginTop: 8,
+    marginTop: 6,
     paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(239, 68, 68, 0.3)',
   },
   unverifiedPromptText: {
-    color: '#FB7185',
+    color: '#FDA4AF',
     fontSize: 13,
     fontWeight: '600',
   },

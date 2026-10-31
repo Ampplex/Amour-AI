@@ -406,12 +406,12 @@ export default function CompanionChatModal({
           </TouchableOpacity>
 
           <View style={styles.headerProfileCol}>
-            {/* Persona DP / Avatar - Tap to View Fullscreen Image */}
+            {/* Persona DP / Avatar - Tap to View Netflix-Paused Image Preview */}
             <TouchableOpacity
               style={[styles.headerSquircle, { borderColor }]}
               onPress={() => setIsPreviewImageOpen(true)}
               activeOpacity={0.8}
-              accessibilityLabel={`View full photo of ${activePersona.name}`}
+              accessibilityLabel={`View photo of ${activePersona.name}`}
             >
               {activePersona.image_url ? (
                 <Image source={{ uri: activePersona.image_url }} style={styles.headerAvatarImg} />
@@ -588,17 +588,19 @@ export default function CompanionChatModal({
             </TouchableOpacity>
           </View>
         </View>
-      </SafeAreaView>
 
-      {/* Fullscreen DP / Avatar Viewer */}
-      <ImagePreviewModal
-        visible={isPreviewImageOpen}
-        imageUrl={activePersona.image_url}
-        name={activePersona.name}
-        tagline={activePersona.tagline}
-        borderColor={borderColor}
-        onClose={() => setIsPreviewImageOpen(false)}
-      />
+        {/* Fullscreen DP / Avatar Viewer - Netflix Paused Photo Preview */}
+        {isPreviewImageOpen && (
+          <ImagePreviewModal
+            visible={isPreviewImageOpen}
+            imageUrl={activePersona.image_url}
+            name={activePersona.name}
+            tagline={activePersona.tagline}
+            borderColor={borderColor}
+            onClose={() => setIsPreviewImageOpen(false)}
+          />
+        )}
+      </SafeAreaView>
 
       {/* Persona Details & Mind Profile Modal */}
       <PersonaDetailModal
