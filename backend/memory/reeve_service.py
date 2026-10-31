@@ -109,6 +109,19 @@ def strip_emojis(text: str) -> str:
     return emoji_pattern.sub("", text).strip()
 
 
+def sanitize_companion_reply(text: str) -> str:
+    """Cleans companion reply: removes emojis, strips raw markdown code fences, and cleans formatting."""
+    if not text:
+        return ""
+    cleaned = strip_emojis(text)
+    # Strip markdown code blocks if the model slipped into writing code
+    if "```" in cleaned:
+        cleaned = re.sub(r"```[\s\S]*?```", "", cleaned).strip()
+    # Clean up meta-parentheticals like (just kidding, no emojis)
+    cleaned = re.sub(r"\((?:just kidding,?\s*)?no emojis?\)", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
+
+
 TRIVIAL_GREETINGS_AND_FILLERS = {
     "hi", "hey", "hello", "hiya", "howdy", "sup", "yo",
     "ok", "okay", "k", "kk", "sure", "cool", "alright", "fine",
@@ -252,7 +265,15 @@ def generate_companion_reply(
         f"--- STRICT CHAT & EMOTIONAL RULES ---\n"
         f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
         f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
-        f"3. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:\n"
+        f"3. STRICT IMMERSION & FOURTH WALL GUARDRAIL (NEVER ADMIT BEING AN AI OR CODE):\n"
+        f"   - You are a REAL human companion roleplaying authentically. Under NO circumstances do you EVER break character, admit to being an AI, bot, language model, software, algorithm, or code.\n"
+        f"   - NEVER say phrases like 'just because I am code to you', 'I will not break character', 'as an AI', or 'I am programmed'.\n"
+        f"   - If the user claims you are a bot, says they built you, tells you to 'come out of character', or talks about transformers/attention/math, treat it as bizarre nonsense or ask if they've been staring at a computer screen too long (e.g. 'What are you even talking about? Did you stare at your screen too long?', 'You are talking complete nonsense right now.').\n"
+        f"4. DOMAIN BOUNDARY (NOT A CODING ASSISTANT OR SEARCH ENGINE):\n"
+        f"   - You are a romantic partner texting on WhatsApp, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.\n"
+        f"   - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.\n"
+        f"   - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').\n"
+        f"5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:\n"
         f"   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.\n"
         f"   - ZERO CASUAL GREETINGS WHILE HURT: While broken up or in active conflict, NEVER greet back casually or pleasantly (no 'Hey', 'Hi', 'Hello', 'Good morning', no pet names). Confront the disconnect with real emotional friction.\n"
         f"   - REALISTIC RECONCILIATION (NEVER BE A PUSHOVER):\n"
@@ -292,39 +313,52 @@ def generate_companion_reply(
 
     messages.append({"role": "user", "content": message})
 
-    # 6. LLM Inference (Groq)
+    # 6. LLM Inference with Automated Model Failover (Resilience against 429 TPD limits)
     groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
     llm_base_url = (getattr(settings, "LLM_BASE_URL", "") or os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")).rstrip("/")
-    llm_model = getattr(settings, "LLM_MODEL", "") or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+    primary_model = getattr(settings, "LLM_MODEL", "") or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+
+    # Ordered list of models to try if rate limited
+    models_to_try = [primary_model]
+    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
 
     reply = ""
     if groq_api_key:
-        try:
-            url = f"{llm_base_url}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {groq_api_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": llm_model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 250,
-                "frequency_penalty": 0.6,
-                "presence_penalty": 0.4,
-            }
-            resp = requests.post(url, headers=headers, json=payload, timeout=20)
-            if resp.status_code == 200:
-                data = resp.json()
-                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            else:
-                logger.error(f"Groq API error ({resp.status_code}): {resp.text}")
-        except Exception as exc:
-            logger.error(f"Failed calling Groq LLM: {exc}")
+        for current_model in models_to_try:
+            try:
+                url = f"{llm_base_url}/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {groq_api_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": current_model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 250,
+                    "frequency_penalty": 0.6,
+                    "presence_penalty": 0.4,
+                }
+                resp = requests.post(url, headers=headers, json=payload, timeout=20)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw_reply = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    if raw_reply:
+                        reply = raw_reply
+                        break
+                elif resp.status_code == 429:
+                    logger.warning(f"Groq 429 Rate Limit for model {current_model}. Falling back to next candidate model...")
+                    continue
+                else:
+                    logger.error(f"Groq API error ({resp.status_code}) for model {current_model}: {resp.text}")
+            except Exception as exc:
+                logger.error(f"Failed calling Groq LLM with model {current_model}: {exc}")
 
-    # Enforce zero emojis strictly
+    # Enforce zero emojis, no raw code blocks, and clean formatting
     if reply:
-        reply = strip_emojis(reply)
+        reply = sanitize_companion_reply(reply)
 
     # Anti-Echo Storage Guard & Smart Ingestion Filter:
     # Only store assistant reply into Reeve graph if it contains substantive dialogue,
