@@ -9,6 +9,7 @@ import secrets
 from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
+from django.utils.html import escape
 from django.contrib.auth.hashers import make_password
 from django.http import HttpResponse
 from rest_framework import status
@@ -366,6 +367,7 @@ class WebVerifyEmailView(APIView):
         token_obj.is_used = True
         token_obj.save()
 
+        safe_email = escape(user.email)
         html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -387,7 +389,7 @@ class WebVerifyEmailView(APIView):
     <div class="logo">AMOUR AI</div>
     <div class="success-icon">✓</div>
     <h1>Email Confirmed!</h1>
-    <p>Your account (<strong>{user.email}</strong>) is verified and ready. You can now return to the Amour app and sign in.</p>
+    <p>Your account (<strong>{safe_email}</strong>) is verified and ready. You can now return to the Amour app and sign in.</p>
     <a href="amour-ai://login" class="btn">Open Amour App</a>
   </div>
 </body>
@@ -691,6 +693,8 @@ class WebResetPasswordView(APIView):
 </html>"""
             return HttpResponse(html, status=400)
 
+        safe_email = escape(token_obj.email)
+        safe_token = escape(token)
         html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -715,9 +719,9 @@ class WebResetPasswordView(APIView):
     <div style="text-align: center;">
       <div class="logo">AMOUR AI</div>
       <h1>Create New Password</h1>
-      <p class="sub">Set a new password for <strong>{token_obj.email}</strong></p>
+      <p class="sub">Set a new password for <strong>{safe_email}</strong></p>
     </div>
-    <form method="POST" action="/api/auth/reset-password-web/?token={token}">
+    <form method="POST" action="/api/auth/reset-password-web/?token={safe_token}">
       <div class="group">
         <label>New Password</label>
         <input type="password" name="password" minlength="6" required placeholder="Minimum 6 characters">

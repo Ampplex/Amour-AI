@@ -21,7 +21,7 @@ export default function ExpoAuthSessionScreen() {
     const parseAndLogin = async () => {
       try {
         const url = await Linking.getInitialURL();
-        console.log('[expo-auth-session] Route mounted with URL:', url);
+        console.log('[expo-auth-session] Route mounted');
         if (url && url.includes('access_token=')) {
           const match = url.match(/[#?&]access_token=([^&]+)/);
           if (match && isMounted) {

@@ -212,7 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleIncomingUrl = (event: { url: string }) => {
-      console.log('[Google Auth] Incoming deep link:', event.url);
+      console.log('[Google Auth] Incoming deep link received');
       const tokenMatch = event.url.match(/[#?&]access_token=([^&]+)/);
       if (tokenMatch) {
         const token = decodeURIComponent(tokenMatch[1]);
@@ -244,7 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const signinResult = await GoogleSignin.signIn();
-      console.log('[Google Auth] Native result:', JSON.stringify(signinResult));
+      console.log('[Google Auth] Native Google sign-in completed');
 
       if (signinResult.type === 'success' && signinResult.data?.user) {
         const u = signinResult.data.user;
