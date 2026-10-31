@@ -109,6 +109,51 @@ def strip_emojis(text: str) -> str:
     return emoji_pattern.sub("", text).strip()
 
 
+TRIVIAL_GREETINGS_AND_FILLERS = {
+    "hi", "hey", "hello", "hiya", "howdy", "sup", "yo",
+    "ok", "okay", "k", "kk", "sure", "cool", "alright", "fine",
+    "yeah", "yes", "yep", "yup", "no", "nope", "nah",
+    "haha", "hahaha", "hehe", "lol", "lmao", "rofl",
+    "hmm", "hmmm", "uh", "um", "ah", "oh",
+    "good", "nice", "great", "awesome",
+    "good morning", "good afternoon", "good evening", "good night", "gm", "gn",
+    "bye", "goodbye", "see ya", "cya",
+    "what", "huh", "why",
+}
+
+RELATIONSHIP_TRIGGER_WORDS = {
+    "break", "broke", "breakup", "breaking", "leave", "left", "quit", "over", "end",
+    "girlfriend", "boyfriend", "partner", "love", "hate", "cheat", "dating", "marry",
+    "sorry", "forgive", "mistake", "promise", "secret", "trip", "travel", "live", "work",
+    "job", "family", "mother", "father", "sister", "brother", "friend", "birthday", "dump", "dumped",
+}
+
+
+def should_ingest_into_reeve(text: str) -> bool:
+    """
+    Cost & Performance Optimizer:
+    Prevents calling expensive Bedrock Mistral Large graph extraction for trivial 1-2 word filler messages (e.g. 'hi', 'ok', 'good morning').
+    PostgreSQL already tracks short-term chat history. Reeve should only ingest meaningful facts, preferences, stories, and relationship state changes.
+    """
+    if not text or not text.strip():
+        return False
+    clean = re.sub(r"[^\w\s]", "", text.strip().lower())
+    words = clean.split()
+    if not words:
+        return False
+    # Always ingest if message mentions relationship triggers, commitments, or key facts
+    if any(w in RELATIONSHIP_TRIGGER_WORDS for w in words):
+        return True
+    # Skip trivial greetings, affirmations, and fillers
+    if clean in TRIVIAL_GREETINGS_AND_FILLERS:
+        return False
+    if len(words) <= 2 and all(w in TRIVIAL_GREETINGS_AND_FILLERS for w in words):
+        return False
+    if len(words) < 3:
+        return False
+    return True
+
+
 def generate_companion_reply(
     message: str,
     namespace: str,
@@ -143,20 +188,22 @@ def generate_companion_reply(
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
 
-    # 1. ALWAYS STORE: Ingest user's message into Reeve's graph first
-    speaker_tag = f"User ({first_name})" if first_name else "User"
-    try:
-        store_memory_for_user(f"{speaker_tag}: {message}", namespace)
-    except Exception as exc:
-        logger.warning(f"Failed to store user memory to Reeve: {exc}")
+    # 1. SMART INGESTION FILTER: Only store user message into Reeve if it has semantic substance.
+    # Trivial 1-2 word fillers (e.g. 'hi', 'ok', 'good morning') are kept in Postgres short-term context
+    # and skipped from calling expensive Bedrock Mistral Large graph extraction.
+    if should_ingest_into_reeve(message):
+        speaker_tag = f"User ({first_name})" if first_name else "User"
+        try:
+            store_memory_for_user(f"{speaker_tag}: {message}", namespace)
+        except Exception as exc:
+            logger.warning(f"Failed to store user memory to Reeve: {exc}")
 
-    # 2. ALWAYS RECALL: Retrieve memory context from Reeve's graph and deduplicate
+    # 2. SINGLE COMBINED RETRIEVAL: Retrieves message query + relationship dynamics in one round-trip
+    # (Halves Reeve network latency and compute costs while preserving full breakup/relationship context)
     try:
-        raw_msg_context = retrieve_context_for_user(message, namespace) or ""
-        # Also retrieve relationship state and recent emotional events so casual greetings never hide breakups or fights
-        raw_rel_context = retrieve_context_for_user("relationship status breakup conflict dynamic recent", namespace) or ""
-        combined_raw = f"{raw_msg_context}\n\n{raw_rel_context}".strip()
-        memory_context = deduplicate_context(combined_raw)
+        retrieval_query = f"{message}. Current relationship status, feelings, and dynamic"
+        raw_memory_context = retrieve_context_for_user(retrieval_query, namespace) or ""
+        memory_context = deduplicate_context(str(raw_memory_context))
     except Exception as exc:
         logger.warning(f"Error retrieving memory context from Reeve: {exc}")
         memory_context = ""
@@ -277,8 +324,10 @@ def generate_companion_reply(
     if reply:
         reply = strip_emojis(reply)
 
-    # Anti-Echo Storage Guard: Ingest authentic Assistant reply into Reeve graph
-    if reply:
+    # Anti-Echo Storage Guard & Smart Ingestion Filter:
+    # Only store assistant reply into Reeve graph if it contains substantive dialogue,
+    # not trivial filler (e.g. 'Hey.', 'Fine.', 'Okay.').
+    if reply and should_ingest_into_reeve(reply):
         clean_reply = " ".join(reply.split())
         clean_context = " ".join((memory_context or "").split())
         if clean_reply and clean_reply not in clean_context:
