@@ -62,6 +62,62 @@ class ChatMemoryView(APIView):
         ).order_by("-created_at")
 
         total_count = qs.count()
+
+        # Ingest persona memory into Reeve when user opens the chat for the first time
+        if total_count == 0:
+            from .models import Persona
+            persona_obj = Persona.objects.filter(id=persona_id).first()
+            clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
+            clean_persona_id = str(persona_id).strip().replace(":", "_").replace("/", "_")
+            namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+
+            if persona_obj:
+                # 1. Ingest persona core memory into Reeve graph for this user's isolated namespace
+                if persona_obj.memory_prompt and persona_obj.memory_prompt.strip():
+                    try:
+                        from .reeve_service import store_memory_for_user
+                        store_memory_for_user(
+                            f"Core Story & Mind of {persona_obj.name}:\n{persona_obj.memory_prompt.strip()}",
+                            namespace,
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Could not ingest initial persona memory into Reeve: {exc}")
+
+                # 2. If persona has an opening greeting / scenario, persist as first message in chat
+                if persona_obj.greeting and persona_obj.greeting.strip():
+                    try:
+                        user_obj = request.user if request.user.is_authenticated else None
+                        if not user_obj and user_id and user_id != "guest":
+                            try:
+                                from authentication.models import User
+                                user_obj = User.objects.filter(id=user_id).first()
+                            except Exception:
+                                pass
+
+                        first_bot_msg = PersonaChatMessage.objects.create(
+                            user=user_obj,
+                            user_identifier=user_id,
+                            persona=persona_obj,
+                            persona_identifier=persona_id,
+                            namespace=namespace,
+                            sender="bot",
+                            text=persona_obj.greeting.strip(),
+                        )
+                        # Also ingest initial assistant opening scenario to Reeve
+                        try:
+                            from .reeve_service import store_memory_for_user
+                            store_memory_for_user(f"Assistant: {persona_obj.greeting.strip()}", namespace)
+                        except Exception:
+                            pass
+
+                        qs = PersonaChatMessage.objects.filter(
+                            persona_identifier=persona_id,
+                            user_identifier=user_id,
+                        ).order_by("-created_at")
+                        total_count = 1
+                    except Exception as exc:
+                        logger.warning(f"Could not persist initial greeting: {exc}")
+
         start = (page - 1) * page_size
         end = start + page_size
         paged_items = list(qs[start:end])
