@@ -178,6 +178,22 @@ class ChatMemoryView(APIView):
             except Exception:
                 pass
 
+        # Fetch recent dialogue history (last 8 turns) for immediate conversation context
+        recent_turns_qs = list(
+            PersonaChatMessage.objects.filter(
+                user_identifier=str(user_id),
+                persona_identifier=str(persona_id),
+            ).order_by("-created_at")[:8]
+        )
+        recent_turns_qs.reverse()
+        conversation_history = [
+            {
+                "role": "user" if m.sender == "user" else "assistant",
+                "content": m.text,
+            }
+            for m in recent_turns_qs
+        ]
+
         # 1. Store user message in PostgreSQL
         try:
             PersonaChatMessage.objects.create(
@@ -192,10 +208,8 @@ class ChatMemoryView(APIView):
             )
         except Exception as e:
             logger.warning(f"Could not persist user message to DB: {e}")
-        except Exception as e:
-            logger.warning(f"Could not persist user message to DB: {e}")
 
-        # 2. Generate companion reply (100% Reeve memory graph storage, recall, and Groq LLM)
+        # 2. Generate companion reply (Reeve memory graph storage, recall, dialogue context, and Groq LLM)
         try:
             result = generate_companion_reply(
                 message=message,
@@ -206,6 +220,7 @@ class ChatMemoryView(APIView):
                 client_time=client_time,
                 client_timezone=client_timezone,
                 user_name=user_name,
+                conversation_history=conversation_history,
             )
             reply_text = result["reply"]
 
@@ -339,8 +354,9 @@ class BotImageUploadView(APIView):
 
 class GenerateAvatarPersonaView(APIView):
     """
-    Generates avatar personas, names, markdown greetings, or memories
-    using the fast and cost-effective Meta Llama 3.1 8B model via AWS Bedrock.
+    Generates avatar personas, names, first messages (scene openers), and rich character memory profiles
+    using Groq (qwen/qwen3.8-27b) with Bedrock fallback for immersive romantic and companion dynamics
+    (e.g. girlfriend, boyfriend, husband, roommate, enemies-to-lovers, blind date).
     """
     permission_classes = [AllowAny]
 
@@ -348,68 +364,123 @@ class GenerateAvatarPersonaView(APIView):
         import os
         import json
         import re
-        import boto3
+        import requests
+        from django.conf import settings
+        from .reeve_service import strip_emojis
 
         field = request.data.get("field", "all")
-        avatar_name = request.data.get("name", "")
-        tagline = request.data.get("tagline", "")
+        avatar_name = (request.data.get("name") or "").strip()
+        tagline = (request.data.get("tagline") or "").strip()
 
-        aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
-        aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-        aws_region = os.getenv("AWS_REGION", "us-west-2")
-        model_id = os.getenv("BEDROCK_SMALL_MODEL_ID", "meta.llama3-1-8b-instruct-v1:0")
-
-        client = boto3.client(
-            "bedrock-runtime",
-            aws_access_key_id=aws_access_key,
-            aws_secret_access_key=aws_secret_key,
-            region_name=aws_region,
-        )
+        char_desc = f"{avatar_name} ({tagline})" if avatar_name and tagline else (avatar_name or tagline or "a compelling romantic companion")
 
         if field == "name":
-            prompt = (
-                "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-                "You are an evocative AI avatar character designer. Suggest 1 unique avatar name and short tagline. "
-                "Respond ONLY in valid JSON: {\"name\": \"...\", \"tagline\": \"...\"}<|eot_id|>\n"
-                "<|start_header_id|>user<|end_header_id|>\n"
-                "Give me 1 creative AI avatar name and tagline.<|eot_id|>\n"
-                "<|start_header_id|>assistant<|end_header_id|>\n"
+            system_prompt = (
+                "You are an expert character designer for Amour, an intimate AI companion and relationship roleplay platform. "
+                "The app is designed for deep romantic and emotional connections between user and persona "
+                "(such as affectionate girlfriend, protective boyfriend, devoted husband or wife, sassy flirty roommate, enemies-to-lovers rival, or charming blind date). "
+                "NEVER generate corporate, robotic, assistant, or professional resume personas. "
+                "Suggest 1 unique persona name and an evocative relationship tagline capturing their dynamic with the user. "
+                "STRICT RULE: Absolutely ZERO emojis anywhere. "
+                "Respond ONLY in valid JSON: {\"name\": \"...\", \"tagline\": \"...\"}"
             )
+            user_prompt = "Give me 1 creative romantic companion name and relationship tagline."
         elif field == "greeting":
-            prompt = (
-                f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-                f"You are the character {avatar_name or 'Aria'} ({tagline or 'AI companion'}). "
-                "Write an immersive 1-sentence opening greeting using *markdown actions* (e.g. *smiles warmly*). "
-                "Respond ONLY in valid JSON: {\"greeting\": \"*action* dialogue\"}<|eot_id|>\n"
-                "<|start_header_id|>user<|end_header_id|>\n"
-                "Greet me.<|eot_id|>\n"
-                "<|start_header_id|>assistant<|end_header_id|>\n"
+            system_prompt = (
+                f"You are crafting the opening first message for the character {char_desc}. "
+                "Write an immersive opening scene starter that immediately hooks the user into the roleplay. "
+                "Combine vivid narrative actions in asterisks *...* (what the character is doing, physical gestures, setting the scene) "
+                "with their spoken dialogue to establish their chemistry and dynamic with the user. "
+                "Keep it timeless (do not assume morning or bedtime unless specified in their premise). "
+                "STRICT RULE: Absolutely ZERO emojis. "
+                "Respond ONLY in valid JSON: {\"greeting\": \"...\"}"
             )
+            user_prompt = "Write the opening scene and first message for this character."
         elif field == "memory":
-            prompt = (
-                f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-                f"Define the core memory profile for character {avatar_name or 'Aria'} ({tagline or 'AI companion'}). "
-                "Respond ONLY in valid JSON: {\"memory\": \"Background: ...\\nPersonality: ...\\nInterests: ...\"}<|eot_id|>\n"
-                "<|start_header_id|>user<|end_header_id|>\n"
-                "Generate memory profile.<|eot_id|>\n"
-                "<|start_header_id|>assistant<|end_header_id|>\n"
+            system_prompt = (
+                f"You are defining the core backstory and memory profile for {char_desc}. "
+                "Amour is a character roleplay app for romantic and interpersonal connections. "
+                "NEVER write a corporate resume or clinical bullet points. "
+                "Write a rich character mind and relationship profile covering:\n"
+                "- Relationship & Dynamic with the user (e.g. girlfriend, boyfriend, roommate with unspoken feelings, rival, spouse)\n"
+                "- Personality, Quirks & Emotional Reactions (how they behave when happy, shy, teasing, or protective)\n"
+                "- Core memories and shared lore with the user\n"
+                "- Conversational Tone (casual texting style, zero emojis)\n"
+                "STRICT RULE: Absolutely ZERO emojis. "
+                "Respond ONLY in valid JSON: {\"memory\": \"...\"}"
             )
+            user_prompt = "Generate the character memory and backstory profile."
         else:
-            prompt = (
-                "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-                "You are a creative character designer. Generate a rich AI avatar profile. "
-                "Respond ONLY in valid JSON with keys: name, tagline, greeting, memory. "
-                "In greeting use *markdown actions*.<|eot_id|>\n"
-                "<|start_header_id|>user<|end_header_id|>\n"
-                "Generate a complete avatar profile.<|eot_id|>\n"
-                "<|start_header_id|>assistant<|end_header_id|>\n"
+            system_prompt = (
+                "You are an expert character designer for Amour, an intimate AI companion and relationship roleplay platform. "
+                "Generate a complete romantic companion profile (such as girlfriend, boyfriend, roommate, husband, or rival). "
+                "NEVER generate professional or corporate personas. "
+                "Include:\n"
+                "1. name\n"
+                "2. tagline (relationship dynamic)\n"
+                "3. greeting (immersive opening scene with *actions* and dialogue)\n"
+                "4. memory (rich character mind, dynamic, quirks, and texting tone)\n"
+                "STRICT RULE: Absolutely ZERO emojis. "
+                "Respond ONLY in valid JSON: {\"name\": \"...\", \"tagline\": \"...\", \"greeting\": \"...\", \"memory\": \"...\"}"
             )
+            user_prompt = "Generate a complete companion profile."
 
+        # 1. Primary Engine: Groq LLM (High speed, creative roleplay, guaranteed JSON format)
+        groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
+        llm_base_url = (getattr(settings, "LLM_BASE_URL", "") or os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")).rstrip("/")
+        llm_model = getattr(settings, "LLM_MODEL", "") or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+
+        if groq_api_key:
+            try:
+                payload = {
+                    "model": llm_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.85,
+                    "max_tokens": 500,
+                    "response_format": {"type": "json_object"},
+                }
+                resp = requests.post(
+                    f"{llm_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    content_str = resp.json()["choices"][0]["message"]["content"]
+                    parsed = json.loads(content_str)
+                    for k, v in parsed.items():
+                        if isinstance(v, str):
+                            parsed[k] = strip_emojis(v).strip()
+                    return Response(parsed)
+            except Exception as e:
+                logger.warning(f"Groq persona generation error, falling back to Bedrock: {e}")
+
+        # 2. Fallback Engine: AWS Bedrock Llama 3.1
         try:
+            import boto3
+            aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+            aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+            aws_region = os.getenv("AWS_REGION", "us-west-2")
+            model_id = os.getenv("BEDROCK_SMALL_MODEL_ID", "meta.llama3-1-8b-instruct-v1:0")
+
+            client = boto3.client(
+                "bedrock-runtime",
+                aws_access_key_id=aws_access_key,
+                aws_secret_access_key=aws_secret_key,
+                region_name=aws_region,
+            )
+            llama_prompt = (
+                f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n{system_prompt}<|eot_id|>\n"
+                f"<|start_header_id|>user<|end_header_id|>\n{user_prompt}<|eot_id|>\n"
+                f"<|start_header_id|>assistant<|end_header_id|>\n"
+            )
             body = json.dumps({
-                "prompt": prompt,
-                "max_gen_len": 350,
-                "temperature": 0.8,
+                "prompt": llama_prompt,
+                "max_gen_len": 450,
+                "temperature": 0.85,
             })
             resp = client.invoke_model(
                 modelId=model_id,
@@ -420,12 +491,14 @@ class GenerateAvatarPersonaView(APIView):
             raw = json.loads(resp["body"].read())
             gen_text = raw.get("generation", "").strip()
 
-            # Extract JSON block
             json_match = re.search(r"\{.*\}", gen_text, re.DOTALL)
             if json_match:
                 parsed = json.loads(json_match.group(0))
+                for k, v in parsed.items():
+                    if isinstance(v, str):
+                        parsed[k] = strip_emojis(v).strip()
                 return Response(parsed)
-            return Response({"raw": gen_text})
+            return Response({"raw": strip_emojis(gen_text)})
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

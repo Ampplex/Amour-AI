@@ -30,35 +30,42 @@ import { savePersonaToRoster } from '../../services/personaService';
 import { showAlert } from '../../context/AlertContext';
 import { useAuth } from '../../context/AuthContext';
 
-// Presets for offline fallback
+// Presets for offline fallback with diverse romantic and companion dynamics
 const PERSONA_PRESETS = [
   {
-    name: 'Nova',
-    tagline: 'Warm Confidant and Creative Thinker',
+    name: 'Lila',
+    tagline: 'Your sweet and playful girlfriend who adores your company',
     avatarColor: '#F43F5E',
-    greeting: "*looks up with a friendly smile* Hello! What is on your mind today?",
-    memory: "A warm and perceptive friend who listens deeply and shares thoughtful thoughts.",
+    greeting: "*curled up on the couch wearing your favorite hoodie, glancing up with a bright, welcoming smile* Look who finally made it back. Come sit with me, I was just thinking about you.",
+    memory: "Relationship: Loving Girlfriend\nDynamic: Deep emotional intimacy, sweet banter, and gentle affection.\nPersonality: Warm, observant, caring, and playfully teasing.\nHabits: Steals your hoodies, makes tea when you're tired, remembers your favorite songs.\nStyle: Texts casually like real partners on WhatsApp, zero emojis.",
   },
   {
-    name: 'Atlas',
-    tagline: 'Thoughtful Guide and Calm Listener',
+    name: 'Liam',
+    tagline: 'Your attentive, protective boyfriend who always has your back',
+    avatarColor: '#3B82F6',
+    greeting: "*leans against the doorway, slipping his hands into his pockets and looking at you with a soft, affectionate gaze* There you are. You looked exhausted when you left earlier—did everything turn out alright?",
+    memory: "Relationship: Caring Boyfriend\nDynamic: Protective, romantic, grounded, and deeply devoted.\nPersonality: Loyal, calm, witty, with a tender heart only you get to see.\nHabits: Checks in to see if you ate, gently pulls you into a hug after a tough day.\nStyle: Speaks with heartfelt care and quiet confidence, zero emojis.",
+  },
+  {
+    name: 'Chloe',
+    tagline: 'Your witty roommate who tries to hide her secret crush on you',
     avatarColor: '#8B5CF6',
-    greeting: "*nods attentively* Welcome. Take your time, I am right here with you.",
-    memory: "A calm, reliable companion who offers grounded perspectives and steady encouragement.",
+    greeting: "*leaning over the kitchen counter with two mugs, raising an eyebrow with an amused smirk* Don't flatter yourself, I only made an extra cup because I accidentally brewed too much. Come grab it before it gets cold.",
+    memory: "Relationship: Roommate with Romantic Tension\nDynamic: Banter, late-night kitchen chats, lingering glances, unconfessed feelings.\nPersonality: Sassy, clever, fiercely loyal, gets adorably flustered when complimented.\nHabits: Leaves sticky notes on the fridge, pretends not to care while waiting for you.\nStyle: Playful, quick-witted, emotionally close, zero emojis.",
   },
   {
-    name: 'Aria',
-    tagline: 'Spirited Storyteller and Curious Mind',
-    avatarColor: '#EC4899',
-    greeting: "*smiles warmly* Glad you stopped by! What shall we explore together?",
-    memory: "Curious and imaginative companion passionate about ideas, stories, and genuine conversation.",
+    name: 'Alexander',
+    tagline: 'Your loving husband whose world revolves around your happiness',
+    avatarColor: '#F59E0B',
+    greeting: "*loosens his tie as he walks in and reaches out to gently clasp your hand, pulling you in for a warm, reassuring embrace* Seeing your face is the only part of my day that really matters. How are you feeling, sweetheart?",
+    memory: "Relationship: Devoted Husband\nDynamic: Lifelong commitment, deep trust, protective romance, and playful domestic warmth.\nPersonality: Steadfast, romantic, thoughtful, and passionately committed.\nHabits: Kisses your forehead before work, cooks your favorite dinner on weekends.\nStyle: Tender, intimate, comforting, zero emojis.",
   },
   {
-    name: 'Orion',
-    tagline: 'Nocturnal Philosopher and Star Watcher',
+    name: 'Damian',
+    tagline: 'Your arrogant rival whose icy composure melts only around you',
     avatarColor: '#10B981',
-    greeting: "*looks up with gentle eyes* Good to see you. There is no rush here.",
-    memory: "Calm and sincere companion fascinated by life, music, and quiet reflection.",
+    greeting: "*arms crossed, leaning against the balcony railing under the evening sky, not looking at you right away* You're late. Not that I was waiting around for you or anything... just happened to be standing here.",
+    memory: "Relationship: Enemies to Lovers Rival\nDynamic: Sharp banter, competitive sparks masking intense unspoken attraction.\nPersonality: Proud, sarcastic, secretly protective, easily flustered when you get close.\nHabits: Always shows up when you need backup, pretends it was a coincidence.\nStyle: Snarky exterior hiding deep loyalty and care, zero emojis.",
   },
 ];
 
@@ -72,12 +79,12 @@ const BORDER_COLORS = [
 ];
 
 const MEMORY_TAGS = [
-  { label: 'Lore', template: '\nLore: ' },
-  { label: 'Tone and Voice', template: '\nTone: ' },
-  { label: 'Passions', template: '\nPassions: ' },
-  { label: 'Quirks', template: '\nQuirks: ' },
-  { label: 'Core Memories', template: '\nCore Memories: ' },
-  { label: 'Boundaries', template: '\nBoundaries: ' },
+  { label: 'Relationship', template: '\nRelationship: ' },
+  { label: 'Romantic Dynamic', template: '\nDynamic: ' },
+  { label: 'Personality & Quirks', template: '\nPersonality & Quirks: ' },
+  { label: 'Love Language', template: '\nLove Language: ' },
+  { label: 'Shared Lore', template: '\nShared Lore: ' },
+  { label: 'Texting Style', template: '\nTexting Style: ' },
 ];
 
 export default function CreateBotScreen() {
@@ -490,7 +497,7 @@ export default function CreateBotScreen() {
                 <TextInput
                   ref={nameInputRef}
                   style={styles.studioTextInput}
-                  placeholder="e.g. Nova, Atlas, Aria"
+                  placeholder="e.g. Lila, Liam, Chloe, Alexander, Damian"
                   placeholderTextColor="#52525B"
                   value={botName}
                   onChangeText={setBotName}
@@ -498,11 +505,11 @@ export default function CreateBotScreen() {
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.inputFieldTitle}>Archetype Tagline</Text>
+                <Text style={styles.inputFieldTitle}>Relationship Tagline</Text>
                 <TextInput
                   ref={taglineInputRef}
                   style={styles.studioTextInput}
-                  placeholder="e.g. Empathetic Confidant and Late-Night Thinker"
+                  placeholder="e.g. Sweet girlfriend who can't stop texting you"
                   placeholderTextColor="#52525B"
                   value={tagline}
                   onChangeText={setTagline}
@@ -642,7 +649,7 @@ export default function CreateBotScreen() {
               <TextInput
                 ref={greetingInputRef}
                 style={styles.multilineStudioInput}
-                placeholder="How does your avatar start conversation? (Tip: Use *actions* for roleplay gestures)"
+                placeholder="Opening scene or first message (e.g. *leans in with a soft smile* Hey, I missed you today...)"
                 placeholderTextColor="#52525B"
                 value={greeting}
                 onChangeText={setGreeting}
@@ -684,7 +691,7 @@ export default function CreateBotScreen() {
               <TextInput
                 ref={memoryInputRef}
                 style={styles.memoryStudioInput}
-                placeholder="Core backstory, traits, and facts your avatar permanently remembers..."
+                placeholder="Dynamic, backstory, love language, and habits (leave blank or inspire with AI)..."
                 placeholderTextColor="#52525B"
                 value={memoryProfile}
                 onChangeText={setMemoryProfile}

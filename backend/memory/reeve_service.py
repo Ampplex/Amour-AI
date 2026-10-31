@@ -118,6 +118,7 @@ def generate_companion_reply(
     client_time: str = None,
     client_timezone: str = None,
     user_name: str = "",
+    conversation_history: list = None,
 ) -> dict:
     """
     Companion roleplay chat powered 100% by Reeve memory graph and Groq LLM.
@@ -132,11 +133,12 @@ def generate_companion_reply(
        - Strict ZERO EMOJIS requirement
        - WhatsApp-style short messages (1-3 sentences)
        - Humanized roleplay agent persona
-       - Access to Date and Time (Current temporal context anchor)
+       - Access to Date and Time for natural LLM temporal reasoning
        - Reeve LTM Memory Context block
-    4. Call LLM (Groq qwen/qwen3.8-27b) with pure Reeve pipeline (System + User message).
-    5. Anti-echo guard: Store Assistant reply into Reeve memory graph.
-    6. Return reply, context, and namespace.
+    4. Assemble full conversation history for local dialogue continuity + pure Reeve LTM memory context.
+    5. Call LLM (Groq qwen/qwen3.8-27b).
+    6. Anti-echo guard: Store Assistant reply into Reeve memory graph.
+    7. Return reply, context, and namespace.
     """
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
@@ -156,37 +158,34 @@ def generate_companion_reply(
         logger.warning(f"Error retrieving memory context from Reeve: {exc}")
         memory_context = ""
 
-    # 3. Dynamic Temporal Anchor (Access to Date & Time)
+    # 3. Dynamic Temporal Anchor (Date & Time for natural LLM temporal reasoning)
     now = datetime.now().astimezone()
-    server_time_str = now.strftime("%A, %B %d, %Y at %I:%M:%S %p %Z")
-    iso_time_str = now.isoformat()
+    server_time_str = now.strftime("%A, %B %d, %Y at %I:%M %p %Z")
+    time_str = client_time if client_time else server_time_str
 
     temporal_anchor = (
         f"--- CURRENT TEMPORAL CONTEXT ---\n"
-        f"Current Date & Time: {server_time_str}\n"
-        f"ISO 8601 Timestamp: {iso_time_str}"
+        f"Current Date & Local Time: {time_str}\n"
     )
-    if client_time:
-        temporal_anchor += f"\nUser Device Local Time: {client_time}"
     if client_timezone:
-        temporal_anchor += f" (Timezone: {client_timezone})"
+        temporal_anchor += f"Timezone: {client_timezone}\n"
     temporal_anchor += (
-        f"\nUse this current date & time as your reference anchor for 'today', 'now', 'tonight', time of day, and calculating elapsed time from memory timestamps.\n"
+        f"Temporal Anchor:\n"
+        f"- Use the Current Date & Local Time above as your natural reference for the current time and date.\n"
         f"--------------------------------"
     )
 
     # 4. Dynamic Character Script & Persona
     first_message_script = greeting.strip() if greeting else ""
-    character_instructions = (
-        f"You are roleplaying as {persona_name}.\n"
-        f"Character Story & Core Mind:\n{memory_prompt.strip() if memory_prompt else 'An attentive, warm, and genuine AI companion.'}\n\n"
-    )
+    character_instructions = f"You are roleplaying as {persona_name}.\n"
+    if memory_prompt and memory_prompt.strip():
+        character_instructions += f"Character Story & Core Mind:\n{memory_prompt.strip()}\n\n"
     if first_message_script:
         character_instructions += (
-            f"--- FIRST MESSAGE / SCRIPT ---\n"
+            f"--- FIRST MESSAGE / OPENING SCENARIO ---\n"
             f"\"{first_message_script}\"\n"
-            f"This script defines your opening premise, tone, and character background. Act, converse, and reply consistently with this script.\n"
-            f"------------------------------\n\n"
+            f"This established your opening premise, setting, and tone with the user. Converse and reply consistently with this scenario.\n"
+            f"----------------------------------------\n\n"
         )
 
     # Dynamic User Identity Context
@@ -195,18 +194,15 @@ def generate_companion_reply(
         user_identity_block = (
             f"--- USER PROFILE ---\n"
             f"You are talking with: {first_name}.\n"
-            f"Address {first_name} warmly and casually by name when appropriate (e.g. in greetings, personal thoughts, or affectionate moments). "
-            f"Do not force their name into every single sentence, but use it casually and intimately just like close friends or partners do when texting.\n"
+            f"Address {first_name} by name when natural to your character and relationship dynamic.\n"
             f"--------------------\n\n"
         )
 
-    personal_rule = f"4. PERSONAL CONNECTION: The user is {first_name}. Remember their name and connect with them on a personal level.\n" if first_name else ""
     character_instructions += (
         f"--- STRICT CHAT RULES ---\n"
         f"1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.\n"
         f"2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (1 to 3 short sentences maximum), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.\n"
-        f"3. HUMANIZED ROLEPLAY AGENT: Speak naturally, affectionately, and authentically as a real human companion. Stay in character at all times.\n"
-        f"{personal_rule}"
+        f"3. STAY IN CHARACTER: Roleplay authentically according to your character's persona, relationship dynamic, and tone at all times.\n"
         f"-------------------------"
     )
 
@@ -225,11 +221,19 @@ def generate_companion_reply(
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
 
-    # 5. Pure Reeve Pipeline: System (with First Message Script & Reeve Memory) + Current User Message
+    # 5. Pure Reeve Pipeline: System Prompt + Dialogue Continuity + Current User Message
     messages = [
         {"role": "system", "content": augmented_system_prompt},
-        {"role": "user", "content": message},
     ]
+
+    if conversation_history and isinstance(conversation_history, list):
+        for turn in conversation_history:
+            role = turn.get("role")
+            content = (turn.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+
+    messages.append({"role": "user", "content": message})
 
     # 6. LLM Inference (Groq)
     groq_api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
