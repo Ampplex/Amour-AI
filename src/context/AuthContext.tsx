@@ -463,6 +463,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             picture: resData.picture ?? user.picture,
           };
           setUser(updatedUser);
+          AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(updatedUser)).catch(() => {});
           return { success: true, user: updatedUser };
         } else {
           return {
@@ -506,6 +507,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             username: resData.user?.username ?? user.username,
           };
           setUser(updatedUser);
+          AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(updatedUser)).catch(() => {});
           return { success: true, url: resData.url };
         } else {
           return {
@@ -527,16 +529,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const res = await fetch(`${base}/auth/profile/?user_id=${user.id}`);
         if (res.ok) {
           const profile = await res.json();
-          setUser((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  username: profile.username || prev.username,
-                  name: profile.name || prev.name,
-                  picture: profile.picture || prev.picture,
-                }
-              : null
-          );
+          setUser((prev) => {
+            if (!prev) return null;
+            const updated = {
+              ...prev,
+              username: profile.username || prev.username,
+              name: profile.name || prev.name,
+              picture: profile.picture || prev.picture,
+            };
+            AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(updated)).catch(() => {});
+            return updated;
+          });
           break;
         }
       } catch {

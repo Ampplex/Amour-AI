@@ -83,6 +83,21 @@ function CheckIcon({ size = 16, color = '#10B981' }: { size?: number; color?: st
   );
 }
 
+function UserIcon({ size = 34, color = '#EC4899' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Circle cx="12" cy="7" r="4" stroke={color} strokeWidth="2" />
+    </Svg>
+  );
+}
+
 export default function ProfileScreen() {
   const { user, logout, updateProfile, uploadProfilePicture, refreshProfile } = useAuth();
 
@@ -96,8 +111,10 @@ export default function ProfileScreen() {
   const [usernameError, setUsernameError] = useState<string | null>(null);
 
   useEffect(() => {
-    refreshProfile().catch(() => {});
-  }, []);
+    if (user?.id) {
+      refreshProfile().catch(() => {});
+    }
+  }, [user?.id]);
 
   const openEditModal = () => {
     if (!user) return;
@@ -201,7 +218,31 @@ export default function ProfileScreen() {
   };
 
   if (!user) {
-    return null;
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Profile</Text>
+        </View>
+
+        <View style={styles.guestContainer}>
+          <View style={styles.guestIconCircle}>
+            <UserIcon size={38} color="#EC4899" />
+          </View>
+          <Text style={styles.guestTitle}>Welcome to Amour AI</Text>
+          <Text style={styles.guestSubtitle}>
+            Sign in or create an account to customize your profile, chat with AI companions, and access exclusive personas.
+          </Text>
+
+          <TouchableOpacity
+            style={styles.guestButton}
+            onPress={() => router.push('/login')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.guestButtonText}>Sign In or Create Account</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   const username = user.username || user.email.split('@')[0] || 'user';
@@ -571,6 +612,57 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 16,
+  },
+
+  /* Unauthenticated / Guest View Styles */
+  guestContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    paddingBottom: 60,
+  },
+  guestIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#1C1524',
+    borderWidth: 1.5,
+    borderColor: '#3D2254',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  guestTitle: {
+    color: '#FFFFFF',
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 22,
+    letterSpacing: 0.3,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  guestSubtitle: {
+    color: '#8E8E93',
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginBottom: 28,
+  },
+  guestButton: {
+    backgroundColor: '#E11D48',
+    borderRadius: 14,
+    paddingVertical: 15,
+    paddingHorizontal: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    maxWidth: 320,
+  },
+  guestButtonText: {
+    color: '#FFFFFF',
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 16,
+    letterSpacing: 0.3,
   },
 
   /* Edit Profile Modal Styles */
