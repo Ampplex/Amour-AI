@@ -432,7 +432,7 @@ export default function CompanionChatModal({
               accessibilityLabel={`View profile details of ${activePersona.name}`}
             >
               <View style={styles.nameWithBadgeRow}>
-                <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}</Text>
+                <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}{activePersona.age ? `, ${activePersona.age}` : ''}</Text>
                 <View style={styles.headerInfoPill}>
                   <Text style={styles.headerInfoText}>i</Text>
                 </View>

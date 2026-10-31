@@ -32,6 +32,7 @@ class PersonaSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "tagline",
+            "age",
             "border_color",
             "image_url",
             "greeting",

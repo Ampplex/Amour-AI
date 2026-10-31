@@ -5,6 +5,7 @@ export interface PersonaItem {
   id: string;
   name: string;
   tagline: string;
+  age?: number;
   border_color: string;
   image_url: string;
   greeting: string;

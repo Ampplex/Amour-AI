@@ -186,7 +186,7 @@ export default function PersonasScreen() {
           <View style={styles.cardInfo}>
             <View style={styles.nameRow}>
               <Text style={styles.cardName} numberOfLines={1}>
-                {item.name}
+                {item.name}{item.age ? `, ${item.age}` : ''}
               </Text>
               {/* Visibility badge */}
               <View

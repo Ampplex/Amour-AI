@@ -58,6 +58,7 @@ export default function CreateBotScreen() {
   const [borderColor, setBorderColor] = useState<string>('#F43F5E');
   const [isUploadingPhoto, setIsUploadingPhoto] = useState<boolean>(false);
   const [botName, setBotName] = useState<string>('');
+  const [age, setAge] = useState<string>('21');
   const [tagline, setTagline] = useState<string>('');
   const [accessTier, setAccessTier] = useState<'private' | 'public'>('private');
   const [greeting, setGreeting] = useState<string>('');
@@ -128,6 +129,7 @@ export default function CreateBotScreen() {
       if (res.ok) {
         const data = await res.json();
         if (data.name) setBotName(data.name);
+        if (data.age) setAge(String(data.age));
         if (data.tagline) setTagline(data.tagline);
         return;
       }
@@ -210,6 +212,7 @@ export default function CreateBotScreen() {
           onPress: () => {
             setStage(0);
             setBotName('');
+            setAge('21');
             setTagline('');
             setImageUri(null);
             setGreeting('');
@@ -234,6 +237,7 @@ export default function CreateBotScreen() {
       await savePersonaToRoster(
         {
           name: botName.trim(),
+          age: age ? parseInt(age, 10) : 21,
           tagline: tagline.trim(),
           border_color: borderColor,
           image_url: imageUri || '',
@@ -260,6 +264,7 @@ export default function CreateBotScreen() {
             onPress: () => {
               setStage(0);
               setBotName('');
+              setAge('21');
               setTagline('');
               setImageUri(null);
               setGreeting('');
@@ -464,6 +469,19 @@ export default function CreateBotScreen() {
               </View>
 
               <View style={styles.inputGroup}>
+                <Text style={styles.inputFieldTitle}>Age</Text>
+                <TextInput
+                  style={styles.studioTextInput}
+                  placeholder="e.g. 21"
+                  placeholderTextColor="#52525B"
+                  keyboardType="number-pad"
+                  value={age}
+                  onChangeText={(val) => setAge(val.replace(/[^0-9]/g, ''))}
+                  maxLength={3}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
                 <Text style={styles.inputFieldTitle}>Relationship Tagline</Text>
                 <TextInput
                   ref={taglineInputRef}
@@ -581,7 +599,7 @@ export default function CreateBotScreen() {
                 )}
               </View>
               <View style={styles.avatarMiniInfo}>
-                <Text style={styles.avatarMiniName}>{botName || 'Avatar'}</Text>
+                <Text style={styles.avatarMiniName}>{botName || 'Avatar'}{age ? `, ${age}` : ''}</Text>
                 {tagline ? <Text style={styles.avatarMiniTagline}>{tagline}</Text> : null}
               </View>
             </View>
@@ -730,7 +748,7 @@ export default function CreateBotScreen() {
             </View>
 
             <View style={styles.passportInfoCol}>
-              <Text style={styles.passportAvatarName}>{botName || 'Avatar'}</Text>
+              <Text style={styles.passportAvatarName}>{botName || 'Avatar'}{age ? `, ${age}` : ''}</Text>
               {tagline ? <Text style={styles.passportAvatarTagline}>{tagline}</Text> : null}
               <View style={styles.passportPillRow}>
                 <View style={styles.passportAccessPill}>

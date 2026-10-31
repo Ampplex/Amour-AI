@@ -18,6 +18,7 @@ class Persona(models.Model):
     )
     name = models.CharField(max_length=120)
     tagline = models.CharField(max_length=255, blank=True, default="")
+    age = models.IntegerField(null=True, blank=True, default=21)
     border_color = models.CharField(max_length=32, default="#F43F5E")
     image_url = models.TextField(blank=True, default="")
     greeting = models.TextField(blank=True, default="")

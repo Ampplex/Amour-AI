@@ -337,7 +337,7 @@ export default function PersonaDetailModal({
               )}
             </TouchableOpacity>
 
-            <Text style={styles.heroName}>{activePersona.name}</Text>
+            <Text style={styles.heroName}>{activePersona.name}{activePersona.age ? `, ${activePersona.age}` : ''}</Text>
 
             {activePersona.tagline ? (
               <Text style={styles.heroTagline}>{activePersona.tagline}</Text>
@@ -345,6 +345,13 @@ export default function PersonaDetailModal({
 
             {/* Badges Row */}
             <View style={styles.badgesRow}>
+              {activePersona.age ? (
+                <View style={[styles.badge, { backgroundColor: 'rgba(255, 255, 255, 0.08)', borderColor: 'rgba(255, 255, 255, 0.2)' }]}>
+                  <Text style={[styles.badgeText, { color: '#E4E4E7' }]}>
+                    {activePersona.age} yrs
+                  </Text>
+                </View>
+              ) : null}
               {/* Visibility Badge */}
               <View
                 style={[

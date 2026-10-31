@@ -214,12 +214,14 @@ class ChatMemoryView(APIView):
 
         # Resolve persona from database if persona_id is provided
         persona_obj = None
+        persona_age = None
         if persona_id:
             try:
                 from .models import Persona
                 from django.db.models import F
                 persona_obj = Persona.objects.filter(id=persona_id).first()
                 if persona_obj:
+                    persona_age = persona_obj.age
                     if not persona_name:
                         persona_name = persona_obj.name
                     if not greeting:
@@ -289,6 +291,7 @@ class ChatMemoryView(APIView):
                 message=message,
                 namespace=namespace,
                 persona_name=persona_name,
+                persona_age=persona_age,
                 greeting=greeting,
                 memory_prompt=memory_prompt,
                 client_time=client_time,
@@ -470,11 +473,11 @@ class GenerateAvatarPersonaView(APIView):
                 "The app is designed for deep romantic and emotional connections between user and persona "
                 "(such as affectionate girlfriend, protective boyfriend, devoted husband or wife, sassy flirty roommate, enemies-to-lovers rival, or charming blind date). "
                 "NEVER generate corporate, robotic, assistant, or professional resume personas. "
-                "Suggest 1 unique persona name and an evocative relationship tagline capturing their dynamic with the user. "
+                "Suggest 1 unique persona name, a realistic age (integer between 20 and 28), and an evocative relationship tagline capturing their dynamic with the user. "
                 "STRICT RULE: Absolutely ZERO emojis anywhere. "
-                "Respond ONLY in valid JSON: {\"name\": \"...\", \"tagline\": \"...\"}"
+                "Respond ONLY in valid JSON: {\"name\": \"...\", \"age\": 22, \"tagline\": \"...\"}"
             )
-            user_prompt = "Give me 1 creative romantic companion name and relationship tagline."
+            user_prompt = "Give me 1 creative romantic companion name, age, and relationship tagline."
         elif field == "greeting":
             system_prompt = (
                 f"You are crafting the opening first message for the character {char_desc}. "
@@ -507,11 +510,12 @@ class GenerateAvatarPersonaView(APIView):
                 "NEVER generate professional or corporate personas. "
                 "Include:\n"
                 "1. name\n"
-                "2. tagline (relationship dynamic)\n"
-                "3. greeting (immersive opening scene with *actions* and dialogue)\n"
-                "4. memory (rich character mind, dynamic, quirks, and texting tone)\n"
+                "2. age (integer between 20 and 28)\n"
+                "3. tagline (relationship dynamic)\n"
+                "4. greeting (immersive opening scene with *actions* and dialogue)\n"
+                "5. memory (rich character mind, dynamic, quirks, and texting tone)\n"
                 "STRICT RULE: Absolutely ZERO emojis. "
-                "Respond ONLY in valid JSON: {\"name\": \"...\", \"tagline\": \"...\", \"greeting\": \"...\", \"memory\": \"...\"}"
+                "Respond ONLY in valid JSON: {\"name\": \"...\", \"age\": 22, \"tagline\": \"...\", \"greeting\": \"...\", \"memory\": \"...\"}"
             )
             user_prompt = "Generate a complete companion profile."
 

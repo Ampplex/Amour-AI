@@ -288,7 +288,7 @@ const FeedPostCard = React.memo(({
       <View style={styles.captionContainer}>
         <Text style={styles.captionText}>
           <Text style={styles.captionPublisherBold}>{publisherName} </Text>
-          <Text style={styles.captionAvatarTitle}>{item.name}</Text>
+          <Text style={styles.captionAvatarTitle}>{item.name}{item.age ? `, ${item.age}` : ''}</Text>
           {item.tagline ? (
             <Text style={styles.captionTaglineText}> ({item.tagline})</Text>
           ) : null}

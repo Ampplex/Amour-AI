@@ -208,6 +208,7 @@ def generate_companion_reply(
     message: str,
     namespace: str,
     persona_name: str = "Companion",
+    persona_age: int = None,
     greeting: str = "",
     memory_prompt: str = "",
     client_time: str = None,
@@ -269,7 +270,10 @@ def generate_companion_reply(
 
     # 4. Persona Identity & Story (Stable prefix per persona)
     first_message_script = greeting.strip() if greeting else ""
-    persona_block = f"--- PERSONA IDENTITY ---\nYou are roleplaying as {persona_name}.\n"
+    persona_block = f"--- PERSONA IDENTITY ---\nYou are roleplaying as {persona_name}"
+    if persona_age:
+        persona_block += f" (Age: {persona_age})"
+    persona_block += ".\n"
     if memory_prompt and memory_prompt.strip():
         persona_block += f"Character Story & Core Mind:\n{memory_prompt.strip()}\n"
     if first_message_script:
