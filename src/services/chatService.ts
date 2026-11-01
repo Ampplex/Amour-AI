@@ -51,12 +51,12 @@ export interface SendMessageResponse {
 }
 
 const CANDIDATE_URLS = [
+  API_CONFIG.baseUrl,
   'http://192.168.1.4:8000/api',
   'http://127.0.0.1:8000/api',
-  API_CONFIG.baseUrl,
 ];
 
-let activeBaseUrl = API_CONFIG.baseUrl || 'http://192.168.1.4:8000/api';
+let activeBaseUrl = API_CONFIG.baseUrl || 'https://amour-ai-d6a8.onrender.com/api';
 
 async function resolveActiveBaseUrl(): Promise<string> {
   const probeController = new AbortController();

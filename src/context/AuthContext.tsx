@@ -55,9 +55,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const CANDIDATE_URLS = [
+  API_CONFIG.baseUrl,
   'http://192.168.1.4:8000/api',
   'http://127.0.0.1:8000/api',
-  API_CONFIG.baseUrl,
   'http://10.104.217.217:8000/api',
   'http://192.168.1.2:8000/api',
 ];

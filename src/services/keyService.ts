@@ -247,7 +247,7 @@ export async function uploadKeyBackup(
   token?: string
 ): Promise<boolean> {
   try {
-    const baseUrl = API_CONFIG.baseUrl || 'http://192.168.1.4:8000/api';
+    const baseUrl = API_CONFIG.baseUrl || 'https://amour-ai-d6a8.onrender.com/api';
     const res = await fetch(`${baseUrl}/memory/key-backup/`, {
       method: 'POST',
       headers: {
@@ -276,7 +276,7 @@ export async function fetchKeyBackup(
   token?: string
 ): Promise<{ has_backup: boolean; encrypted_blob?: string; salt?: string; nonce?: string } | null> {
   try {
-    const baseUrl = API_CONFIG.baseUrl || 'http://192.168.1.4:8000/api';
+    const baseUrl = API_CONFIG.baseUrl || 'https://amour-ai-d6a8.onrender.com/api';
     const res = await fetch(`${baseUrl}/memory/key-backup/?user_id=${encodeURIComponent(userId)}`, {
       method: 'GET',
       headers: {
