@@ -53,16 +53,34 @@ if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
     os.environ["REEVE_API_KEY"] = settings.REEVE_API_KEY
 
 
+def _get_memory_tools():
+    """
+    Returns the memory operations tools module.
+    Prioritizes embedded in-process threelane_memory when NEO4J_URI is configured
+    (eliminating all external EC2/MCP network dependencies),
+    otherwise falls back to remote client reeve.tools.
+    """
+    if os.getenv("NEO4J_URI"):
+        try:
+            import threelane_memory.tools as tools
+            return tools, False
+        except ImportError:
+            pass
+    import reeve.tools as tools
+    return tools, True
+
+
 def get_reeve_status():
     """Verify Reeve SDK and Neo4j memory graph status."""
     try:
-        from reeve.tools import memory_config
-        cfg = memory_config()
+        tools, _ = _get_memory_tools()
+        cfg = tools.memory_config()
         return {
             "ok": True,
             "provider": cfg.get("provider"),
             "neo4j_connected": cfg.get("neo4j_connected", False),
             "chat_model": cfg.get("chat_model"),
+            "engine_mode": "embedded_in_process" if os.getenv("NEO4J_URI") else "remote_mcp",
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -88,39 +106,40 @@ def store_memory_for_user(text: str, namespace: str, user_key: str = None):
     Store conversational memory into Reeve / Neo4j.
     The user's unique namespace (e.g. user_id_persona_id) is passed as speaker.
     Optionally encrypts content using client-managed AES-256-GCM user_key.
+    Runs in-process if NEO4J_URI is configured.
     """
-    from reeve.tools import store_memory, reset_client_cache
+    tools, is_remote = _get_memory_tools()
+    kwargs = {"speaker": namespace}
+    if user_key:
+        kwargs["user_key"] = user_key
+
     try:
-        kwargs = {"speaker": namespace}
-        if user_key:
-            kwargs["user_key"] = user_key
-        return store_memory(text, **kwargs)
+        return tools.store_memory(text, **kwargs)
     except Exception as exc:
-        logger.warning(f"Reeve write failed, resetting client cache and retrying: {exc}")
-        reset_client_cache()
-        kwargs = {"speaker": namespace}
-        if user_key:
-            kwargs["user_key"] = user_key
-        return store_memory(text, **kwargs)
+        logger.warning(f"Reeve write failed: {exc}")
+        if is_remote and hasattr(tools, "reset_client_cache"):
+            tools.reset_client_cache()
+            return tools.store_memory(text, **kwargs)
+        raise
 
 
 def query_memory_for_user(question: str, namespace: str, user_key: str = None):
     """
     Query memories from Reeve / Neo4j graph for this specific user namespace.
     """
-    from reeve.tools import query_memory, reset_client_cache
+    tools, is_remote = _get_memory_tools()
+    kwargs = {"speaker": namespace}
+    if user_key:
+        kwargs["user_key"] = user_key
+
     try:
-        kwargs = {"speaker": namespace}
-        if user_key:
-            kwargs["user_key"] = user_key
-        return query_memory(question, **kwargs)
+        return tools.query_memory(question, **kwargs)
     except Exception as exc:
-        logger.warning(f"Reeve query failed, retrying: {exc}")
-        reset_client_cache()
-        kwargs = {"speaker": namespace}
-        if user_key:
-            kwargs["user_key"] = user_key
-        return query_memory(question, **kwargs)
+        logger.warning(f"Reeve query failed: {exc}")
+        if is_remote and hasattr(tools, "reset_client_cache"):
+            tools.reset_client_cache()
+            return tools.query_memory(question, **kwargs)
+        raise
 
 
 def retrieve_context_for_user(question: str, namespace: str, user_key: str = None):
@@ -128,27 +147,31 @@ def retrieve_context_for_user(question: str, namespace: str, user_key: str = Non
     Retrieve ranked memory context from Neo4j graph for this user namespace.
     Optionally decrypts content using client-managed AES-256-GCM user_key.
     """
-    from reeve.tools import retrieve_memory_context, reset_client_cache
+    tools, is_remote = _get_memory_tools()
+    kwargs = {"speaker": namespace}
+    if user_key:
+        kwargs["user_key"] = user_key
+
     try:
-        kwargs = {"speaker": namespace}
-        if user_key:
-            kwargs["user_key"] = user_key
-        return retrieve_memory_context(question, **kwargs)
+        return tools.retrieve_memory_context(question, **kwargs)
     except Exception as exc:
-        logger.warning(f"Reeve context retrieve failed, retrying: {exc}")
-        reset_client_cache()
-        kwargs = {"speaker": namespace}
-        if user_key:
-            kwargs["user_key"] = user_key
-        return retrieve_memory_context(question, **kwargs)
+        logger.warning(f"Reeve context retrieve failed: {exc}")
+        if is_remote and hasattr(tools, "reset_client_cache"):
+            tools.reset_client_cache()
+            return tools.retrieve_memory_context(question, **kwargs)
+        raise
 
 
 def clear_user_memories(namespace: str):
     """
     Wipe memories in Neo4j graph for this specific user namespace.
     """
-    from reeve.tools import _get_client
-    return _get_client().call_tool("clear_memory", {"speaker": namespace, "dry_run": False})
+    tools, is_remote = _get_memory_tools()
+    if not is_remote and hasattr(tools, "clear_memory"):
+        return tools.clear_memory(speaker=namespace, dry_run=False)
+    if hasattr(tools, "_get_client"):
+        return tools._get_client().call_tool("clear_memory", {"speaker": namespace, "dry_run": False})
+    raise RuntimeError("clear_memory not supported in current mode")
 
 
 def strip_emojis(text: str) -> str:
