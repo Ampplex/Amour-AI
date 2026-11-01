@@ -51,6 +51,30 @@ def _verify_google_token(token_str: str):
         logger.warning(f"Google ID token verification failed: {e}")
         return None
 
+
+def _get_public_base_url(request=None) -> str:
+    """
+    Resolves the canonical public base URL for emails and web verification links.
+    Prioritizes explicit environment overrides, Render auto-configured domain,
+    or the active request's origin over local developer fallback IPs.
+    """
+    env_url = (os.environ.get("BACKEND_PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    if env_url and not any(local_ip in env_url for local_ip in ("192.168.", "127.0.0.1", "localhost")):
+        return env_url
+
+    if request:
+        try:
+            req_url = request.build_absolute_uri("/").rstrip("/")
+            if not any(local_ip in req_url for local_ip in ("192.168.", "127.0.0.1", "localhost")):
+                return req_url
+        except Exception:
+            pass
+
+    configured = getattr(settings, "BACKEND_PUBLIC_URL", "https://amour-ai-d6a8.onrender.com").rstrip("/")
+    if any(local_ip in configured for local_ip in ("192.168.", "127.0.0.1", "localhost")):
+        return "https://amour-ai-d6a8.onrender.com"
+    return configured
+
 class GoogleAuthView(APIView):
     permission_classes = [AllowAny]
 
@@ -182,7 +206,7 @@ class SignupView(APIView):
             expires_at=expires_at,
         )
 
-        base_url = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+        base_url = _get_public_base_url(request)
         verification_link = f"{base_url}/api/auth/verify-email/?token={token}"
 
         # Dispatch confirmation email via Brevo
@@ -446,7 +470,7 @@ class ResendVerificationView(APIView):
             expires_at=expires_at,
         )
 
-        base_url = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+        base_url = _get_public_base_url(request)
         verification_link = f"{base_url}/api/auth/verify-email/?token={token}"
 
         send_verification_email(
@@ -574,7 +598,7 @@ class ForgotPasswordView(APIView):
                 expires_at=expires_at,
             )
 
-            base_url = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/") or request.build_absolute_uri("/").rstrip("/")
+            base_url = _get_public_base_url(request)
             reset_link = f"{base_url}/api/auth/reset-password-web/?token={token}"
 
             send_password_reset_email(

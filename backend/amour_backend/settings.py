@@ -167,5 +167,8 @@ GOOGLE_CLIENT_IDS = [
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 BREVO_SENDER_EMAIL = os.environ.get("BREVO_SENDER_EMAIL", "ankesh3905222@gmail.com")
 BREVO_SENDER_NAME = os.environ.get("BREVO_SENDER_NAME", "Amour AI")
-BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://192.168.1.4:8000")
+BACKEND_PUBLIC_URL = os.environ.get(
+    "BACKEND_PUBLIC_URL",
+    os.environ.get("RENDER_EXTERNAL_URL", "https://amour-ai-d6a8.onrender.com")
+)
 
