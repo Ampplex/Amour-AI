@@ -1,3 +1,38 @@
+/**
+ * ========================================================================================
+ * CLIENT-MANAGED ZERO-KNOWLEDGE ENCRYPTION & ACCOUNT RECOVERY SERVICE
+ * ========================================================================================
+ *
+ * This module provides the client-side cryptographic foundation for Amour AI's
+ * integration with the Reeve Memory Graph (SDK >= 0.1.42).
+ *
+ * HYBRID SECURITY ARCHITECTURE (Apple / WhatsApp Standard):
+ *
+ * 1. EVERYDAY ZERO-PROMPT USAGE (Frictionless):
+ *    - On initial launch, the app generates a 256-bit cryptographically secure random key
+ *      via `expo-crypto` (`Crypto.getRandomBytesAsync(32)`).
+ *    - The raw key is stored exclusively in hardware-backed secure storage (`expo-secure-store`
+ *      backed by iOS Keychain / Android Keystore with `AFTER_FIRST_UNLOCK` access).
+ *    - Every chat message automatically passes this key to Reeve via `X-Memory-User-Key`.
+ *    - Users never need to re-enter a password or PIN for day-to-day conversation.
+ *
+ * 2. ACCOUNT RECOVERY & MULTI-DEVICE SYNC (Zero-Knowledge):
+ *    - When the user views their recovery settings, a 12-word recovery phrase is generated.
+ *    - A Key Encryption Key (KEK) is derived from the phrase + unique random salt using
+ *      stretched SHA-256 (2,000 rounds).
+ *    - The 256-bit memory key is encrypted with the KEK into an authenticated blob (`v1:<ct>:<tag>`).
+ *    - Only the ciphertext blob, salt, and nonce are uploaded to the Django backend (`/api/memory/key-backup/`).
+ *    - The server NEVER receives, sees, or logs the plaintext key or 12-word recovery phrase.
+ *
+ * 3. NEW DEVICE RESTORATION:
+ *    - When logging in from a new device, the new device downloads the user's encrypted blob.
+ *    - The user enters their 12-word phrase.
+ *    - The new device derives the KEK, authenticates the tag, decrypts the 256-bit memory key,
+ *      and saves it into the new device's SecureStore.
+ *    - All historical companion memories are immediately decrypted and accessible!
+ * ========================================================================================
+ */
+
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import { API_CONFIG } from '../constants/authConfig';

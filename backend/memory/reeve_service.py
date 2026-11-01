@@ -1,3 +1,43 @@
+"""
+Reeve Long-Term Memory (LTM) Integration Service.
+
+========================================================================================
+ZERO-KNOWLEDGE CLIENT-MANAGED ENCRYPTION ARCHITECTURE (REEVE SDK >= 0.1.42)
+========================================================================================
+This backend integrates with Reeve 0.1.42, which supports Option 2 (Client-Managed
+Zero-Knowledge Encryption) for end-to-end memory confidentiality:
+
+1. CLIENT-MANAGED KEY GENERATION & STORAGE:
+   - The user's device generates a cryptographically secure 256-bit AES key.
+   - Stored in hardware-backed secure storage (iOS Keychain / Android Keystore via expo-secure-store).
+   - Transmitted per-request in the 'X-Memory-User-Key' header or request payload.
+   - The server only holds the key transiently in volatile RAM for the duration of the request.
+   - The server NEVER persists the plaintext key to disk or database logs.
+
+2. ENCRYPTION AT REST (NEO4J & BACKUPS):
+   - Reeve encrypts sensitive payload fields before writing to Neo4j:
+     * Episode raw_text: AES-256-GCM with a unique 12-byte nonce (enc:v2:<nonce+ciphertext>)
+     * Episode summary & searchable_text: AES-256-GCM
+     * State property values: AES-256-GCM
+   - Neo4j database files and automated backups hold ONLY AES-GCM ciphertext.
+
+3. ACCURACY & QUALITY PRESERVATION:
+   - High-dimensional semantic embeddings (1024-dim Bedrock Titan) are generated in volatile
+     RAM from the plaintext before storage.
+   - Knowledge graph structure (entities, relationship edges, and state attribute names)
+     remains unencrypted for Cypher graph traversals and semantic similarity scoring.
+   - Retrieval quality, context ranking, and emotional continuity are 100% byte-identical
+     to unencrypted operation.
+
+4. DUAL-MODE & PREFIX GUARD (ZERO MIGRATION NEEDED):
+   - Historical memories created prior to v0.1.42 remain plaintext in Neo4j.
+   - The Prefix Guard inspects all retrieved records:
+     * Strings starting with 'enc:v2:' are authenticated and decrypted with user_key.
+     * Legacy strings without the prefix pass through untouched without errors.
+   - If user_key is omitted or None, Reeve runs in unencrypted mode seamlessly.
+========================================================================================
+"""
+
 import os
 import re
 import time
