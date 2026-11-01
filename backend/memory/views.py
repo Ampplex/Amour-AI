@@ -161,6 +161,7 @@ class ChatMemoryView(APIView):
         client_time = request.data.get("client_time", "")
         client_timezone = request.data.get("client_timezone", "")
         user_name = request.data.get("user_name", "").strip()
+        user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or "").strip() or None
 
         user_id = request.user.id if request.user.is_authenticated else (request.data.get("user_id") or "guest")
 
@@ -299,6 +300,7 @@ class ChatMemoryView(APIView):
                 user_name=user_name,
                 conversation_history=conversation_history,
                 current_conflict_stage=current_conflict_stage,
+                user_key=user_key,
             )
             reply_text = result.get("reply", "").strip()
             new_conflict_stage = result.get("conflict_stage", current_conflict_stage)
@@ -949,6 +951,81 @@ class PersonaDetailView(APIView):
             return Response({"message": "Persona deleted successfully"}, status=status.HTTP_200_OK)
         except Persona.DoesNotExist:
             return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class MemoryKeyBackupView(APIView):
+    """
+    Zero-Knowledge Encrypted Key Backup endpoint.
+    The server stores ONLY the encrypted blob, salt, and nonce.
+    It NEVER receives or stores the plaintext 256-bit key or the user's 12-word recovery phrase.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user_identifier = (
+            str(request.user.id)
+            if (request.user and request.user.is_authenticated)
+            else (request.query_params.get("user_id") or request.headers.get("X-User-Id", "")).strip()
+        )
+        if not user_identifier:
+            return Response({"error": "User identifier required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import UserMemoryKeyBackup
+        backup = UserMemoryKeyBackup.objects.filter(user_identifier=user_identifier).first()
+        if not backup:
+            return Response({"has_backup": False}, status=status.HTTP_200_OK)
+
+        return Response({
+            "has_backup": True,
+            "encrypted_blob": backup.encrypted_blob,
+            "salt": backup.salt,
+            "nonce": backup.nonce,
+            "updated_at": backup.updated_at.isoformat(),
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        user_identifier = (
+            str(request.user.id)
+            if (request.user and request.user.is_authenticated)
+            else (request.data.get("user_id") or request.headers.get("X-User-Id", "")).strip()
+        )
+        if not user_identifier:
+            return Response({"error": "User identifier required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        encrypted_blob = request.data.get("encrypted_blob", "").strip()
+        salt = request.data.get("salt", "").strip()
+        nonce = request.data.get("nonce", "").strip()
+
+        if not encrypted_blob or not salt or not nonce:
+            return Response(
+                {"error": "encrypted_blob, salt, and nonce are all required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user_obj = request.user if (request.user and request.user.is_authenticated) else None
+        if not user_obj and user_identifier != "guest":
+            try:
+                from authentication.models import User
+                user_obj = User.objects.filter(id=user_identifier).first()
+            except Exception:
+                pass
+
+        from .models import UserMemoryKeyBackup
+        backup, created = UserMemoryKeyBackup.objects.update_or_create(
+            user_identifier=user_identifier,
+            defaults={
+                "user": user_obj,
+                "encrypted_blob": encrypted_blob,
+                "salt": salt,
+                "nonce": nonce,
+            },
+        )
+        return Response({
+            "success": True,
+            "message": "Zero-knowledge memory key backup saved securely.",
+            "updated_at": backup.updated_at.isoformat(),
+        }, status=status.HTTP_200_OK)
+
 
 
 

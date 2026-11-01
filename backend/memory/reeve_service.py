@@ -43,44 +43,64 @@ def deduplicate_context(context_str: str) -> str:
     return "\n\n".join(unique_blocks)
 
 
-def store_memory_for_user(text: str, namespace: str):
+def store_memory_for_user(text: str, namespace: str, user_key: str = None):
     """
     Store conversational memory into Reeve / Neo4j.
     The user's unique namespace (e.g. user_id_persona_id) is passed as speaker.
+    Optionally encrypts content using client-managed AES-256-GCM user_key.
     """
     from reeve.tools import store_memory, reset_client_cache
     try:
-        return store_memory(text, speaker=namespace)
+        kwargs = {"speaker": namespace}
+        if user_key:
+            kwargs["user_key"] = user_key
+        return store_memory(text, **kwargs)
     except Exception as exc:
         logger.warning(f"Reeve write failed, resetting client cache and retrying: {exc}")
         reset_client_cache()
-        return store_memory(text, speaker=namespace)
+        kwargs = {"speaker": namespace}
+        if user_key:
+            kwargs["user_key"] = user_key
+        return store_memory(text, **kwargs)
 
 
-def query_memory_for_user(question: str, namespace: str):
+def query_memory_for_user(question: str, namespace: str, user_key: str = None):
     """
     Query memories from Reeve / Neo4j graph for this specific user namespace.
     """
     from reeve.tools import query_memory, reset_client_cache
     try:
-        return query_memory(question, speaker=namespace)
+        kwargs = {"speaker": namespace}
+        if user_key:
+            kwargs["user_key"] = user_key
+        return query_memory(question, **kwargs)
     except Exception as exc:
         logger.warning(f"Reeve query failed, retrying: {exc}")
         reset_client_cache()
-        return query_memory(question, speaker=namespace)
+        kwargs = {"speaker": namespace}
+        if user_key:
+            kwargs["user_key"] = user_key
+        return query_memory(question, **kwargs)
 
 
-def retrieve_context_for_user(question: str, namespace: str):
+def retrieve_context_for_user(question: str, namespace: str, user_key: str = None):
     """
     Retrieve ranked memory context from Neo4j graph for this user namespace.
+    Optionally decrypts content using client-managed AES-256-GCM user_key.
     """
     from reeve.tools import retrieve_memory_context, reset_client_cache
     try:
-        return retrieve_memory_context(question, speaker=namespace)
+        kwargs = {"speaker": namespace}
+        if user_key:
+            kwargs["user_key"] = user_key
+        return retrieve_memory_context(question, **kwargs)
     except Exception as exc:
         logger.warning(f"Reeve context retrieve failed, retrying: {exc}")
         reset_client_cache()
-        return retrieve_memory_context(question, speaker=namespace)
+        kwargs = {"speaker": namespace}
+        if user_key:
+            kwargs["user_key"] = user_key
+        return retrieve_memory_context(question, **kwargs)
 
 
 def clear_user_memories(namespace: str):
@@ -216,6 +236,7 @@ def generate_companion_reply(
     user_name: str = "",
     conversation_history: list = None,
     current_conflict_stage: int = 0,
+    user_key: str = None,
 ) -> dict:
     """
     Companion roleplay chat powered 100% by Reeve memory graph and Groq LLM.
@@ -246,14 +267,14 @@ def generate_companion_reply(
     if should_ingest_into_reeve(message):
         speaker_tag = f"User ({first_name})" if first_name else "User"
         try:
-            store_memory_for_user(f"{speaker_tag}: {message}", namespace)
+            store_memory_for_user(f"{speaker_tag}: {message}", namespace, user_key=user_key)
         except Exception as exc:
             logger.warning(f"Failed to store user memory to Reeve: {exc}")
 
     # 2. Context Retrieval from Reeve for this user namespace
     try:
         retrieval_query = message.strip()
-        raw_memory_context = retrieve_context_for_user(retrieval_query, namespace) or ""
+        raw_memory_context = retrieve_context_for_user(retrieval_query, namespace, user_key=user_key) or ""
         memory_context = deduplicate_context(str(raw_memory_context))
     except Exception as exc:
         logger.warning(f"Error retrieving memory context from Reeve: {exc}")
@@ -452,7 +473,7 @@ def generate_companion_reply(
         clean_context = " ".join((memory_context or "").split())
         if clean_reply and clean_reply not in clean_context:
             try:
-                store_memory_for_user(f"Assistant: {reply}", namespace)
+                store_memory_for_user(f"Assistant: {reply}", namespace, user_key=user_key)
             except Exception as exc:
                 logger.warning(f"Failed to store assistant reply to Reeve: {exc}")
 

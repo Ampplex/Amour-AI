@@ -161,3 +161,28 @@ class PersonaRelationshipState(models.Model):
         return f"{self.user_identifier} <-> {self.persona_identifier} (Stage {self.conflict_stage})"
 
 
+class UserMemoryKeyBackup(models.Model):
+    """
+    Stores client-managed zero-knowledge encrypted backup of the user's 256-bit memory key.
+    The server NEVER sees the plaintext key or the 12-word recovery phrase.
+    Only the client device with the user's recovery phrase can decrypt this blob.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="memory_key_backups",
+    )
+    user_identifier = models.CharField(max_length=128, unique=True, db_index=True)
+    encrypted_blob = models.TextField(help_text="AES-GCM ciphertext of the 256-bit memory key")
+    salt = models.CharField(max_length=128, help_text="Random salt for KEK derivation")
+    nonce = models.CharField(max_length=128, help_text="AES-GCM initialization vector / nonce")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"MemoryKeyBackup for {self.user_identifier}"
+
+

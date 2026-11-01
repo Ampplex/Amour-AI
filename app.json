@@ -42,7 +42,8 @@
       "expo-router",
       "expo-web-browser",
       "@react-native-google-signin/google-signin",
-      "expo-font"
+      "expo-font",
+      "expo-secure-store"
     ]
   }
 }

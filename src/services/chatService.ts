@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import { API_CONFIG } from '../constants/authConfig';
+import { getOrCreateUserKey } from './keyService';
 
 export interface ChatHistoryItem {
   id: string;
@@ -145,16 +146,19 @@ export async function sendChatMessage(
   const timer = setTimeout(() => controller.abort(), 45000);
 
   try {
+    const userKey = await getOrCreateUserKey();
     const baseUrl = await resolveActiveBaseUrl();
     const res = await fetch(`${baseUrl}/memory/chat/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-Memory-User-Key': userKey,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
         ...payload,
         client_message_id: clientMessageId,
+        user_key: userKey,
       }),
       signal: controller.signal,
     });

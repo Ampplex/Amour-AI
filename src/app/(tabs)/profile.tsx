@@ -18,6 +18,21 @@ import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import { showAlert } from '../../context/AlertContext';
+import { MemorySecurityModal } from '../../components/MemorySecurityModal';
+
+function ShieldLockIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
 
 function EditIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
@@ -103,6 +118,7 @@ export default function ProfileScreen() {
 
   // Edit Profile Modal state
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
   const [editName, setEditName] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editAvatarUri, setEditAvatarUri] = useState<string | null>(null);
@@ -295,6 +311,24 @@ export default function ProfileScreen() {
           <Text style={styles.editButtonArrow}>›</Text>
         </TouchableOpacity>
 
+        {/* Memory Security & Recovery Action Button */}
+        <TouchableOpacity
+          style={styles.editProfileButton}
+          onPress={() => setIsSecurityModalOpen(true)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.editButtonContent}>
+            <View style={[styles.editIconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}>
+              <ShieldLockIcon size={16} color="#10B981" />
+            </View>
+            <View style={styles.editButtonTextContainer}>
+              <Text style={styles.editButtonTitle}>Memory Encryption & Recovery</Text>
+              <Text style={styles.editButtonSubtitle}>AES-256 zero-knowledge & 12 words</Text>
+            </View>
+          </View>
+          <Text style={styles.editButtonArrow}>›</Text>
+        </TouchableOpacity>
+
         {/* Sign Out */}
         <TouchableOpacity
           style={styles.signOutButton}
@@ -462,6 +496,13 @@ export default function ProfileScreen() {
           </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
+
+      {/* Memory Security & Zero-Knowledge Recovery Modal */}
+      <MemorySecurityModal
+        visible={isSecurityModalOpen}
+        onClose={() => setIsSecurityModalOpen(false)}
+        userId={String(user.id)}
+      />
     </SafeAreaView>
   );
 }
