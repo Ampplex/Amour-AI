@@ -13,6 +13,8 @@ from .views import (
     UserListView,
     ProfileView,
     ProfilePictureUploadView,
+    AdminUsersView,
+    AdminUserDetailView,
 )
 
 urlpatterns = [
@@ -29,5 +31,7 @@ urlpatterns = [
     path("profile/", ProfileView.as_view(), name="auth-profile"),
     path("profile/upload-picture/", ProfilePictureUploadView.as_view(), name="auth-profile-upload-picture"),
     path("users/", UserListView.as_view(), name="auth-users"),
+    path("admin/users/", AdminUsersView.as_view(), name="auth-admin-users"),
+    path("admin/users/<str:user_id>/", AdminUserDetailView.as_view(), name="auth-admin-user-detail"),
 ]
 

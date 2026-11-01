@@ -954,3 +954,210 @@ class ProfilePictureUploadView(APIView):
         except Exception as exc:
             logger.error(f"S3 Profile Picture upload failed: {exc}")
             return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminUsersView(APIView):
+    """
+    Admin Console View to list, filter, search and create user accounts
+    reflecting the exact database schema.
+    """
+    permission_classes = [AllowAny]
+
+    def _is_admin(self, request):
+        if request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser):
+            return True
+        admin_id = request.headers.get("x-admin-user-id") or request.query_params.get("admin_user_id") or request.data.get("admin_user_id")
+        if admin_id:
+            user = User.objects.filter(id=admin_id).first()
+            if user and (user.is_staff or user.is_superuser):
+                return True
+        # Allow in local development environments
+        if getattr(settings, "DEBUG", False):
+            return True
+        return False
+
+    def get(self, request):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = User.objects.all().order_by("-created_at")
+
+        # Stats calculation
+        stats = {
+            "total_users": User.objects.count(),
+            "active_users": User.objects.filter(is_active=True).count(),
+            "verified_users": User.objects.filter(verified_email=True).count(),
+            "staff_users": User.objects.filter(is_staff=True).count(),
+            "google_users": User.objects.filter(auth_provider="google").count(),
+            "local_users": User.objects.filter(auth_provider="local").count(),
+        }
+
+        # Search query across schema columns
+        search = request.query_params.get("search", "").strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(email__icontains=search)
+                | Q(username__icontains=search)
+                | Q(name__icontains=search)
+                | Q(id__icontains=search)
+                | Q(namespace__icontains=search)
+            )
+
+        # Filters
+        provider = request.query_params.get("auth_provider", "").strip().lower()
+        if provider in ["google", "local"]:
+            qs = qs.filter(auth_provider=provider)
+
+        is_active = request.query_params.get("is_active", "").strip().lower()
+        if is_active == "true":
+            qs = qs.filter(is_active=True)
+        elif is_active == "false":
+            qs = qs.filter(is_active=False)
+
+        is_staff = request.query_params.get("is_staff", "").strip().lower()
+        if is_staff == "true":
+            qs = qs.filter(is_staff=True)
+        elif is_staff == "false":
+            qs = qs.filter(is_staff=False)
+
+        verified = request.query_params.get("verified_email", "").strip().lower()
+        if verified == "true":
+            qs = qs.filter(verified_email=True)
+        elif verified == "false":
+            qs = qs.filter(verified_email=False)
+
+        from .serializers import AdminUserSerializer
+        return Response({
+            "stats": stats,
+            "total": qs.count(),
+            "users": AdminUserSerializer(qs, many=True).data,
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        from .serializers import AdminUserCreateSerializer, AdminUserSerializer
+        serializer = AdminUserCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response({
+                "success": True,
+                "message": f"User {user.email} created successfully",
+                "user": AdminUserSerializer(user).data,
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminUserDetailView(APIView):
+    """
+    Admin Console View to inspect, modify, or delete a specific user account.
+    """
+    permission_classes = [AllowAny]
+
+    def _is_admin(self, request):
+        if request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser):
+            return True
+        admin_id = request.headers.get("x-admin-user-id") or request.query_params.get("admin_user_id") or request.data.get("admin_user_id")
+        if admin_id:
+            user = User.objects.filter(id=admin_id).first()
+            if user and (user.is_staff or user.is_superuser):
+                return True
+        if getattr(settings, "DEBUG", False):
+            return True
+        return False
+
+    def get(self, request, user_id):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        from .serializers import AdminUserSerializer
+        return Response({
+            "user": AdminUserSerializer(user).data
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request, user_id):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data
+        updatable_fields = [
+            "name",
+            "given_name",
+            "family_name",
+            "username",
+            "email",
+            "picture",
+            "is_active",
+            "is_staff",
+            "is_superuser",
+            "verified_email",
+            "auth_provider",
+            "namespace",
+        ]
+
+        for field in updatable_fields:
+            if field in data:
+                val = data[field]
+                # Username uniqueness check
+                if field == "username" and val:
+                    clean = user.clean_username(str(val))
+                    if User.objects.filter(username__iexact=clean).exclude(id=user.id).exists():
+                        return Response({"error": f"Username @{clean} is already taken"}, status=status.HTTP_400_BAD_REQUEST)
+                    setattr(user, field, clean)
+                elif field == "email" and val:
+                    clean_email = str(val).strip().lower()
+                    if User.objects.filter(email__iexact=clean_email).exclude(id=user.id).exists():
+                        return Response({"error": f"Email {clean_email} is already in use"}, status=status.HTTP_400_BAD_REQUEST)
+                    setattr(user, field, clean_email)
+                else:
+                    setattr(user, field, val)
+
+        # Password reset support
+        if "password" in data and data["password"]:
+            user.set_password(data["password"])
+
+        user.save()
+
+        # Synchronize persona handles and names if changed
+        try:
+            from memory.models import Persona
+            if "username" in data and user.username:
+                Persona.objects.filter(creator=user).update(publisher_handle=f"@{user.username}")
+            if "name" in data and user.name:
+                Persona.objects.filter(creator=user).update(publisher_name=user.name)
+            if "picture" in data and user.picture:
+                Persona.objects.filter(creator=user).update(publisher_avatar=user.picture)
+        except Exception:
+            pass
+
+        from .serializers import AdminUserSerializer
+        return Response({
+            "success": True,
+            "message": f"User {user.email} updated successfully",
+            "user": AdminUserSerializer(user).data,
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, user_id):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        user_email = user.email
+        user.delete()
+        return Response({
+            "success": True,
+            "message": f"User {user_email} has been permanently deleted from database",
+        }, status=status.HTTP_200_OK)

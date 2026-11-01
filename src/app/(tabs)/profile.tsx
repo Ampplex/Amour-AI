@@ -98,6 +98,20 @@ function UserIcon({ size = 34, color = '#EC4899' }: { size?: number; color?: str
   );
 }
 
+function ShieldAdminIcon({ size = 18, color = '#F43F5E' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 export default function ProfileScreen() {
   const { user, logout, updateProfile, uploadProfilePicture, refreshProfile } = useAuth();
 
@@ -293,6 +307,29 @@ export default function ProfileScreen() {
             </View>
           </View>
           <Text style={styles.editButtonArrow}>›</Text>
+        </TouchableOpacity>
+
+        {/* Admin Console (For Managing Users & DB Schema) */}
+        <TouchableOpacity
+          style={styles.adminConsoleButton}
+          onPress={() => router.push('/admin')}
+          activeOpacity={0.8}
+        >
+          <View style={styles.editButtonContent}>
+            <View style={styles.adminIconCircle}>
+              <ShieldAdminIcon size={18} color="#F43F5E" />
+            </View>
+            <View style={styles.editButtonTextContainer}>
+              <View style={styles.adminTitleRow}>
+                <Text style={styles.editButtonTitle}>Admin Console</Text>
+                <View style={styles.staffBadge}>
+                  <Text style={styles.staffBadgeText}>STAFF</Text>
+                </View>
+              </View>
+              <Text style={styles.editButtonSubtitle}>Manage user accounts, DB schema & permissions</Text>
+            </View>
+          </View>
+          <Text style={[styles.editButtonArrow, { color: '#F43F5E' }]}>›</Text>
         </TouchableOpacity>
 
         {/* Sign Out */}
@@ -565,6 +602,47 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
+  },
+  adminConsoleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#12121A',
+    borderColor: '#2C1D2A',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginTop: 10,
+  },
+  adminIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F43F5E18',
+    borderColor: '#F43F5E40',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adminTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  staffBadge: {
+    backgroundColor: '#F43F5E20',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#F43F5E50',
+  },
+  staffBadgeText: {
+    color: '#F43F5E',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   editButtonContent: {
     flexDirection: 'row',
