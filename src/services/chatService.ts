@@ -110,11 +110,13 @@ export async function fetchChatHistory(
   const timer = setTimeout(() => controller.abort(), 12000);
 
   try {
+    const userKey = await getOrCreateUserKey();
     const baseUrl = await resolveActiveBaseUrl();
     const res = await fetch(`${baseUrl}/memory/chat/?${query}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        'X-Memory-User-Key': userKey,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       signal: controller.signal,

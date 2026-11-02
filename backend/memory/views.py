@@ -4,6 +4,11 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from .crypto import (
+    encrypt_chat_message,
+    decrypt_chat_message,
+    migrate_user_messages_to_client_key,
+)
 from .reeve_service import (
     get_reeve_status,
     store_memory_for_user,
@@ -37,12 +42,21 @@ class ChatMemoryView(APIView):
         """
         persona_id = request.query_params.get("persona_id", "").strip()
         user_id = (request.user.id if request.user.is_authenticated else request.query_params.get("user_id", "")).strip()
+        user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or "").strip() or None
 
         if not persona_id or not user_id:
             return Response(
                 {"results": [], "count": 0, "page": 1, "has_more": False},
                 status=status.HTTP_200_OK,
             )
+
+        # Automatic Client-Key Handover: Migrate any legacy or server-encrypted messages
+        # to the client's Zero-Knowledge key on first authenticated contact
+        if user_key:
+            try:
+                migrate_user_messages_to_client_key(user_id, user_key)
+            except Exception as exc:
+                logger.warning(f"Error during client-key handover: {exc}")
 
         try:
             page = max(1, int(request.query_params.get("page", 1)))
@@ -101,7 +115,7 @@ class ChatMemoryView(APIView):
                             persona_identifier=persona_id,
                             namespace=namespace,
                             sender="bot",
-                            text=persona_obj.greeting.strip(),
+                            text=encrypt_chat_message(persona_obj.greeting.strip(), user_id=str(user_id), client_key=user_key),
                         )
                         # Also ingest initial assistant opening scenario to Reeve
                         try:
@@ -124,6 +138,11 @@ class ChatMemoryView(APIView):
         paged_items.reverse()
 
         serializer = PersonaChatMessageSerializer(paged_items, many=True)
+        decrypted_results = []
+        for item in serializer.data:
+            item_copy = dict(item)
+            item_copy["text"] = decrypt_chat_message(item_copy.get("text", ""), user_id=str(user_id), client_key=user_key)
+            decrypted_results.append(item_copy)
 
         from .models import PersonaRelationshipState
         rel_state = PersonaRelationshipState.objects.filter(
@@ -134,7 +153,7 @@ class ChatMemoryView(APIView):
 
         return Response(
             {
-                "results": serializer.data,
+                "results": decrypted_results,
                 "count": total_count,
                 "page": page,
                 "page_size": page_size,
@@ -265,13 +284,21 @@ class ChatMemoryView(APIView):
         conversation_history = [
             {
                 "role": "user" if m.sender == "user" else "assistant",
-                "content": m.text,
+                "content": decrypt_chat_message(m.text, user_id=str(user_id), client_key=user_key),
             }
             for m in recent_turns_qs
         ]
 
-        # 1. Store user message in PostgreSQL
+        # Automatic Client-Key Handover on post
+        if user_key:
+            try:
+                migrate_user_messages_to_client_key(str(user_id), user_key)
+            except Exception as exc:
+                logger.warning(f"Error during client-key handover on post: {exc}")
+
+        # 1. Store user message in PostgreSQL (Encrypted with client key if provided, else server shield)
         try:
+            encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
             PersonaChatMessage.objects.create(
                 user=user_obj,
                 user_identifier=str(user_id),
@@ -279,7 +306,7 @@ class ChatMemoryView(APIView):
                 persona_identifier=str(persona_id),
                 namespace=namespace,
                 sender="user",
-                text=message,
+                text=encrypted_user_msg,
                 conflict_stage=current_conflict_stage,
                 client_message_id=client_message_id,
             )
@@ -316,8 +343,9 @@ class ChatMemoryView(APIView):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-            # 3. Store bot response in PostgreSQL
+            # 3. Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
             try:
+                encrypted_bot_msg = encrypt_chat_message(reply_text, user_id=str(user_id), client_key=user_key)
                 bot_msg_record = PersonaChatMessage.objects.create(
                     user=user_obj,
                     user_identifier=str(user_id),
@@ -325,7 +353,7 @@ class ChatMemoryView(APIView):
                     persona_identifier=str(persona_id),
                     namespace=namespace,
                     sender="bot",
-                    text=reply_text,
+                    text=encrypted_bot_msg,
                     conflict_stage=new_conflict_stage,
                 )
                 bot_msg_id = str(bot_msg_record.id)

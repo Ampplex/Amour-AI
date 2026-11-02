@@ -63,6 +63,13 @@ class AdminConsoleWebView(View):
         for c in recent_chats:
             c["id"] = str(c["id"])
             c["created_at"] = c["created_at"].strftime("%b %d, %H:%M") if c.get("created_at") else ""
+            raw_text = c.get("text", "")
+            if raw_text.startswith("enc:v2:zk:"):
+                c["text"] = "🔒 [Zero-Knowledge Client Encrypted — Content Locked]"
+            elif raw_text.startswith("enc:v2:srv:") or raw_text.startswith("enc:v2:"):
+                c["text"] = "🛡️ [AES-256 Encrypted at Rest — Content Locked]"
+            else:
+                c["text"] = raw_text[:60] + ("..." if len(raw_text) > 60 else "")
 
         html = f"""<!DOCTYPE html>
 <html lang="en" class="dark">

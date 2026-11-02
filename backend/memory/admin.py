@@ -57,7 +57,12 @@ class PersonaChatMessageAdmin(admin.ModelAdmin):
     ordering = ("-created_at",)
 
     def short_text(self, obj):
-        return obj.text[:80] + ("..." if len(obj.text) > 80 else "")
+        txt = obj.text or ""
+        if txt.startswith("enc:v2:zk:"):
+            return "🔒 [Zero-Knowledge Client Encrypted]"
+        if txt.startswith("enc:v2:srv:") or txt.startswith("enc:v2:"):
+            return "🛡️ [AES-256 Encrypted at Rest]"
+        return txt[:80] + ("..." if len(txt) > 80 else "")
     short_text.short_description = "Message"
 
 
