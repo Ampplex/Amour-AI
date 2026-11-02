@@ -33,6 +33,7 @@ from .serializers import (
     ResendVerificationSerializer,
 )
 from .email_service import send_verification_email, send_password_reset_email
+from .deletion_service import delete_user_account_and_memories
 
 logger = logging.getLogger("amour.auth")
 
@@ -1364,8 +1365,266 @@ class AdminUserDetailView(APIView):
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
         user_email = user.email
-        user.delete()
+        report = delete_user_account_and_memories(user)
         return Response({
             "success": True,
-            "message": f"User {user_email} has been permanently deleted from database",
+            "message": f"User {user_email} and all associated graph memories permanently wiped.",
+            "report": report,
         }, status=status.HTTP_200_OK)
+
+
+class DeleteAccountView(APIView):
+    """
+    Authenticated endpoint for an in-app user to permanently delete their own account
+    and all associated Neo4j graph memories and PostgreSQL database rows.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        user = request.user
+        user_email = user.email
+        report = delete_user_account_and_memories(user)
+        return Response({
+            "success": True,
+            "message": f"Account for {user_email} and all associated memories permanently deleted.",
+            "report": report,
+        }, status=status.HTTP_200_OK)
+
+
+class WebAccountDeletionView(APIView):
+    """
+    Public web page and request form for Account and Data Deletion.
+    Complies with Google Play Store Account Deletion Policy requirements:
+    Users can request their account and all associated data to be permanently erased.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Account & Data Deletion - Amour AI</title>
+  <style>
+    :root {
+      --bg: #09090B;
+      --card-bg: #121216;
+      --border: #27272A;
+      --accent: #F43F5E;
+      --accent-hover: #E11D48;
+      --text-primary: #FFFFFF;
+      --text-secondary: #A1A1AA;
+      --text-muted: #71717A;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.65;
+      padding: 40px 20px 80px 20px;
+    }
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 44px 36px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: rgba(244, 63, 94, 0.12);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      border-radius: 20px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 12px;
+      color: #FFFFFF;
+    }
+    p {
+      color: var(--text-secondary);
+      font-size: 15px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: #18181B;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+    }
+    .card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: #FFFFFF;
+    }
+    .card ul {
+      margin-left: 20px;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    .card ul li { margin-bottom: 6px; }
+    form {
+      margin-top: 24px;
+      background: #18181B;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+    }
+    .form-group {
+      margin-bottom: 18px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    input[type="email"], input[type="password"] {
+      width: 100%;
+      padding: 12px 16px;
+      background: #09090B;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: #FFFFFF;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="email"]:focus, input[type="password"]:focus {
+      border-color: var(--accent);
+    }
+    .btn-delete {
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #FFFFFF;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-delete:hover {
+      background: var(--accent-hover);
+    }
+    .footer {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="badge">Amour AI • Google Play Compliance</div>
+    <h1>Request Account & Data Deletion</h1>
+    <p>In accordance with our Privacy Policy and Google Play Developer policies, you have the full right to permanently delete your Amour AI account and all associated personal data at any time.</p>
+
+    <div class="card">
+      <h3>What data will be permanently wiped?</h3>
+      <ul>
+        <li><strong>Account Profile & Credentials:</strong> Email, username, authentication tokens, and user profile data in PostgreSQL.</li>
+        <li><strong>AI Companion Memory Graph:</strong> All episodic memory nodes, emotional knowledge graphs, entity relationships, and states stored in our cloud Neo4j Aura instance.</li>
+        <li><strong>Chat History & Logs:</strong> Every message transcript and relationship dynamic stored across all personas.</li>
+        <li><strong>Zero-Knowledge Memory Backups:</strong> Client-encrypted key blobs and recovery salts.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>How to Delete Your Data</h3>
+      <p style="margin-bottom: 10px;"><strong>Method 1: Inside the Mobile App (Instant)</strong></p>
+      <p style="font-size: 14px; margin-bottom: 16px;">Open the Amour AI app &gt; Go to <strong>Settings / Profile</strong> &gt; Tap <strong>Delete Account</strong>.</p>
+      <p style="margin-bottom: 10px;"><strong>Method 2: Web Deletion Request Form</strong></p>
+      <p style="font-size: 14px;">Enter your registered account credentials below to immediately and irreversibly delete your account and all associated AI memories from our servers.</p>
+    </div>
+
+    <form method="POST" action="/delete-account/">
+      <div class="form-group">
+        <label for="email">Registered Email Address</label>
+        <input type="email" id="email" name="email" required placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label for="password">Account Password</label>
+        <input type="password" id="password" name="password" required placeholder="Enter your password">
+      </div>
+      <button type="submit" class="btn-delete" onclick="return confirm('Are you completely sure? This will PERMANENTLY ERASE all your chats, personas, and memory graphs. This action CANNOT be undone.');">Permanently Delete My Account & Memories</button>
+    </form>
+
+    <div class="footer">
+      Support Contact: <a href="mailto:ankesh3905222@gmail.com" style="color: var(--accent); text-decoration: none;">ankesh3905222@gmail.com</a><br>
+      &copy; 2026 Amour AI. Zero-knowledge, private personal AI companions.
+    </div>
+  </div>
+</body>
+</html>"""
+        return HttpResponse(html)
+
+    def post(self, request):
+        email = request.POST.get("email", "").strip().lower()
+        password = request.POST.get("password", "")
+
+        if not email or not password:
+            return HttpResponse(
+                "<script>alert('Please provide both email and password.'); window.history.back();</script>",
+                status=400,
+            )
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user or not user.check_password(password):
+            return HttpResponse(
+                "<script>alert('Invalid email or password. Could not authenticate deletion request.'); window.history.back();</script>",
+                status=401,
+            )
+
+        try:
+            report = delete_user_account_and_memories(user)
+            success_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Account Deleted - Amour AI</title>
+  <style>
+    body {{ background: #09090B; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }}
+    .card {{ background: #121216; border: 1px solid #27272A; border-radius: 18px; padding: 40px; max-width: 480px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }}
+    .badge {{ display: inline-block; padding: 6px 14px; background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px; color: #22C55E; font-size: 13px; font-weight: 700; margin-bottom: 16px; }}
+    h1 {{ font-size: 24px; margin-bottom: 12px; }}
+    p {{ color: #A1A1AA; font-size: 15px; line-height: 1.5; margin-bottom: 24px; }}
+    .btn {{ display: inline-block; background: #F43F5E; color: #FFFFFF; text-decoration: none; font-weight: 600; padding: 12px 28px; border-radius: 10px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">ERASURE COMPLETE</div>
+    <h1>Account Successfully Deleted</h1>
+    <p>Your account (<strong>{email}</strong>), along with all conversational logs and Neo4j long-term memory graph data, has been permanently deleted from our servers.</p>
+    <a href="/" class="btn">Return to Home</a>
+  </div>
+</body>
+</html>"""
+            return HttpResponse(success_html)
+        except Exception as exc:
+            return HttpResponse(f"<script>alert('Error deleting account: {exc}'); window.history.back();</script>", status=500)
+

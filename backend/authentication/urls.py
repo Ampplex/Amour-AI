@@ -15,6 +15,8 @@ from .views import (
     ProfilePictureUploadView,
     AdminUsersView,
     AdminUserDetailView,
+    DeleteAccountView,
+    WebAccountDeletionView,
 )
 
 urlpatterns = [
@@ -30,6 +32,8 @@ urlpatterns = [
     path("me/", MeView.as_view(), name="auth-me"),
     path("profile/", ProfileView.as_view(), name="auth-profile"),
     path("profile/upload-picture/", ProfilePictureUploadView.as_view(), name="auth-profile-upload-picture"),
+    path("delete-account/", DeleteAccountView.as_view(), name="auth-delete-account"),
+    path("delete-account-web/", WebAccountDeletionView.as_view(), name="auth-web-delete-account"),
     path("users/", UserListView.as_view(), name="auth-users"),
     path("admin/users/", AdminUsersView.as_view(), name="auth-admin-users"),
     path("admin/users/<str:user_id>/", AdminUserDetailView.as_view(), name="auth-admin-user-detail"),
