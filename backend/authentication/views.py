@@ -75,6 +75,190 @@ def _get_public_base_url(request=None) -> str:
         return "https://amour-ai-d6a8.onrender.com"
     return configured
 
+
+class PrivacyPolicyView(APIView):
+    """
+    Public web view displaying Amour AI's Privacy Policy.
+    Complies with Google Play Developer Policy and Data Safety requirements.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - Amour AI</title>
+  <style>
+    :root {
+      --bg: #09090B;
+      --card-bg: #121216;
+      --border: #27272A;
+      --accent: #F43F5E;
+      --text-primary: #FFFFFF;
+      --text-secondary: #A1A1AA;
+      --text-muted: #71717A;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.65;
+      padding: 40px 20px 80px 20px;
+    }
+    .container {
+      max-width: 780px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 48px 40px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: rgba(244, 63, 94, 0.12);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      border-radius: 10px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .meta {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 28px 0 12px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    p {
+      color: var(--text-secondary);
+      font-size: 15px;
+      margin-bottom: 14px;
+    }
+    ul {
+      margin: 8px 0 18px 24px;
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    li { margin-bottom: 8px; }
+    .highlight-box {
+      background: rgba(244, 63, 94, 0.08);
+      border-left: 4px solid var(--accent);
+      padding: 16px 20px;
+      border-radius: 0 12px 12px 0;
+      margin: 20px 0;
+    }
+    .highlight-box p {
+      color: #FECDD3;
+      margin: 0;
+      font-weight: 500;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .footer {
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 13px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="badge">AMOUR AI</div>
+    <h1>Privacy Policy</h1>
+    <div class="meta">Last Updated: November 2, 2026 &bull; Application: Amour AI (com.amour.chat)</div>
+
+    <div class="highlight-box">
+      <p><strong>Zero-Knowledge Memory Guarantee:</strong> Your private conversations and AI persona memories are protected with client-managed AES-256-GCM encryption. The decryption key is generated and stored exclusively on your device hardware (Keystore / Keychain). Our servers, database administrators, and cloud hosts cannot read your encrypted memories.</p>
+    </div>
+
+    <h2>1. Introduction</h2>
+    <p>Amour AI ("we", "our", or "us"), operated by Ampplex, is committed to safeguarding your personal data and upholding user privacy. This Privacy Policy outlines our practices concerning data collection, zero-knowledge encryption architecture, and your rights when using the Amour AI mobile application.</p>
+
+    <h2>2. Zero-Knowledge Cryptographic Architecture</h2>
+    <p>Amour AI incorporates client-managed encryption for conversational memories:</p>
+    <ul>
+      <li><strong>Hardware Key Storage:</strong> A 256-bit cryptographically secure key is generated upon initial launch and stored within your mobile device's secure enclave (iOS Keychain or Android Keystore via Expo SecureStore).</li>
+      <li><strong>Client-Side Encryption:</strong> Memory graphs, factual summaries, and persona episodes are encrypted using authenticated AES-256-GCM prior to transmission or persistence to our cloud graph database (Neo4j).</li>
+      <li><strong>Account Recovery:</strong> Users can optionally backup their key encrypted with a 12-word BIP-39 recovery phrase. The server stores only the ciphertext, salt, and nonce. Without your 12-word phrase, recovery blobs are mathematically unrecoverable by anyone, including Amour AI.</li>
+    </ul>
+
+    <h2>3. Information We Collect</h2>
+    <p>We collect only the minimum information necessary to provide account synchronization and services:</p>
+    <ul>
+      <li><strong>Account Information:</strong> When you register an account, we collect your email address, display name, and password hash (PBKDF2/SHA-256). For Google Sign-In, we receive your email and verified profile name.</li>
+      <li><strong>Device Identifiers:</strong> Ephemeral device installation IDs used for notification routing and session management.</li>
+      <li><strong>User-Generated Content:</strong> Custom personas, persona avatars, and memory backstories you create or publish.</li>
+    </ul>
+
+    <h2>4. How We Use Information</h2>
+    <p>We process your data strictly to:</p>
+    <ul>
+      <li>Authenticate your identity and provide secure session tokens (JWT).</li>
+      <li>Route roleplay inferencing to LLM processors (AWS Bedrock / Groq) in real-time.</li>
+      <li>Store and retrieve encrypted long-term memory graphs via Reeve Engine.</li>
+      <li>Send transactional security emails (account confirmation and password recovery via Brevo).</li>
+    </ul>
+
+    <h2>5. Third-Party Processors</h2>
+    <p>We partner with enterprise-grade cloud infrastructure providers adhering to strict security standards:</p>
+    <ul>
+      <li><strong>AI Inferencing:</strong> AWS Bedrock and Groq process dialogue prompts ephemerally. Your data is not used to train foundational AI models.</li>
+      <li><strong>Database & Storage:</strong> Neon Serverless PostgreSQL and Neo4j Aura for graph persistence (storing encrypted ciphertext).</li>
+      <li><strong>Email Delivery:</strong> Brevo for transactional email authentication.</li>
+    </ul>
+
+    <h2>6. Data Retention & Deletion Rights</h2>
+    <p>You have full ownership and control over your personal data:</p>
+    <ul>
+      <li><strong>In-App Memory Erasure:</strong> You can clear all conversational memories for any persona directly within the app at any time.</li>
+      <li><strong>Account Deletion:</strong> You may request complete account deletion and permanent data purging by contacting us at <a href="mailto:ankesh3905222@gmail.com">ankesh3905222@gmail.com</a>. All associated records and backups will be irrevocably deleted within 30 days.</li>
+    </ul>
+
+    <h2>7. Age Requirement (18+)</h2>
+    <p>Amour AI is strictly intended for individuals aged <strong>18 and older</strong>. We do not knowingly solicit or collect data from anyone under 18 years of age. If we learn that personal data of a minor has been collected, we will take immediate steps to delete the account and associated records.</p>
+
+    <h2>8. Changes to this Policy</h2>
+    <p>We may periodically update this policy to reflect operational, legal, or regulatory requirements. Any updates will be posted to this URL with an updated revision date.</p>
+
+    <h2>9. Contact Us</h2>
+    <p>If you have any questions, security disclosures, or privacy requests regarding Amour AI, please contact our team:</p>
+    <p><strong>Email:</strong> <a href="mailto:ankesh3905222@gmail.com">ankesh3905222@gmail.com</a><br>
+    <strong>Developer:</strong> Ampplex &bull; Ankesh Kumar</p>
+
+    <div class="footer">
+      &copy; 2026 Amour AI &bull; All Rights Reserved
+    </div>
+  </div>
+</body>
+</html>"""
+        return HttpResponse(html, content_type="text/html")
+
+
 class GoogleAuthView(APIView):
     permission_classes = [AllowAny]
 
