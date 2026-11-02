@@ -14,6 +14,7 @@
     },
     "android": {
       "package": "com.amour.chat",
+      "versionCode": 1,
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#000000",
@@ -44,6 +45,16 @@
       "@react-native-google-signin/google-signin",
       "expo-font",
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "315e4dd2-deea-4bea-a34a-f6cf4991ea04"
+      }
+    }
   }
 }
