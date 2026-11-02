@@ -54,23 +54,6 @@ class AdminConsoleWebView(View):
             p["id"] = str(p["id"])
             p["created_at"] = p["created_at"].strftime("%Y-%m-%d %H:%M") if p.get("created_at") else ""
 
-        # Preload recent chats
-        recent_chats = list(
-            PersonaChatMessage.objects.select_related("persona", "user")
-            .order_by("-created_at")
-            .values("id", "user_identifier", "persona_identifier", "sender", "text", "conflict_stage", "created_at")[:40]
-        )
-        for c in recent_chats:
-            c["id"] = str(c["id"])
-            c["created_at"] = c["created_at"].strftime("%b %d, %H:%M") if c.get("created_at") else ""
-            raw_text = c.get("text", "")
-            if raw_text.startswith("enc:v2:zk:"):
-                c["text"] = "🔒 [Zero-Knowledge Client Encrypted — Content Locked]"
-            elif raw_text.startswith("enc:v2:srv:") or raw_text.startswith("enc:v2:"):
-                c["text"] = "🛡️ [AES-256 Encrypted at Rest — Content Locked]"
-            else:
-                c["text"] = raw_text[:60] + ("..." if len(raw_text) > 60 else "")
-
         html = f"""<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
@@ -220,9 +203,6 @@ class AdminConsoleWebView(View):
       <button onclick="switchTab('personas')" id="tab-btn-personas" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
         <span>🎭 Personas ({total_personas})</span>
       </button>
-      <button onclick="switchTab('chats')" id="tab-btn-chats" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
-        <span>💬 Recent Messages</span>
-      </button>
     </div>
 
     <!-- TAB 1: USERS MANAGEMENT -->
@@ -316,34 +296,6 @@ class AdminConsoleWebView(View):
       </div>
     </section>
 
-    <!-- TAB 3: RECENT CHAT MESSAGES -->
-    <section id="tab-chats" class="hidden space-y-4">
-      <div class="rounded-xl border border-dark-border bg-dark-card p-4 space-y-3">
-        <h3 class="font-bold text-sm text-white">Live Conversation Stream</h3>
-        <p class="text-xs text-zinc-400">Inspecting recent interaction turns across personas.</p>
-        <div class="divide-y divide-dark-border">
-          {"".join([f'''
-          <div class="py-3 flex items-start justify-between space-x-3">
-            <div class="flex items-start space-x-3">
-              <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase mt-0.5 {'bg-brand-500/20 text-brand-400' if c['sender'] == 'bot' else 'bg-indigo-500/20 text-indigo-400'}">
-                {c['sender']}
-              </span>
-              <div>
-                <p class="text-xs text-zinc-200">{c['text']}</p>
-                <div class="flex items-center space-x-3 mt-1 text-[10px] text-zinc-500">
-                  <span>User: <span class="text-zinc-400">{c['user_identifier'][:14]}...</span></span>
-                  <span>Persona: <span class="text-zinc-400">{c['persona_identifier'][:14]}...</span></span>
-                  <span>Stage: <span class="text-zinc-400">{c['conflict_stage']}</span></span>
-                </div>
-              </div>
-            </div>
-            <span class="text-[10px] text-zinc-500 whitespace-nowrap">{c['created_at']}</span>
-          </div>
-          ''' for c in recent_chats])}
-        </div>
-      </div>
-    </section>
-
   </main>
 
   <!-- EDIT USER MODAL -->
@@ -411,9 +363,8 @@ class AdminConsoleWebView(View):
     function switchTab(tab) {{
       document.getElementById('tab-users').classList.toggle('hidden', tab !== 'users');
       document.getElementById('tab-personas').classList.toggle('hidden', tab !== 'personas');
-      document.getElementById('tab-chats').classList.toggle('hidden', tab !== 'chats');
 
-      ['users', 'personas', 'chats'].forEach(t => {{
+      ['users', 'personas'].forEach(t => {{
         const btn = document.getElementById(`tab-btn-${{t}}`);
         if (t === tab) {{
           btn.className = "px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 bg-brand-500 text-white";
