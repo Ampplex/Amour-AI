@@ -83,6 +83,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 2000);
 
     const initializeAuth = async () => {
+      // Always initialize GoogleSignin configuration first unconditionally
+      try {
+        GoogleSignin.configure({
+          webClientId: GOOGLE_CONFIG.clientId,
+          offlineAccess: false,
+        });
+      } catch (cfgErr) {
+        console.log('[GoogleSignin] Early config notice:', cfgErr);
+      }
+
       // 1. Try restoring stored local email session
       try {
         const stored = await AsyncStorage.getItem(LOCAL_SESSION_KEY);
@@ -242,6 +252,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Try native Google Sign-In first (Google Play Services on Android)
     try {
+      GoogleSignin.configure({
+        webClientId: GOOGLE_CONFIG.clientId,
+        offlineAccess: false,
+      });
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const signinResult = await GoogleSignin.signIn();
       console.log('[Google Auth] Native Google sign-in completed');
