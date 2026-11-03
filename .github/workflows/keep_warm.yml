@@ -1,0 +1,24 @@
+name: Keep Render Server Warm
+
+on:
+  schedule:
+    # Run every 10 minutes (Render sleeps after 15 min idle)
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  ping-render:
+    name: Ping Render Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Ping Memory Status Endpoint
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://amour-ai-d6a8.onrender.com/api/memory/status/")
+          echo "Pinged Render /api/memory/status/ - HTTP Status: $RESPONSE"
+          if [ "$RESPONSE" -eq 200 ]; then
+            echo "Render backend is warm and healthy."
+          else
+            echo "Warning: Received HTTP $RESPONSE"
+          fi
