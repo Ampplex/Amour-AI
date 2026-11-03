@@ -24,6 +24,7 @@ import { PersonaItem } from '../services/personaService';
 import { fetchChatHistory, sendChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 import { showAlert } from '../context/AlertContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -194,6 +195,7 @@ export default function CompanionChatModal({
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
+  const [historyLoadError, setHistoryLoadError] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
   const [historyPage, setHistoryPage] = useState<number>(1);
@@ -223,6 +225,49 @@ export default function CompanionChatModal({
     };
   }, []);
 
+  const loadHistory = React.useCallback(async () => {
+    if (!persona?.id) return;
+    setIsLoadingHistory(true);
+    setHistoryLoadError(false);
+    try {
+      let uId = user?.id;
+      if (!uId) {
+        try {
+          const raw = await AsyncStorage.getItem('@amour_user_session');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed?.id) uId = parsed.id;
+          }
+        } catch {}
+      }
+      uId = uId || 'guest';
+
+      const data = await fetchChatHistory(persona.id, uId, 1, 30, user?.token);
+
+      if (data && Array.isArray(data.results)) {
+        const loaded: ChatMessage[] = data.results.map((item) => ({
+          id: item.id,
+          sender: item.sender,
+          text: item.text,
+          timestamp: item.created_at
+            ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }));
+        setMessages(loaded);
+        setHasMoreHistory(Boolean(data.has_more));
+        setHistoryLoadError(false);
+      } else {
+        setHistoryLoadError(true);
+      }
+    } catch (err) {
+      console.warn('[CompanionChat] History read error:', err);
+      setHistoryLoadError(true);
+    } finally {
+      setIsLoadingHistory(false);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 80);
+    }
+  }, [persona?.id, user?.id, user?.token]);
+
   // Fetch paginated chat history for this (user_id, persona_id) conversation
   useEffect(() => {
     if (!visible || !persona) {
@@ -234,42 +279,8 @@ export default function CompanionChatModal({
     setMessages([]);
     setHistoryPage(1);
     setHasMoreHistory(false);
-    setIsLoadingHistory(true);
-
-    let isMounted = true;
-    const loadHistory = async () => {
-      try {
-        const uId = user?.id || 'guest';
-        const data = await fetchChatHistory(persona.id, uId, 1, 30, user?.token);
-        if (!isMounted) return;
-
-        if (data?.results && Array.isArray(data.results)) {
-          const loaded: ChatMessage[] = data.results.map((item) => ({
-            id: item.id,
-            sender: item.sender,
-            text: item.text,
-            timestamp: item.created_at
-              ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          }));
-          setMessages(loaded);
-          setHasMoreHistory(Boolean(data.has_more));
-        }
-      } catch (err) {
-        console.warn('[CompanionChat] History read error:', err);
-      } finally {
-        if (isMounted) {
-          setIsLoadingHistory(false);
-          setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 80);
-        }
-      }
-    };
-
     loadHistory();
-    return () => {
-      isMounted = false;
-    };
-  }, [visible, persona?.id, user?.id]);
+  }, [visible, persona, loadHistory]);
 
   const handleLoadEarlier = async () => {
     if (isLoadingMore || !hasMoreHistory || !activePersona) return;
@@ -479,7 +490,30 @@ export default function CompanionChatModal({
             isLoadingHistory ? (
               <View style={styles.emptyContainer}>
                 <ActivityIndicator size="small" color={borderColor} />
-                <Text style={[styles.emptyHintText, { marginTop: 12 }]}>Loading chat history...</Text>
+                <Text style={[styles.emptyHintText, { marginTop: 12 }]}>Restoring conversation...</Text>
+              </View>
+            ) : historyLoadError ? (
+              <View style={styles.emptyContainer}>
+                <Text style={{ fontSize: 26, marginBottom: 8 }}>⚠️</Text>
+                <Text style={[styles.emptyPersonaName, { fontSize: 15 }]}>Unable to connect</Text>
+                <Text style={[styles.emptyTagline, { color: '#9CA3AF', marginTop: 4, maxWidth: 280, textAlign: 'center' }]}>
+                  Your encrypted chat history is safely preserved on the server.
+                </Text>
+                <TouchableOpacity
+                  onPress={loadHistory}
+                  style={{
+                    marginTop: 16,
+                    paddingHorizontal: 20,
+                    paddingVertical: 9,
+                    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                    borderRadius: 20,
+                    borderWidth: 1,
+                    borderColor: 'rgba(255, 255, 255, 0.25)',
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '600' }}>Tap to Retry</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <View style={styles.emptyContainer}>

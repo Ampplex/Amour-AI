@@ -25,6 +25,7 @@ import { showAlert } from '../../context/AlertContext';
 import {
   FeedPersonaItem,
   fetchFeedPage,
+  getCachedFeed,
   togglePersonaLike,
   togglePublisherFollow,
   formatCount,
@@ -341,7 +342,10 @@ export default function HomeScreen() {
     if (isRefresh) {
       setRefreshing(true);
     } else {
-      setLoading(true);
+      setFeedItems((current) => {
+        if (current.length === 0) setLoading(true);
+        return current;
+      });
     }
 
     try {
@@ -357,8 +361,19 @@ export default function HomeScreen() {
     }
   }, [user?.id]);
 
+  // Frame-1 Instant Render from cache + silent background refresh
   useEffect(() => {
+    let isMounted = true;
+    getCachedFeed().then((cached) => {
+      if (isMounted && cached && cached.length > 0) {
+        setFeedItems((current) => (current.length === 0 ? cached : current));
+        setLoading(false);
+      }
+    });
     loadInitialFeed(false);
+    return () => {
+      isMounted = false;
+    };
   }, [loadInitialFeed]);
 
   // Load next page on scroll reached
