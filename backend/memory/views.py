@@ -187,16 +187,16 @@ class ChatMemoryView(APIView):
 
         user_id = request.user.id if request.user.is_authenticated else (request.data.get("user_id") or "guest")
 
-        # Resolve user name if not explicitly provided
+        # Resolve user name if not explicitly provided (prioritize latest custom display name over raw OAuth given_name)
         if not user_name:
             if request.user.is_authenticated:
-                user_name = getattr(request.user, "given_name", "") or getattr(request.user, "name", "")
+                user_name = getattr(request.user, "name", "") or getattr(request.user, "given_name", "")
             elif user_id and user_id != "guest":
                 try:
                     from authentication.models import User
                     u = User.objects.filter(id=user_id).first()
                     if u:
-                        user_name = u.given_name or (u.name.split()[0] if u.name else "") or u.name
+                        user_name = (u.name.split()[0] if u.name else "") or u.name or u.given_name or ""
                 except Exception:
                     pass
 

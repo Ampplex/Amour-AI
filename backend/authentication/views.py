@@ -1067,7 +1067,9 @@ class ProfileView(APIView):
             user.username = clean_username
 
         if new_name is not None and new_name.strip():
-            user.name = new_name.strip()
+            clean_display_name = new_name.strip()
+            user.name = clean_display_name
+            user.given_name = clean_display_name.split()[0] if clean_display_name else ""
 
         if new_picture is not None:
             user.picture = new_picture.strip()

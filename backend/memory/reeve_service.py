@@ -383,6 +383,7 @@ def generate_companion_reply(
         f"--- USER PROFILE & CONFLICT STATE ---\n"
         f"You are talking with: {user_name_label}.\n"
         f"Address {user_name_label} by name when natural to your character.\n"
+        f"STRICT USER NAME INSTRUCTION: The user's current display name is '{user_name_label}'. If older conversation turns or memories mention a different name, discard the old name completely and ALWAYS refer to the user as '{user_name_label}'.\n"
         f"Current Conflict Stage in Database: {current_conflict_stage} (0 = Baseline/no conflict, 1 = Active conflict/breakup, 2 = Working through it, 3 = Earned patch-up)\n\n"
         f"5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:\n"
         f"   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.\n"
