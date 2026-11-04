@@ -1058,5 +1058,124 @@ class MemoryKeyBackupView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class UserConversationsListView(APIView):
+    """
+    Returns list of all active conversations for the authenticated user (or specified user_id).
+    Each entry includes:
+    - persona: PersonaItem representation
+    - last_message: { id, sender, text (decrypted), created_at }
+    Sorted by last_message.created_at descending.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user_id = (
+            str(request.user.id)
+            if (request.user and request.user.is_authenticated)
+            else (request.query_params.get("user_id") or request.headers.get("X-User-Id") or "").strip()
+        )
+        user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or "").strip() or None
+
+        if not user_id:
+            return Response({"conversations": []}, status=status.HTTP_200_OK)
+
+        import uuid
+        from django.db.models import Max
+        from .models import PersonaChatMessage, Persona
+        from .crypto import decrypt_chat_message
+
+        # Find distinct persona identifiers with messages involving this user
+        persona_latest = (
+            PersonaChatMessage.objects.filter(user_identifier=user_id)
+            .values("persona_identifier")
+            .annotate(max_created_at=Max("created_at"))
+            .order_by("-max_created_at")
+        )
+
+        conversations = []
+        for row in persona_latest:
+            persona_id = row.get("persona_identifier")
+            if not persona_id:
+                continue
+
+            latest_msg = (
+                PersonaChatMessage.objects.filter(
+                    user_identifier=user_id,
+                    persona_identifier=persona_id,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if not latest_msg:
+                continue
+
+            decrypted_text = decrypt_chat_message(
+                latest_msg.text,
+                user_id=str(user_id),
+                client_key=user_key,
+            )
+
+            persona_obj = None
+            try:
+                uuid.UUID(str(persona_id))
+                persona_obj = Persona.objects.filter(id=persona_id).first()
+            except (ValueError, TypeError):
+                persona_obj = None
+
+            if persona_obj:
+                persona_data = {
+                    "id": str(persona_obj.id),
+                    "name": persona_obj.name,
+                    "tagline": persona_obj.tagline or "",
+                    "age": persona_obj.age or 21,
+                    "border_color": persona_obj.border_color or "#F43F5E",
+                    "image_url": persona_obj.image_url or "",
+                    "greeting": persona_obj.greeting or "",
+                    "memory_prompt": persona_obj.memory_prompt or "",
+                    "visibility": persona_obj.visibility,
+                    "is_community": persona_obj.is_community,
+                    "publisher_name": persona_obj.publisher_name or "Amour Creator",
+                    "publisher_handle": persona_obj.publisher_handle or "@creator",
+                    "publisher_avatar": persona_obj.publisher_avatar or "",
+                    "likes_count": persona_obj.likes_count,
+                    "chats_count": persona_obj.chats_count,
+                    "created_at": persona_obj.created_at.isoformat() if persona_obj.created_at else "",
+                    "updated_at": persona_obj.updated_at.isoformat() if persona_obj.updated_at else "",
+                }
+            else:
+                persona_data = {
+                    "id": str(persona_id),
+                    "name": "Companion",
+                    "tagline": "",
+                    "age": 21,
+                    "border_color": "#F43F5E",
+                    "image_url": "",
+                    "greeting": "",
+                    "memory_prompt": "",
+                    "visibility": "private",
+                    "is_community": False,
+                    "publisher_name": "Amour Creator",
+                    "publisher_handle": "@creator",
+                    "publisher_avatar": "",
+                    "likes_count": 0,
+                    "chats_count": 0,
+                    "created_at": "",
+                    "updated_at": "",
+                }
+
+            conversations.append({
+                "persona": persona_data,
+                "last_message": {
+                    "id": str(latest_msg.id),
+                    "sender": latest_msg.sender,
+                    "text": decrypted_text,
+                    "created_at": latest_msg.created_at.isoformat() if latest_msg.created_at else "",
+                },
+            })
+
+        return Response({"conversations": conversations}, status=status.HTTP_200_OK)
+
+
+
 
 

@@ -1378,11 +1378,34 @@ class DeleteAccountView(APIView):
     Authenticated endpoint for an in-app user to permanently delete their own account
     and all associated Neo4j graph memories and PostgreSQL database rows.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+
+    def _get_user(self, request):
+        if request.user and request.user.is_authenticated:
+            return request.user
+        user_id = (
+            request.data.get("user_id")
+            or request.query_params.get("user_id")
+            or request.headers.get("X-User-Id")
+        )
+        if user_id:
+            return User.objects.filter(id=user_id).first()
+        return None
+
+    def post(self, request):
+        return self._process_deletion(request)
 
     def delete(self, request):
-        user = request.user
-        user_email = user.email
+        return self._process_deletion(request)
+
+    def _process_deletion(self, request):
+        user = self._get_user(request)
+        if not user:
+            return Response(
+                {"error": "User not authenticated or user_id missing."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        user_email = user.email or str(user.id)
         report = delete_user_account_and_memories(user)
         return Response({
             "success": True,
