@@ -15,7 +15,7 @@ import {
   Dimensions,
   Animated,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
@@ -188,7 +188,6 @@ export default function CompanionChatModal({
   persona,
   onClose,
 }: CompanionChatModalProps) {
-  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [activePersona, setActivePersona] = useState<PersonaItem | null>(persona);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -590,7 +589,7 @@ export default function CompanionChatModal({
               paddingBottom:
                 keyboardHeight > 0
                   ? keyboardHeight + (Platform.OS === 'android' ? 6 : 4)
-                  : Math.max(insets.bottom + 4, Platform.OS === 'ios' ? 12 : 14),
+                  : (Platform.OS === 'ios' ? 12 : 14),
             },
           ]}
         >
