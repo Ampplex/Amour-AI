@@ -107,7 +107,7 @@ export async function fetchChatHistory(
 ): Promise<ChatHistoryResponse | null> {
   const query = `persona_id=${encodeURIComponent(personaId)}&user_id=${encodeURIComponent(userId)}&page=${page}&page_size=${pageSize}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), 20000);
 
   try {
     const userKey = await getOrCreateUserKey();
