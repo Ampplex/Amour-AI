@@ -52,6 +52,14 @@ logger = logging.getLogger("amour.reeve")
 if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
     os.environ["REEVE_API_KEY"] = settings.REEVE_API_KEY
 
+# Enable Reeve's native background worker (PersistWorker) and WriteAhead buffer
+os.environ["ASYNC_WRITE_ENABLED"] = "true"
+try:
+    import threelane_memory.config as _tmc
+    _tmc.ASYNC_WRITE_ENABLED = True
+except ImportError:
+    pass
+
 
 def _get_memory_tools():
     """
@@ -81,6 +89,8 @@ def get_reeve_status():
             "neo4j_connected": cfg.get("neo4j_connected", False),
             "chat_model": cfg.get("chat_model"),
             "engine_mode": "embedded_in_process" if os.getenv("NEO4J_URI") else "remote_mcp",
+            "async_write_enabled": cfg.get("async_write_enabled", False),
+            "async_worker_running": cfg.get("async_worker_running", False),
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

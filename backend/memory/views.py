@@ -1,6 +1,5 @@
 import logging
 import time
-import threading
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -20,33 +19,6 @@ from .reeve_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _ingest_persona_memory_async(persona_name: str, memory_prompt: str, greeting: str, namespace: str):
-    """
-    Ingest persona core backstory and initial greeting scenario into Reeve / Neo4j
-    in a background worker thread to keep HTTP GET latency sub-100ms.
-    """
-    try:
-        from django.db import close_old_connections
-        close_old_connections()
-        from .reeve_service import store_memory_for_user
-        if memory_prompt and memory_prompt.strip():
-            store_memory_for_user(
-                f"Core Story & Mind of {persona_name}:\n{memory_prompt.strip()}",
-                namespace,
-            )
-        if greeting and greeting.strip():
-            store_memory_for_user(f"Assistant: {greeting.strip()}", namespace)
-        logger.info(f"[Reeve Async] Successfully ingested initial memory for {persona_name} in {namespace}")
-    except Exception as exc:
-        logger.warning(f"[Reeve Async] Could not ingest initial persona memory: {exc}")
-    finally:
-        try:
-            from django.db import close_old_connections
-            close_old_connections()
-        except Exception:
-            pass
 
 class ReeveStatusView(APIView):
     permission_classes = [AllowAny]
@@ -144,18 +116,24 @@ class ChatMemoryView(APIView):
                     except Exception as exc:
                         logger.warning(f"Could not persist initial greeting: {exc}")
 
-                # 2. Ingest persona core memory + greeting into Reeve graph in a background thread
-                # This keeps the initial HTTP GET response instantaneous (<100ms) instead of blocking for 13+ seconds
-                threading.Thread(
-                    target=_ingest_persona_memory_async,
-                    args=(
-                        persona_obj.name,
-                        persona_obj.memory_prompt,
-                        persona_obj.greeting,
-                        namespace,
-                    ),
-                    daemon=True,
-                ).start()
+                # 2. Ingest persona core memory + greeting into Reeve memory graph
+                # Processed non-blockingly via Reeve's native PersistWorker & WriteAhead buffer (ASYNC_WRITE_ENABLED=true)
+                if persona_obj.memory_prompt and persona_obj.memory_prompt.strip():
+                    try:
+                        from .reeve_service import store_memory_for_user
+                        store_memory_for_user(
+                            f"Core Story & Mind of {persona_obj.name}:\n{persona_obj.memory_prompt.strip()}",
+                            namespace,
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Could not ingest initial persona memory into Reeve: {exc}")
+
+                if persona_obj.greeting and persona_obj.greeting.strip():
+                    try:
+                        from .reeve_service import store_memory_for_user
+                        store_memory_for_user(f"Assistant: {persona_obj.greeting.strip()}", namespace)
+                    except Exception:
+                        pass
 
         start = (page - 1) * page_size
         end = start + page_size
