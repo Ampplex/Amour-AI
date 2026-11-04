@@ -2,7 +2,7 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { HomeIcon, PersonasIcon, PlusCircleIcon, ProfileIcon } from '../../components/TabIcons';
+import { HomeIcon, PersonasIcon, ChatsIcon, PlusCircleIcon, ProfileIcon } from '../../components/TabIcons';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
@@ -48,6 +48,13 @@ export default function TabLayout() {
         options={{
           title: 'Personas',
           tabBarIcon: ({ color }) => <PersonasIcon color={color} size={22} />,
+        }}
+      />
+      <Tabs.Screen
+        name="chats"
+        options={{
+          title: 'Chats',
+          tabBarIcon: ({ color }) => <ChatsIcon color={color} size={22} />,
         }}
       />
       <Tabs.Screen

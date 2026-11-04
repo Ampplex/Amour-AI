@@ -49,6 +49,7 @@ interface AuthContextType {
   updateProfile: (data: { username?: string; name?: string; picture?: string }) => Promise<{ success: boolean; error?: string; user?: GoogleUser }>;
   uploadProfilePicture: (options: { base64?: string }) => Promise<{ success: boolean; url?: string; error?: string }>;
   refreshProfile: () => Promise<void>;
+  deleteAccount: () => Promise<{ success: boolean; error?: string }>;
 }
 
 
@@ -812,6 +813,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPendingGoogleSession(false);
   };
 
+  const deleteAccount = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      setLoading(true);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (user?.token) {
+        headers['Authorization'] = `Bearer ${user.token}`;
+      }
+      if (user?.id) {
+        headers['X-User-Id'] = user.id;
+      }
+
+      const res = await fetch(`${API_CONFIG.baseUrl}/auth/delete-account/`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ user_id: user?.id }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok && !data.success) {
+        const errorMsg = data.error || data.detail || 'Failed to delete account.';
+        return { success: false, error: errorMsg };
+      }
+
+      await logout();
+      return { success: true };
+    } catch (err: any) {
+      console.error('[AuthContext] deleteAccount error:', err);
+      return { success: false, error: err?.message || 'Network error deleting account.' };
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const clearError = () => {
     setError(null);
   };
@@ -836,6 +873,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         submitTokenUrl,
         dismissPendingSession,
         logout,
+        deleteAccount,
         clearError,
         fetchGoogleUserInfo,
         setUser,

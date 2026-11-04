@@ -114,11 +114,12 @@ function UserIcon({ size = 34, color = '#EC4899' }: { size?: number; color?: str
 }
 
 export default function ProfileScreen() {
-  const { user, logout, updateProfile, uploadProfilePicture, refreshProfile } = useAuth();
+  const { user, logout, deleteAccount, updateProfile, uploadProfilePicture, refreshProfile } = useAuth();
 
   // Edit Profile Modal state
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [editName, setEditName] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editAvatarUri, setEditAvatarUri] = useState<string | null>(null);
@@ -233,6 +234,41 @@ export default function ProfileScreen() {
     );
   };
 
+  const handleDeleteAccount = () => {
+    showAlert(
+      'Delete Account',
+      'Are you sure you want to permanently delete your account? All your personas, chats, and private memories will be permanently wiped. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Permanently',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDeletingAccount(true);
+            const res = await deleteAccount();
+            setIsDeletingAccount(false);
+            if (res.success) {
+              showAlert(
+                'Account Deleted',
+                'Your account and all associated data have been permanently erased.',
+                [
+                  {
+                    text: 'OK',
+                    onPress: () => router.replace('/login'),
+                  },
+                ],
+                'success'
+              );
+            } else {
+              showAlert('Deletion Failed', res.error || 'Failed to delete account. Please try again.', undefined, 'danger');
+            }
+          },
+        },
+      ],
+      'danger'
+    );
+  };
+
   if (!user) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -336,6 +372,20 @@ export default function ProfileScreen() {
           activeOpacity={0.8}
         >
           <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+
+        {/* Delete Account */}
+        <TouchableOpacity
+          style={styles.deleteAccountButton}
+          onPress={handleDeleteAccount}
+          activeOpacity={0.7}
+          disabled={isDeletingAccount}
+        >
+          {isDeletingAccount ? (
+            <ActivityIndicator size="small" color="#EF4444" />
+          ) : (
+            <Text style={styles.deleteAccountText}>Delete Account</Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
 
@@ -653,6 +703,19 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 16,
+  },
+  deleteAccountButton: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    marginBottom: 26,
+  },
+  deleteAccountText: {
+    color: '#9CA3AF',
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 14,
+    textDecorationLine: 'underline',
   },
 
   /* Unauthenticated / Guest View Styles */
