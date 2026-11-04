@@ -1,9 +1,18 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HomeIcon, PersonasIcon, PlusCircleIcon, ProfileIcon } from '../../components/TabIcons';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+
+  // Dynamic bottom padding: handles Android 3-button navigation (~48dp),
+  // Android gesture navigation (16-24dp), iOS home bar (34dp), or fallback (10dp)
+  const bottomInset = insets.bottom;
+  const paddingBottom = bottomInset > 0 ? bottomInset + (Platform.OS === 'ios' ? 2 : 4) : 10;
+  const tabHeight = 52 + paddingBottom;
+
   return (
     <Tabs
       screenOptions={{
@@ -13,8 +22,8 @@ export default function TabLayout() {
           backgroundColor: '#000000',
           borderTopColor: '#1A1A1A',
           borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 88 : 64,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 10,
+          height: tabHeight,
+          paddingBottom: paddingBottom,
           paddingTop: 8,
           elevation: 0,
         },
