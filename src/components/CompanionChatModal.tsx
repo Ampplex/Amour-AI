@@ -342,7 +342,7 @@ export default function CompanionChatModal({
       second: '2-digit',
     });
     const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
-    const userDisplayName = user?.given_name || (user?.name ? user.name.split(' ')[0] : '') || user?.name || '';
+    const userDisplayName = (user?.name ? user.name.trim().split(' ')[0] : '') || user?.given_name || user?.name || '';
 
     try {
       const data = await sendChatMessage(

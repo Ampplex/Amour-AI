@@ -474,10 +474,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const resData = await res.json();
         if (res.ok) {
+          const resolvedName = resData.name ?? user.name;
           const updatedUser: GoogleUser = {
             ...user,
             username: resData.username ?? user.username,
-            name: resData.name ?? user.name,
+            name: resolvedName,
+            given_name: (resolvedName ? resolvedName.trim().split(' ')[0] : '') || resData.given_name || user.given_name,
             picture: resData.picture ?? user.picture,
           };
           setUser(updatedUser);
