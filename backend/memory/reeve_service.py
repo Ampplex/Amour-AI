@@ -216,8 +216,15 @@ def _positive_env_int(name: str, default: int) -> int:
         return default
 
 
+def _nonnegative_env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 _MEMORY_INGESTION_WORKERS = _positive_env_int("REEVE_MEMORY_WORKERS", 2)
-_MEMORY_INGESTION_MAX_PENDING = max(0, int(os.getenv("REEVE_MEMORY_MAX_PENDING", "64")))
+_MEMORY_INGESTION_MAX_PENDING = _nonnegative_env_int("REEVE_MEMORY_MAX_PENDING", 64)
 _MEMORY_INGESTION_POOL = ThreadPoolExecutor(
     max_workers=_MEMORY_INGESTION_WORKERS,
     thread_name_prefix="amour-jev-memory",
