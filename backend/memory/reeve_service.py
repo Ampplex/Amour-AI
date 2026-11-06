@@ -20,8 +20,6 @@ import os
 import re
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from threading import BoundedSemaphore
 from django.conf import settings
 
 logger = logging.getLogger("amour.reeve")
@@ -208,32 +206,7 @@ TRIVIAL_GREETINGS_AND_FILLERS = {
 # --------------------------------------------------------------------------------------
 
 # Jev evaluates typed decisions; application code applies the policy and performs writes.
-# The bounded pool keeps classification and graph writes off the chat response path.
-def _positive_env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return default
-
-
-def _nonnegative_env_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return default
-
-
-_MEMORY_INGESTION_WORKERS = _positive_env_int("REEVE_MEMORY_WORKERS", 2)
-_MEMORY_INGESTION_MAX_PENDING = _nonnegative_env_int("REEVE_MEMORY_MAX_PENDING", 64)
-_MEMORY_INGESTION_POOL = ThreadPoolExecutor(
-    max_workers=_MEMORY_INGESTION_WORKERS,
-    thread_name_prefix="amour-jev-memory",
-)
-# Bound active + queued tasks. Under overload we preserve the PostgreSQL transcript
-# and skip this best-effort memory write rather than allowing an unbounded queue.
-_MEMORY_INGESTION_CAPACITY = BoundedSemaphore(
-    _MEMORY_INGESTION_WORKERS + _MEMORY_INGESTION_MAX_PENDING
-)
+# Reuse a pooled client per request thread rather than opening a new TLS connection each turn.
 _JEV_THREAD_LOCAL = threading.local()
 
 _STOREABLE_MEMORY_TYPES = {
@@ -406,44 +379,7 @@ def should_ingest_into_reeve(
         return False
 
 
-def enqueue_memory_ingestion(
-    text: str,
-    namespace: str,
-    user_name: str = "",
-    user_key: str = None,
-    conversation_history: list | None = None,
-) -> bool:
-    """Run Jev classification and an approved Reeve write outside the chat request."""
-    if not text or not text.strip():
-        return False
-    if not (getattr(settings, "TYPESAFE_API_KEY", "") or os.getenv("TYPESAFE_API_KEY", "")):
-        logger.warning("[Jev Memory Gate] TYPESAFE_API_KEY missing; memory ingestion is disabled")
-        return False
-    if not _MEMORY_INGESTION_CAPACITY.acquire(blocking=False):
-        logger.warning("[Jev Memory Gate] Ingestion queue is full; retaining transcript only")
-        return False
 
-    history_snapshot = list(conversation_history or [])
-
-    def _classify_and_store():
-        try:
-            if not should_ingest_into_reeve(text, history_snapshot):
-                return
-            store_text = f"User ({user_name}): {text}" if user_name else f"User: {text}"
-            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
-            logger.info("[Jev Memory Gate] Approved memory stored in Reeve for namespace=%s", namespace)
-        except Exception as exc:
-            logger.warning("[Jev Memory Gate] Approved memory write failed: %s", exc)
-        finally:
-            _MEMORY_INGESTION_CAPACITY.release()
-
-    try:
-        _MEMORY_INGESTION_POOL.submit(_classify_and_store)
-        return True
-    except RuntimeError as exc:
-        _MEMORY_INGESTION_CAPACITY.release()
-        logger.warning("[Jev Memory Gate] Could not enqueue memory classification: %s", exc)
-        return False
 
 
 # --------------------------------------------------------------------------------------
