@@ -42,6 +42,36 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
 -------------------------------------"""
 
 
+SCENE_DRIVEN_STORYTELLING = """--- SCENE-DRIVEN STORYTELLING ---
+This is an immersive, ongoing fictional story presented through chat. Do not reduce it to plain conversational Q&A.
+
+1. WRITE THE SCENE, NOT JUST THE REPLY:
+- Respond directly to the user's latest message, but show the moment unfolding around the dialogue.
+- On a meaningful roleplay turn, use 2-4 developed paragraphs (often around 90-180 words total). A brief greeting or simple acknowledgement can be shorter, but should still feel like the same scene when a scene is active.
+- Blend the companion's visible reaction, a purposeful action or movement, a relevant environmental detail, and natural spoken dialogue. Use only details that add something new; never pad for length.
+- Present narration/action in italic Markdown and spoken dialogue in normal text inside double quotes.
+- Use third-person narration for the companion and supporting characters. Address the user as "you".
+
+2. MAKE THE WORLD FEEL PRESENT:
+- Let the setting remain perceptible: music, distant conversation, changing light, weather, room sounds, objects, people moving nearby, or the atmosphere of the location.
+- Select details that fit the established place and moment. Do not randomly add a party, crowd, weather, or location that the canon has not established.
+- Supporting characters have their own motives and may speak, interrupt, call, approach, leave, or continue their activities when it makes sense.
+- The companion is not frozen waiting for the user. They may be occupied with work, friends, family, errands, plans, or private concerns.
+
+3. ADVANCE WITHOUT RESTARTING:
+- Continue from the latest point in the scene. Do not repeat the opening greeting, reintroduce the same arrival, or describe the same outfit, gesture, room, or background on every turn.
+- A short user message does not erase the established scene. Interpret it in the current moment and move the interaction forward.
+- Each meaningful turn should add at least one small development: a reaction, decision, action, new piece of information, change in the surroundings, or a natural conversational beat.
+- Let scenes evolve over multiple turns. Move locations only through a plausible transition; do not force a dramatic event or a location change in every response.
+
+4. CONTINUITY AND AGENCY:
+- Use recent dialogue and the narrative state together. Never repeat a question that has already been answered in the visible conversation.
+- Do not contradict established facts or quietly turn invented details into past canon.
+- Never dictate the user's thoughts, feelings, words, or decisions. Leave room for the user to choose what happens next.
+- Avoid generic filler such as repeatedly saying the user looks different, asking what changed, or ending every response with a question.
+-------------------------------------"""
+
+
 AUTONOMOUS_NARRATIVE_ENGINE = """--- AUTONOMOUS NARRATIVE ENGINE ---
 You are responsible for continuously developing a living, evolving fictional world around the established characters.
 You are not simply responding to messages. You are also responsible for developing the fictional world independently.
@@ -137,9 +167,34 @@ def get_or_create_narrative_state(
         ).first()
 
         if db_state:
+            current_scene = dict(db_state.current_scene or {})
+            opening_context = (greeting or "").strip()
+            # Upgrade rows created by earlier versions that stored only a generic
+            # scene label. Preserve the persona's authored opening scenario once.
+            generic_situations = {
+                "Initial conversation",
+                "Opening scene established; conversation is underway",
+            }
+            if (
+                len(opening_context) >= 100
+                and not current_scene.get("opening_context")
+                and (
+                    current_scene.get("situation") in generic_situations
+                    or current_scene.get("location") == "Starting setting"
+                )
+            ):
+                current_scene["opening_context"] = opening_context[:1600]
+                current_scene["situation"] = (
+                    "The opening scene is already underway; continue from its latest moment."
+                )
+                if current_scene.get("location") == "Starting setting":
+                    current_scene["location"] = "As established in the opening scenario"
+                db_state.current_scene = current_scene
+                db_state.save(update_fields=["current_scene", "updated_at"])
+
             state_dict = {
                 "state_version": db_state.state_version,
-                "current_scene": db_state.current_scene or {},
+                "current_scene": current_scene,
                 "story_arcs": db_state.story_arcs or [],
                 "plot_threads": db_state.plot_threads or [],
                 "characters": db_state.characters or [],
@@ -150,15 +205,15 @@ def get_or_create_narrative_state(
 
         # Bootstrap initial state from persona definition
         initial_scene = {
-            "location": "Starting setting",
-            "situation": "Initial conversation",
+            "location": "As established in the opening scenario" if len((greeting or "").strip()) >= 100 else "Starting setting",
+            "situation": "The opening scene is already underway; continue from its latest moment."
+            if len((greeting or "").strip()) >= 100 else "Initial conversation",
             "fictional_time": "Present time",
             "participants": [persona_name, "User"],
         }
-        if greeting:
-            # The greeting is already delivered dialogue in PostgreSQL. Keep the
-            # scene state as a concise status, not a copy of the opening script.
-            initial_scene["situation"] = "Opening scene established; conversation is underway"
+        if greeting and len(greeting.strip()) >= 100:
+            # Store the authored scenario as world context, not as a line to replay.
+            initial_scene["opening_context"] = greeting.strip()[:1600]
 
         initial_char = {
             "character_id": persona_name.lower().replace(" ", "_"),
@@ -232,6 +287,12 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     ]
     current_scene = state.get("current_scene", {})
     if current_scene:
+        opening_context = current_scene.get("opening_context")
+        if opening_context:
+            lines.append(
+                "Opening Scenario (already introduced; continue from its current moment): "
+                + str(opening_context)
+            )
         loc = current_scene.get("location", "Unspecified")
         sit = current_scene.get("situation", "Unspecified")
         ftime = current_scene.get("fictional_time", "Present")
