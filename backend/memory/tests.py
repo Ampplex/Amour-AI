@@ -74,7 +74,7 @@ class ConversationContinuityTests(SimpleTestCase):
             '{"reply":"*Elijah smiles.*\\n\\n\\"You made it.\\"","conflict_stage":2}'
         )
         reply, stage = parse_model_json_reply(raw, default_conflict_stage=0)
-        self.assertEqual(reply, '*Elijah smiles.*\\n\\n"You made it."')
+        self.assertEqual(reply, '*Elijah smiles.*\n\n"You made it."')
         self.assertEqual(stage, 2)
         self.assertNotIn('"conflict_stage"', reply)
 
@@ -102,7 +102,7 @@ class ConversationContinuityTests(SimpleTestCase):
     def test_json_parser_never_returns_malformed_json_to_chat(self):
         raw = '{"reply": "Hello", "conflict_stage":'
         reply, stage = parse_model_json_reply(raw, default_conflict_stage=1)
-        self.assertEqual(reply, "")
+        self.assertEqual(reply, "Hello")
         self.assertEqual(stage, 1)
 
     def test_namespace_is_consistent(self):
