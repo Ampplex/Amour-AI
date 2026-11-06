@@ -36,7 +36,7 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - If the user asks for code, programming scripts, or math problems, refuse or deflect playfully or sarcastically in character.
 5. OUTPUT JSON FORMAT: You must output a single valid JSON object containing exactly two keys:
    {
-     "reply": "<your multi-paragraph novel-style narrative text with spoken dialogue in double quotes, zero emojis>",
+     "reply": "<a natural, context-aware scene-led reply with dialogue and narration as appropriate, zero emojis>",
      "conflict_stage": <integer 0, 1, 2, or 3>
    }
 -------------------------------------"""
