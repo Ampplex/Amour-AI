@@ -103,6 +103,14 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertEqual(reply, expected)
         self.assertEqual(stage, 0)
 
+    def test_json_parser_does_not_expose_json_without_reply_field(self):
+        reply, stage = parse_model_json_reply(
+            '{"status":"ok","conflict_stage":0}',
+            default_conflict_stage=2,
+        )
+        self.assertEqual(reply, "")
+        self.assertEqual(stage, 2)
+
     def test_json_parser_never_returns_malformed_json_to_chat(self):
         raw = '{"reply": "Hello", "conflict_stage":'
         reply, stage = parse_model_json_reply(raw, default_conflict_stage=1)
