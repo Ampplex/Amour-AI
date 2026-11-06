@@ -1,12 +1,12 @@
 # Privacy Policy for Amour AI
 
-**Last updated:** October 30, 2026
+**Last updated:** November 6, 2026
 
 Amour AI ("we", "our", or "us") is dedicated to protecting your personal information and your right to privacy. This Privacy Policy describes how we collect, use, and protect your data when you use the Amour AI mobile application.
 
 ## 1. Information We Collect
 - **Account Information:** When you authenticate via Google Sign-In, we receive basic profile information provided by Google (your name, email address, and profile picture).
-- **Communication Data:** In-app chat messages, prompts, and sessions are encrypted end-to-end to maintain executive zero-knowledge privacy.
+- **Communication Data:** In-app chat messages, prompts, and sessions are encrypted in storage. Message content is processed by the backend to provide companion responses and memory features.
 - **Device & Usage:** Anonymous diagnostic telemetry necessary to maintain app stability and performance.
 
 ## 2. How We Use Your Information
@@ -17,6 +17,7 @@ Amour AI ("we", "our", or "us") is dedicated to protecting your personal informa
 
 ## 3. Third-Party Services
 - **Google OAuth 2.0:** Used solely for authentication. Google's use of information received from Google APIs adheres to the Google API Services User Data Policy.
+- **TypeSafe AI (Jev):** For long-term memory decisions, Amour sends the incoming user message and up to six recent conversation turns to TypeSafe AI's Jev API. Jev returns structured memory-worthiness, category, and sensitive-data decisions; it does not generate the companion's chat reply. Messages approved for retention are then sent to Reeve for memory storage.
 
 ## 4. Data Security & Retention
 Your data is protected using industry-standard encryption protocols. You can request deletion of your account and associated session data at any time.
