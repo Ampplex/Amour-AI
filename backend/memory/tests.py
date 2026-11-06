@@ -1,7 +1,9 @@
+import json
+
 from django.test import SimpleTestCase
 
 from .chat_service import normalize_history_turns
-from .llm_client import normalize_bedrock_messages
+from .llm_client import normalize_bedrock_messages, parse_model_json_reply
 from .narrative_service import SCENE_DRIVEN_STORYTELLING, format_narrative_state_for_prompt
 from .reeve_service import should_ingest_into_reeve, should_retrieve_from_reeve
 from .views import build_reeve_namespace
@@ -68,6 +70,54 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertTrue(should_retrieve_from_reeve("Remember our trip to Paris?"))
         self.assertTrue(should_retrieve_from_reeve("What happened to your sister?"))
         self.assertFalse(should_ingest_into_reeve("Remember our trip to Paris?"))
+
+    def test_json_parser_returns_only_reply_and_conflict_stage(self):
+        expected = '*Elijah smiles.*\n\n"You made it."'
+        raw = json.dumps({"reply": expected, "conflict_stage": 2})
+        reply, stage = parse_model_json_reply(raw, default_conflict_stage=0)
+        self.assertEqual(reply, expected)
+        self.assertEqual(stage, 2)
+        self.assertNotIn('"conflict_stage"', reply)
+
+    def test_json_parser_extracts_envelope_after_provider_prose(self):
+        expected = '*He looks over.* "Come sit down."'
+        raw = "Here is the response:\n" + json.dumps({
+            "reply": expected,
+            "conflict_stage": 1,
+        })
+        reply, stage = parse_model_json_reply(raw)
+        self.assertEqual(reply, expected)
+        self.assertEqual(stage, 1)
+        self.assertNotIn("conflict_stage", reply)
+
+    def test_json_parser_handles_markdown_fenced_json(self):
+        payload = json.dumps({"reply": "Hello there.", "conflict_stage": 0})
+        raw = f"```json\n{payload}\n```"
+        reply, stage = parse_model_json_reply(raw)
+        self.assertEqual(reply, "Hello there.")
+        self.assertEqual(stage, 0)
+
+    def test_json_parser_preserves_plain_text_provider_reply(self):
+        expected = 'He smiles. "Good to see you."'
+        reply, stage = parse_model_json_reply(expected)
+        self.assertEqual(reply, expected)
+        self.assertEqual(stage, 0)
+
+    def test_json_parser_does_not_expose_json_without_reply_field(self):
+        reply, stage = parse_model_json_reply(
+            '{"status":"ok","conflict_stage":0}',
+            default_conflict_stage=2,
+        )
+        self.assertEqual(reply, "")
+        self.assertEqual(stage, 2)
+
+    def test_json_parser_never_returns_malformed_json_to_chat(self):
+        raw = '{"reply": "Hello", "conflict_stage":'
+        reply, stage = parse_model_json_reply(raw, default_conflict_stage=1)
+        # The complete reply string can still be recovered even if the outer
+        # JSON object was truncated after it.
+        self.assertEqual(reply, "Hello")
+        self.assertEqual(stage, 1)
 
     def test_namespace_is_consistent(self):
         self.assertEqual(

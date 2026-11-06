@@ -204,8 +204,18 @@ Update conflict_stage in your output JSON based on the emotional trajectory of t
         raw_output = f'{{"reply": "I heard you, {fallback_name}. Let us take a breath and figure this out together.", "conflict_stage": {current_conflict_stage}}}'
 
     # 11. PARSE & VALIDATE
-    reply_text, new_stage = parse_model_json_reply(raw_output, default_conflict_stage=current_conflict_stage)
+    reply_text, new_stage = parse_model_json_reply(
+        raw_output, default_conflict_stage=current_conflict_stage
+    )
     reply_text = strip_emojis(reply_text)
+
+    # Never expose a malformed provider JSON envelope in the chat bubble.
+    # Use a short in-character recovery line if no user-facing reply was parsed.
+    if not reply_text:
+        logger.warning(
+            "[Inference] No valid user-facing reply could be extracted from model output"
+        )
+        reply_text = f"{persona_name} pauses for a moment, gathering their thoughts."
 
     # Generated prose remains in PostgreSQL dialogue history. Reeve stores curated memories, not raw replies.
 
