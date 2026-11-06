@@ -200,6 +200,40 @@ TRIVIAL_GREETINGS_AND_FILLERS = {
     "what", "huh", "why",
 }
 
+
+def should_retrieve_from_reeve(text: str) -> bool:
+    """
+    Decide whether the current message benefits from long-term recall.
+
+    This prevents expensive/noisy semantic searches for trivial greetings or conversational fillers.
+    """
+    if not text or not text.strip():
+        return False
+
+    clean = re.sub(r"[^\w\s]", "", text.strip().lower())
+    words = clean.split()
+    if not words or clean in TRIVIAL_GREETINGS_AND_FILLERS:
+        return False
+    if len(words) <= 2 and all(word in TRIVIAL_GREETINGS_AND_FILLERS for word in words):
+        return False
+
+    recall_patterns = (
+        r"\bremember\b",
+        r"\brecall\b",
+        r"\bwhat happened\b",
+        r"\bwhat did .{1,80} (?:say|do|tell)\b",
+        r"\bwho (?:is|was)\b",
+        r"\btell me about\b",
+        r"\blast time\b",
+        r"\bprevious(?:ly)?\b",
+        r"\bearlier\b",
+        r"\bour (?:trip|visit|promise|plan|anniversary)\b",
+        r"\byour (?:sister|brother|mother|father|friend)\b",
+        r"\bmy (?:birthday|preference|favorite)\b",
+        r"\bwhat was the name\b",
+    )
+    return any(re.search(pattern, clean) for pattern in recall_patterns)
+
 # --------------------------------------------------------------------------------------
 # Backward Compatibility Wrappers (Delegated to specialized domain services)
 # --------------------------------------------------------------------------------------
