@@ -55,46 +55,52 @@ def get_bedrock_runtime_client():
 
 def normalize_bedrock_messages(raw_messages: list, persona_name: str = "Companion") -> list:
     """
-    Normalizes a list of messages for the AWS Bedrock Converse API:
-    1. Roles must strictly alternate: 'user' -> 'assistant' -> 'user' -> ...
-    2. The first message must always have role 'user'.
-    3. Consecutive messages of the same role are merged.
-    """
-    if not raw_messages:
-        return [{"role": "user", "content": [{"text": "Hello"}]}]
+    Normalize canonical sender/text turns for Bedrock Converse.
 
+    Consecutive roles are merged. Assistant-first history gets a neutral
+    continuation marker rather than an invented scene-opening action.
+    """
     normalized = []
-    for m in raw_messages:
-        role = "assistant" if m.get("sender") == "bot" else "user"
-        text = (m.get("text") or "").strip()
-        if not text:
+    for item in raw_messages or []:
+        if not isinstance(item, dict):
             continue
 
-        if not normalized:
-            if role == "assistant":
-                normalized.append({
-                    "role": "user",
-                    "content": [{"text": f"[Scene begins: {persona_name} approaches]"}]
-                })
-            normalized.append({"role": role, "content": [{"text": text}]})
+        sender = (item.get("sender") or item.get("role") or "").strip().lower()
+        if sender in {"bot", "assistant", "ai", "companion"}:
+            role = "assistant"
+        elif sender in {"user", "human"}:
+            role = "user"
         else:
-            if normalized[-1]["role"] == role:
-                prev_text = normalized[-1]["content"][0]["text"]
-                normalized[-1]["content"][0]["text"] = f"{prev_text}\n{text}"
-            else:
-                normalized.append({"role": role, "content": [{"text": text}]})
+            logger.warning("[Bedrock History] Skipping unknown sender: %s", sender or "<empty>")
+            continue
+
+        text = item.get("text")
+        if text is None:
+            text = item.get("content", "")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        text = text.strip()
+
+        if normalized and normalized[-1]["role"] == role:
+            normalized[-1]["content"][0]["text"] += "\n\n" + text
+        else:
+            normalized.append({"role": role, "content": [{"text": text}]})
 
     if not normalized:
         return [{"role": "user", "content": [{"text": "Hello"}]}]
 
-    if normalized[0]["role"] != "user":
+    if normalized[0]["role"] == "assistant":
         normalized.insert(0, {
             "role": "user",
-            "content": [{"text": f"[Scene begins: {persona_name} approaches]"}]
+            "content": [{
+                "text": (
+                    f"The conversation with {persona_name} is already underway. "
+                    "The following assistant message is previously delivered context. "
+                    "Continue from it; do not restart or reenact the opening scene."
+                )
+            }]
         })
-
     return normalized
-
 
 def call_bedrock_mistral_large(system_prompt: str, messages: list) -> str | None:
     """
