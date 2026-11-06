@@ -1,18 +1,40 @@
 import json
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 
-from .chat_service import normalize_history_turns
+from .chat_service import generate_companion_reply, normalize_history_turns
 from .llm_client import (
     normalize_bedrock_messages,
     parse_memory_store_decision,
     parse_model_json_reply,
 )
 from .narrative_service import SCENE_DRIVEN_STORYTELLING, format_narrative_state_for_prompt
-from .reeve_service import should_retrieve_from_reeve
 from .views import build_reeve_namespace
 
 
 class ConversationContinuityTests(SimpleTestCase):
+    @patch("memory.chat_service.retrieve_context_for_user")
+    @patch("memory.chat_service.call_bedrock_mistral_large")
+    def test_every_incoming_message_retrieves_reeve_context(
+        self, bedrock, retrieve
+    ):
+        retrieve.return_value = "A remembered fact from an earlier conversation."
+        bedrock.return_value = (
+            '{"reply":"Hello.","conflict_stage":0,"remember_user_fact":false}'
+        )
+
+        result = generate_companion_reply(
+            message="Hey",
+            namespace="user_1_persona_1",
+            conversation_history=[],
+        )
+
+        retrieve.assert_called_once_with(
+            "Hey", namespace="user_1_persona_1", user_key=None
+        )
+        self.assertIn("A remembered fact", result["context"])
+
     def test_history_accepts_canonical_and_legacy_shapes(self):
         history = [
             {"sender": "user", "text": "Hey"},
@@ -66,12 +88,6 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertEqual(messages[0]["role"], "user")
         self.assertIn("First", messages[0]["content"][0]["text"])
         self.assertIn("Second", messages[0]["content"][0]["text"])
-
-    def test_retrieval_skips_fillers_and_accepts_recall_questions(self):
-        for message in ("Hey", "Wow", "OK", "Hellloooo"):
-            self.assertFalse(should_retrieve_from_reeve(message))
-        self.assertTrue(should_retrieve_from_reeve("Remember our trip to Paris?"))
-        self.assertTrue(should_retrieve_from_reeve("What happened to your sister?"))
 
     def test_json_parser_returns_only_reply_and_conflict_stage(self):
         expected = '*Elijah smiles.*\n\n"You made it."'
