@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
@@ -149,8 +149,8 @@ class ConversationContinuityTests(SimpleTestCase):
     @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
     @patch("memory.reeve_service._get_jev_client")
     def test_jev_approves_supported_real_world_user_fact(self, get_client):
-        client = SimpleNamespace()
-        client.system_one = lambda **kwargs: self._jev_response()
+        client = MagicMock()
+        client.system_one.return_value = self._jev_response()
         get_client.return_value = client
         history = [
             {"sender": "user", "text": "I work as a backend engineer."},
@@ -160,6 +160,12 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertTrue(
             should_ingest_into_reeve("I live in Pune and prefer backend engineering.", history)
         )
+        request = client.system_one.call_args.kwargs
+        self.assertEqual(
+            request["state"]["candidate_user_message"],
+            "I live in Pune and prefer backend engineering.",
+        )
+        self.assertEqual(len(request["state"]["recent_conversation_for_disambiguation_only"]), 2)
 
     @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
     @patch("memory.reeve_service._get_jev_client")
