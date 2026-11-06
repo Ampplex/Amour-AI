@@ -288,7 +288,7 @@ def parse_model_json_reply(raw_content: str, default_conflict_stage: int = 0) ->
     # Never show a malformed JSON envelope, schema keys, or Markdown JSON fence
     # to the user. Plain-text provider responses remain a safe last resort.
     looks_structured = (
-        text.lstrip().startswith(("{", "[", "```json"))
+        text.lstrip().lower().startswith(("{", "[", "```json"))
         or '"conflict_stage"' in text
         or re.search(r'"reply"\s*:', text) is not None
     )
