@@ -3,7 +3,7 @@ from django.test import SimpleTestCase
 from .chat_service import normalize_history_turns
 from .llm_client import normalize_bedrock_messages
 from .narrative_service import format_narrative_state_for_prompt
-from .reeve_service import should_retrieve_from_reeve
+from .reeve_service import should_ingest_into_reeve, should_retrieve_from_reeve
 from .views import build_reeve_namespace
 
 
@@ -67,6 +67,7 @@ class ConversationContinuityTests(SimpleTestCase):
             self.assertFalse(should_retrieve_from_reeve(message))
         self.assertTrue(should_retrieve_from_reeve("Remember our trip to Paris?"))
         self.assertTrue(should_retrieve_from_reeve("What happened to your sister?"))
+        self.assertFalse(should_ingest_into_reeve("Remember our trip to Paris?"))
 
     def test_namespace_is_consistent(self):
         self.assertEqual(
