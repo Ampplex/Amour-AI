@@ -19,7 +19,6 @@ For chat pipeline orchestration, see `backend/memory/chat_service.py`.
 import os
 import re
 import logging
-import threading
 from django.conf import settings
 
 logger = logging.getLogger("amour.reeve")
