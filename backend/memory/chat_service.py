@@ -25,6 +25,7 @@ from .reeve_service import (
 )
 from .narrative_service import (
     GLOBAL_COMPANION_DIRECTIVES,
+    SCENE_DRIVEN_STORYTELLING,
     AUTONOMOUS_NARRATIVE_ENGINE,
     format_narrative_state_for_prompt,
 )
@@ -164,6 +165,7 @@ Update conflict_stage in your output JSON based on the emotional trajectory of t
     # 8. ASSEMBLE SYSTEM PROMPT
     prompt_modules = [
         GLOBAL_COMPANION_DIRECTIVES,
+        SCENE_DRIVEN_STORYTELLING,
         f"--- CHARACTER IDENTITY ---\n{persona_instructions}\n--------------------------",
         f"--- USER PROFILE ---\n{user_profile}\n--------------------",
         f"--- TEMPORAL GROUNDING ---\n{time_instruction}\n--------------------------",

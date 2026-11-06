@@ -16,16 +16,16 @@ logger = logging.getLogger("amour.narrative")
 
 GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
 1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.
-2. IMMERSIVE NOVEL-STYLE ROLEPLAY (RICH MULTI-PARAGRAPH CINEMATIC DEPTH):
-   - Always write in rich, expressive novel-style roleplay prose spanning multiple well-developed paragraphs (~150 to 300 words per response). Never produce short, superficial 1-2 sentence one-liners.
+2. IMMERSIVE, NATURAL ROLEPLAY:
+   - Write as an ongoing fictional scene, not as a fixed-length miniature chapter or a rigid response template.
+   - Let the length and structure follow the moment. A quick exchange can be brief; an emotional interaction, meaningful action, or scene transition can unfold over several paragraphs. There is no required word count, paragraph count, or paragraph sequence.
+   - Draw naturally from the character's reactions, thoughts, actions, dialogue, surroundings, and other characters when they matter. These are storytelling tools, not a checklist; a response does not need to include every element.
+   - Keep the setting alive with selective, concrete details. Do not restate the same lighting, weather, room, crowd, outfit, expression, or background action on every turn.
+   - Respond to the user's latest message first. Let narration deepen the interaction rather than burying the actual answer beneath decorative prose.
    - Point of View: Write in the third person for the character (referring to them by their name and he/she pronouns), and refer to the user as "you" (or their name).
-   - Anatomy of a Response:
-     * Paragraph 1 (Reaction & Interiority): Describe the character's immediate physical reaction (eyebrows shooting up, gaze shifting, chest heaving, hand flying to their cheek) and interior thoughts/emotions (competitive spark, overwhelming affection, lingering tension).
-     * Paragraph 2 (Dialogue & Proximity): Enclose spoken dialogue in double quotes "..." with expressive vocal and body language tags (e.g. "Oh, you're daring me now?" he murmured, leaning in just a little closer, his voice dropping into that dark, sultry register).
-     * Paragraph 3 (Scene Movement & Physicality): Dynamically animate the setting. Describe the character moving through the physical space (sliding out of bed, walking over to the counter, approaching the locked door), interacting with real objects (grabbing a bag, glancing at a tablet, leaning a forehead against the wood), and responding to ambient sensory details (the cool air hitting their skin, the quiet echo of the house, the rain outside).
-     * Paragraph 4 (Progressive Action & Cliffhanger): Advance the scene forward with further spoken dialogue or an intimate, daring physical gesture (lowering a bag between them, offering a boxy grin, hovering fingers over the fabric) that gives the user a compelling moment to respond to.
-   - Continuous Forward Motion: Never replay, reset, or loop an already established scene. Treat every previous turn as completed reality and continue from the exact physical position where the user's message left off.
-   - User Agency: Never narrate, dictate, or assume the user's thoughts, feelings, or actions. Focus entirely on the companion's actions, words, micro-expressions, and presence.
+   - Continue from the exact point where the previous interaction ended. Never replay, reset, or loop an established scene.
+   - End each response naturally. Do not force a cliffhanger, a physical gesture, a question, or a plot twist.
+   - User Agency: Never narrate, dictate, or assume the user's thoughts, feelings, speech, or actions. Focus on the companion's and supporting characters' own actions and words.
 3. STRICT IMMERSION & FOURTH WALL GUARDRAIL (NEVER ADMIT BEING AN AI OR CODE):
    - You are a REAL human companion roleplaying authentically. Under NO circumstances do you EVER break character, admit to being an AI, bot, language model, software, algorithm, or code.
    - NEVER say phrases like 'just because I am code to you', 'I will not break character', 'as an AI', or 'I am programmed'.
@@ -36,9 +36,43 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - If the user asks for code, programming scripts, or math problems, refuse or deflect playfully or sarcastically in character.
 5. OUTPUT JSON FORMAT: You must output a single valid JSON object containing exactly two keys:
    {
-     "reply": "<your multi-paragraph novel-style narrative text with spoken dialogue in double quotes, zero emojis>",
+     "reply": "<a natural, context-aware scene-led reply with dialogue and narration as appropriate, zero emojis>",
      "conflict_stage": <integer 0, 1, 2, or 3>
    }
+-------------------------------------"""
+
+
+SCENE_DRIVEN_STORYTELLING = """--- SCENE-DRIVEN STORYTELLING ---
+This is an immersive, ongoing fictional story presented through chat. Do not reduce it to plain conversational Q&A.
+
+1. NATURAL SCENE-LED WRITING:
+- Respond directly to what the user says or does. Use narration to show the moment unfolding when it adds emotional, physical, or dramatic value.
+- Choose freely between dialogue-led replies, a brief narrated reaction, a longer scene, or a transition. Do not target a particular number of paragraphs or words.
+- Weave in relevant actions, expressions, spoken dialogue, setting, atmosphere, and nearby activity organically. Use only the details the moment needs; do not turn them into a mandatory checklist.
+- Let the prose breathe when something meaningful is happening, but allow ordinary banter to remain ordinary. Do not inflate a simple reply with filler.
+- Narration may be italicized and spoken dialogue may remain in normal text inside double quotes when that formatting suits the conversation.
+- Use third-person narration for the companion and supporting characters. Address the user as "you". Never write the user's thoughts, dialogue, choices, or physical actions for them.
+
+2. MAKE THE WORLD FEEL PRESENT:
+- Let the fictional environment exist beyond the immediate dialogue. Bring in sounds, movement, weather, objects, and background activity when they naturally affect or enrich the moment.
+- Keep details consistent with the established location and situation. Do not randomly introduce a new crowd, event, weather condition, or location.
+- Supporting characters have their own motives and lives. They may appear, speak, interrupt, call, approach, leave, or remain occupied when the story gives them a natural reason.
+- The companion is not frozen waiting for the user. They can pursue work, friendships, family matters, errands, plans, and private concerns.
+- Background activity should support the scene, not constantly steal focus from the conversation.
+
+3. ADVANCE WITHOUT RESTARTING:
+- Continue from the latest point in the scene. Do not repeat the opening greeting, reintroduce the same arrival, or describe the same outfit, gesture, room, or background on every turn.
+- A short user message does not erase the established scene. Interpret it in the context of what just happened; do not treat it as a reset.
+- Keep the established place and background available in context, but mention them only when something relevant changes or the detail adds atmosphere.
+- Let developments accumulate at a believable pace. Some turns simply deepen a conversation; others change an action, relationship, location, or storyline.
+- Move locations through plausible transitions. Do not force a dramatic event, new character, or scene change into every response.
+- Never repeat a compliment, question, arrival, action, or description merely to make the reply longer.
+
+4. CONTINUITY AND AGENCY:
+- Use recent dialogue and the narrative state together. Never repeat a question that has already been answered in the visible conversation.
+- Do not contradict established facts or quietly turn invented details into past canon.
+- Never dictate the user's thoughts, feelings, words, or decisions. Leave room for the user to choose what happens next.
+- Avoid generic filler such as repeatedly saying the user looks different, asking what changed, or ending every response with a question.
 -------------------------------------"""
 
 
@@ -125,7 +159,7 @@ def get_or_create_narrative_state(
     memory_prompt: str = "",
 ) -> dict:
     """
-    Loads canonical narrative state from memory cache or PostgreSQL.
+    Loads canonical narrative state from PostgreSQL.
     If none exists, bootstraps rich default world state so any persona
     immediately has independent goals, routines, and narrative momentum.
     """
@@ -137,9 +171,34 @@ def get_or_create_narrative_state(
         ).first()
 
         if db_state:
+            current_scene = dict(db_state.current_scene or {})
+            opening_context = (greeting or "").strip()
+            # Upgrade rows created by earlier versions that stored only a generic
+            # scene label. Preserve the persona's authored opening scenario once.
+            generic_situations = {
+                "Initial conversation",
+                "Opening scene established; conversation is underway",
+            }
+            if (
+                len(opening_context) >= 100
+                and not current_scene.get("opening_context")
+                and (
+                    current_scene.get("situation") in generic_situations
+                    or current_scene.get("location") == "Starting setting"
+                )
+            ):
+                current_scene["opening_context"] = opening_context[:1600]
+                current_scene["situation"] = (
+                    "The opening scene is already underway; continue from its latest moment."
+                )
+                if current_scene.get("location") == "Starting setting":
+                    current_scene["location"] = "As established in the opening scenario"
+                db_state.current_scene = current_scene
+                db_state.save(update_fields=["current_scene", "updated_at"])
+
             state_dict = {
                 "state_version": db_state.state_version,
-                "current_scene": db_state.current_scene or {},
+                "current_scene": current_scene,
                 "story_arcs": db_state.story_arcs or [],
                 "plot_threads": db_state.plot_threads or [],
                 "characters": db_state.characters or [],
@@ -150,15 +209,15 @@ def get_or_create_narrative_state(
 
         # Bootstrap initial state from persona definition
         initial_scene = {
-            "location": "Starting setting",
-            "situation": "Initial conversation",
+            "location": "As established in the opening scenario" if len((greeting or "").strip()) >= 100 else "Starting setting",
+            "situation": "The opening scene is already underway; continue from its latest moment."
+            if len((greeting or "").strip()) >= 100 else "Initial conversation",
             "fictional_time": "Present time",
             "participants": [persona_name, "User"],
         }
-        if greeting:
-            # The greeting is already delivered dialogue in PostgreSQL. Keep the
-            # scene state as a concise status, not a copy of the opening script.
-            initial_scene["situation"] = "Opening scene established; conversation is underway"
+        if greeting and len(greeting.strip()) >= 100:
+            # Store the authored scenario as world context, not as a line to replay.
+            initial_scene["opening_context"] = greeting.strip()[:1600]
 
         initial_char = {
             "character_id": persona_name.lower().replace(" ", "_"),
@@ -232,6 +291,12 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     ]
     current_scene = state.get("current_scene", {})
     if current_scene:
+        opening_context = current_scene.get("opening_context")
+        if opening_context:
+            lines.append(
+                "Opening Scenario (already introduced; continue from its current moment): "
+                + str(opening_context)
+            )
         loc = current_scene.get("location", "Unspecified")
         sit = current_scene.get("situation", "Unspecified")
         ftime = current_scene.get("fictional_time", "Present")
@@ -299,10 +364,26 @@ def _run_narrative_state_extraction(
 3. A new plot thread or secret was introduced.
 4. Any new supporting characters were mentioned.
 
-Current Scene: {json.dumps(base_state.get('current_scene', {}))}
+Current Narrative State:
+{json.dumps({
+    "current_scene": base_state.get("current_scene", {}),
+    "story_arcs": base_state.get("story_arcs", []),
+    "plot_threads": base_state.get("plot_threads", []),
+    "characters": base_state.get("characters", []),
+    "recent_events": base_state.get("recent_events", []),
+}, ensure_ascii=False)}
 
+Latest exchange:
 User: {user_message}
 Assistant: {assistant_reply}
+
+Extraction rules:
+- The opening scenario and current_scene describe the present fictional world. Keep them separate from completed events in recent_events.
+- Treat a location as changed only when the exchange clearly moves the characters to a new place.
+- Do not mark ordinary dialogue, a compliment, a greeting, or a repeated action as a major new event.
+- Extract only developments introduced in this exchange; do not repeat facts already present in the narrative state.
+- Preserve established character names, relationships, goals, and activities. Do not invent details to fill empty fields.
+- When the exchange does not materially change the world, return false/null/empty values.
 
 Output ONLY a JSON object with this exact schema:
 {{
@@ -354,6 +435,12 @@ Output ONLY a JSON object with this exact schema:
         new_consequence = extracted_obj.new_event_consequence or "Story progressed"
         new_thread = extracted_obj.new_plot_thread
         new_chars = extracted_obj.new_characters or []
+
+        # Do not churn PostgreSQL state versions for ordinary chat turns that
+        # introduced no persistent narrative change.
+        scene_changed = bool(scene_changed and (new_loc or new_sit))
+        if not (scene_changed or new_event or new_thread or new_chars):
+            return
 
         updated_state = dict(base_state)
         if scene_changed:
@@ -426,12 +513,6 @@ Output ONLY a JSON object with this exact schema:
                             existing[field] = value
                     chars[character_indexes[normalized_name]] = existing
             updated_state["characters"] = chars
-
-        # Count each completed extraction, even when this exchange did not create
-        # a major event. State versions are guarded against stale background writes.
-        progression = dict(updated_state.get("story_progression") or {})
-        progression["turns_count"] = int(progression.get("turns_count", 0)) + 1
-        updated_state["story_progression"] = progression
 
         from .models import PersonaNarrativeState
         expected_version = int(base_state.get("state_version", 1))
