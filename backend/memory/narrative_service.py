@@ -363,10 +363,26 @@ def _run_narrative_state_extraction(
 3. A new plot thread or secret was introduced.
 4. Any new supporting characters were mentioned.
 
-Current Scene: {json.dumps(base_state.get('current_scene', {}))}
+Current Narrative State:
+{json.dumps({
+    "current_scene": base_state.get("current_scene", {}),
+    "story_arcs": base_state.get("story_arcs", []),
+    "plot_threads": base_state.get("plot_threads", []),
+    "characters": base_state.get("characters", []),
+    "recent_events": base_state.get("recent_events", []),
+}, ensure_ascii=False)}
 
+Latest exchange:
 User: {user_message}
 Assistant: {assistant_reply}
+
+Extraction rules:
+- The opening scenario and current_scene describe the present fictional world. Keep them separate from completed events in recent_events.
+- Treat a location as changed only when the exchange clearly moves the characters to a new place.
+- Do not mark ordinary dialogue, a compliment, a greeting, or a repeated action as a major new event.
+- Extract only developments introduced in this exchange; do not repeat facts already present in the narrative state.
+- Preserve established character names, relationships, goals, and activities. Do not invent details to fill empty fields.
+- When the exchange does not materially change the world, return false/null/empty values.
 
 Output ONLY a JSON object with this exact schema:
 {{
