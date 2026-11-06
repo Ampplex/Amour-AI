@@ -24,7 +24,7 @@ services:
       - key: JEV_MODEL
         value: "jev-latest"
       - key: JEV_TIMEOUT_SECONDS
-        value: "3.0"
+        value: "1.5"
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: AWS_S3_BUCKET_NAME
