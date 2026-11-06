@@ -75,10 +75,12 @@ class ConversationContinuityTests(SimpleTestCase):
             "usr_user_1_persona_persona_2",
         )
 
-    def test_scene_guidance_requires_story_context_after_short_messages(self):
+    def test_scene_guidance_preserves_natural_pacing_without_paragraph_targets(self):
         self.assertIn("short user message does not erase the established scene", SCENE_DRIVEN_STORYTELLING)
-        self.assertIn("2-4 developed paragraphs", SCENE_DRIVEN_STORYTELLING)
-        self.assertIn("Do not repeat a compliment, question, arrival", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("Do not target a particular number of paragraphs or words", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("Do not force a dramatic event", SCENE_DRIVEN_STORYTELLING)
+        self.assertNotIn("2-4 developed paragraphs", SCENE_DRIVEN_STORYTELLING)
+        self.assertNotIn("120-220 words", SCENE_DRIVEN_STORYTELLING)
 
     def test_narrative_state_labels_recent_events_as_history(self):
         prompt = format_narrative_state_for_prompt(
