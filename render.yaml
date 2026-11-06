@@ -19,6 +19,12 @@ services:
         value: "us-west-2"
       - key: AWS_ACCESS_KEY_ID
         sync: false
+      - key: TYPESAFE_API_KEY
+        sync: false
+      - key: JEV_MODEL
+        value: "jev-latest"
+      - key: JEV_TIMEOUT_SECONDS
+        value: "3.0"
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: AWS_S3_BUCKET_NAME
