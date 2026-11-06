@@ -2,7 +2,7 @@ from django.test import SimpleTestCase
 
 from .chat_service import normalize_history_turns
 from .llm_client import normalize_bedrock_messages
-from .narrative_service import format_narrative_state_for_prompt
+from .narrative_service import SCENE_DRIVEN_STORYTELLING, format_narrative_state_for_prompt
 from .reeve_service import should_ingest_into_reeve, should_retrieve_from_reeve
 from .views import build_reeve_namespace
 
@@ -74,6 +74,11 @@ class ConversationContinuityTests(SimpleTestCase):
             build_reeve_namespace("user:1", "persona/2"),
             "usr_user_1_persona_persona_2",
         )
+
+    def test_scene_guidance_requires_story_context_after_short_messages(self):
+        self.assertIn("short user message does not erase the established scene", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("2-4 developed paragraphs", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("Do not repeat a compliment, question, arrival", SCENE_DRIVEN_STORYTELLING)
 
     def test_narrative_state_labels_recent_events_as_history(self):
         prompt = format_narrative_state_for_prompt(
