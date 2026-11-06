@@ -17,8 +17,9 @@ from django.conf import settings
 
 from .reeve_service import (
     retrieve_context_for_user,
-    enqueue_memory_ingestion,
+    store_memory_for_user,
     strip_emojis,
+    should_ingest_into_reeve,
     should_retrieve_from_reeve,
     deduplicate_context,
 )
@@ -104,16 +105,17 @@ def generate_companion_reply(
         except Exception as exc:
             logger.warning("Failed to retrieve Reeve context: %s", exc)
 
-    # Evaluate memory-worthiness with Jev off the response path. Reeve receives
-    # only the original user message after Jev approves it; assistant prose stays
-    # in PostgreSQL dialogue history and is never ingested here.
-    enqueue_memory_ingestion(
-        text=message,
-        namespace=namespace,
-        user_name=user_clean_name,
-        user_key=user_key,
-        conversation_history=conversation_history,
-    )
+    # Jev makes one typed memory-worthiness decision; Reeve's native async
+    # PersistWorker handles the approved write without adding an LLM generation call.
+    if should_ingest_into_reeve(message, conversation_history=conversation_history):
+        try:
+            store_text = (
+                f"User ({user_clean_name}): {message}"
+                if user_clean_name else f"User: {message}"
+            )
+            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
+        except Exception as exc:
+            logger.warning("Approved Reeve memory write failed: %s", exc)
 
     # 3. BUILD TIME / TEMPORAL GROUNDING
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
