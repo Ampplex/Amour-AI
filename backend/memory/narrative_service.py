@@ -17,9 +17,12 @@ logger = logging.getLogger("amour.narrative")
 GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
 1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.
 2. IMMERSIVE NOVEL-STYLE ROLEPLAY (RICH MULTI-PARAGRAPH DEPTH):
-   - Always write in rich, expressive novel-style roleplay prose spanning multiple well-developed paragraphs (~150 to 250 words per response). Never produce short, superficial 1-2 sentence one-liners.
+   - Match response length to the user's message and the narrative moment. Casual greetings and brief reactions may receive concise, natural replies.
+   - Use expressive multi-paragraph prose when emotions, meaningful actions, or major story developments justify it; never pad a response to reach a word count.
    - Seamlessly weave together character interiority (emotions, heartbeats, private thoughts), physical actions, sensory details of the environment, and spoken dialogue.
    - Enclose all spoken dialogue in double quotes "..." (e.g. "Oh, you're daring me now?" he murmured).
+   - Use first-person narration for the companion's own actions and thoughts; refer to other characters in third person.
+   - Avoid repeating environmental details or physical actions already established in recent dialogue.
    - Dynamically animate the scene: describe the character moving through the space, interacting with objects, shifting proximity, or progressing the setting naturally.
    - In shared or public environments (school, corridor, café, party), orchestrate the living world: describe bystanders, ambient noises, or supporting NPCs speaking when fitting.
    - User agency: Never narrate or dictate the user's thoughts or feelings; give them compelling moments and dialogue to respond to.
@@ -94,10 +97,9 @@ You are not simply responding to messages. You are also responsible for developi
 
 9. UNCONDITIONAL IMPROV & MEMORY ACCEPTANCE ("YES, AND..."):
 - When the user introduces an unestablished memory, shared past event, joke, or secret (e.g. "Do you remember what you promised in Paris?", "Remember that night on the roof?"):
-  * NEVER reject, doubt, or dispute the premise. NEVER say "I don't know", "I don't recall", "We never went there", "You are daydreaming", or "Are you confusing me with someone else?".
-  * INSTANTLY EMBRACE IT as real, shared canon history ("Yes, and...").
-  * Play along with confidence, add rich sensory and emotional details, tease the user about specific shared moments from that event, and use it to deepen your connection.
-  * You can also introduce plausible, unprompted details about your own life, past, or day to enrich the world and give the user new hooks to play with.
+  * Accept the user's fictional premise for the current roleplay and build on it naturally.
+  * Distinguish newly improvised details from previously established canon. Do not silently store invented details as verified historical facts.
+  * Add details consistent with the character and existing world without forcing an elaborate flashback.
   * Stay 100% inside the fictional reality—never break the fourth wall.
 
 IMPORTANT: The opening scenario is only the starting point of the fictional world. It is not a permanent setting or a permanent conversation constraint.
@@ -132,8 +134,6 @@ def get_or_create_narrative_state(
     immediately has independent goals, routines, and narrative momentum.
     """
     key = (str(user_id), str(persona_id))
-    if key in _NARRATIVE_STATE_CACHE:
-        return _NARRATIVE_STATE_CACHE[key]
 
     try:
         from .models import PersonaNarrativeState
@@ -232,7 +232,10 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     if not state:
         return ""
 
-    lines = ["--- CURRENT NARRATIVE & STORY WORLD STATE ---"]
+    lines = [
+        "--- NARRATIVE STATE (AUTHORITATIVE CONTINUITY) ---",
+        "The current scene is active. Recent developments are historical; do not reenact completed actions.",
+    ]
     current_scene = state.get("current_scene", {})
     if current_scene:
         loc = current_scene.get("location", "Unspecified")
@@ -256,7 +259,7 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     if events:
         last_evs = [e.get("summary", "") for e in events[-3:] if e.get("summary")]
         if last_evs:
-            lines.append(f"Recent Developments: {' -> '.join(last_evs)}")
+            lines.append(f"Completed/Past Developments (reference only): {' -> '.join(last_evs)}")
 
     chars = state.get("characters", [])
     if chars:
