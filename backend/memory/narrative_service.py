@@ -158,7 +158,7 @@ def get_or_create_narrative_state(
     memory_prompt: str = "",
 ) -> dict:
     """
-    Loads canonical narrative state from memory cache or PostgreSQL.
+    Loads canonical narrative state from PostgreSQL.
     If none exists, bootstraps rich default world state so any persona
     immediately has independent goals, routines, and narrative momentum.
     """
@@ -435,6 +435,12 @@ Output ONLY a JSON object with this exact schema:
         new_thread = extracted_obj.new_plot_thread
         new_chars = extracted_obj.new_characters or []
 
+        # Do not churn PostgreSQL state versions for ordinary chat turns that
+        # introduced no persistent narrative change.
+        scene_changed = bool(scene_changed and (new_loc or new_sit))
+        if not (scene_changed or new_event or new_thread or new_chars):
+            return
+
         updated_state = dict(base_state)
         if scene_changed:
             current_scene = dict(updated_state.get("current_scene") or {})
@@ -506,12 +512,6 @@ Output ONLY a JSON object with this exact schema:
                             existing[field] = value
                     chars[character_indexes[normalized_name]] = existing
             updated_state["characters"] = chars
-
-        # Count each completed extraction, even when this exchange did not create
-        # a major event. State versions are guarded against stale background writes.
-        progression = dict(updated_state.get("story_progression") or {})
-        progression["turns_count"] = int(progression.get("turns_count", 0)) + 1
-        updated_state["story_progression"] = progression
 
         from .models import PersonaNarrativeState
         expected_version = int(base_state.get("state_version", 1))
