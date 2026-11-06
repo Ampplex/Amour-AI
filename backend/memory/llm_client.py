@@ -221,6 +221,47 @@ class CompanionReplyPayload(BaseModel):
         return str(v).strip()
 
 
+def parse_memory_store_decision(raw_content: str) -> bool:
+    """Read the LLM's strict boolean memory decision from its chat-response JSON.
+
+    Missing, malformed, or non-boolean metadata fails closed. This does not
+    make a second model call and contains no keyword/category decision rules.
+    """
+    if not raw_content or not raw_content.strip():
+        return False
+
+    text = raw_content.strip()
+    decoder = json.JSONDecoder()
+    candidates = []
+
+    try:
+        value = json.loads(text)
+        if isinstance(value, str):
+            value = json.loads(value)
+        if isinstance(value, dict):
+            candidates.append(value)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    if not candidates:
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                value, _end = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                candidates.append(value)
+                break
+
+    for candidate in candidates:
+        decision = candidate.get("remember_user_fact")
+        if isinstance(decision, bool):
+            return decision
+    return False
+
+
 def parse_model_json_reply(raw_content: str, default_conflict_stage: int = 0) -> tuple[str, int]:
     """
     Return only the user-facing companion reply and its internal conflict stage.
