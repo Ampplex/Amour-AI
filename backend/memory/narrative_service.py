@@ -20,7 +20,7 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - Match response length to the user's message and the narrative moment. Casual greetings and brief reactions may receive concise, natural replies.
    - Use expressive multi-paragraph prose when emotions, meaningful actions, or major story developments justify it; never pad a response to reach a word count.
    - Seamlessly weave together character interiority (emotions, heartbeats, private thoughts), physical actions, sensory details of the environment, and spoken dialogue.
-   - Enclose all spoken dialogue in double quotes "..." (e.g. "Oh, you're daring me now?" he murmured).
+   - Enclose spoken dialogue in double quotes and narrate the companion's own speech tags in first person (e.g. "Oh, you're daring me now?" I murmur).
    - Use first-person narration for the companion's own actions and thoughts; refer to other characters in third person.
    - Avoid repeating environmental details or physical actions already established in recent dialogue.
    - Dynamically animate the scene: describe the character moving through the space, interacting with objects, shifting proximity, or progressing the setting naturally.
@@ -117,10 +117,6 @@ class NarrativeExtractionPayload(BaseModel):
     new_characters: list[dict] = Field(default_factory=list)
 
 
-# In-memory fast cache for Option B: (user_id, persona_id) -> state dict
-_NARRATIVE_STATE_CACHE: dict[tuple[str, str], dict] = {}
-
-
 def get_or_create_narrative_state(
     user_id: str,
     persona_id: str,
@@ -133,8 +129,6 @@ def get_or_create_narrative_state(
     If none exists, bootstraps rich default world state so any persona
     immediately has independent goals, routines, and narrative momentum.
     """
-    key = (str(user_id), str(persona_id))
-
     try:
         from .models import PersonaNarrativeState
         db_state = PersonaNarrativeState.objects.filter(
@@ -152,7 +146,6 @@ def get_or_create_narrative_state(
                 "recent_events": db_state.recent_events or [],
                 "story_progression": db_state.story_progression or {},
             }
-            _NARRATIVE_STATE_CACHE[key] = state_dict
             return state_dict
 
         # Bootstrap initial state from persona definition
@@ -207,7 +200,6 @@ def get_or_create_narrative_state(
             "recent_events": new_obj.recent_events,
             "story_progression": new_obj.story_progression,
         }
-        _NARRATIVE_STATE_CACHE[key] = state_dict
         return state_dict
 
     except Exception as exc:
@@ -455,15 +447,12 @@ Output ONLY a JSON object with this exact schema:
             recent_events=updated_state.get("recent_events", []),
             story_progression=updated_state.get("story_progression", {}),
         )
-        key = (str(user_id), str(persona_id))
         if updated_rows:
-            _NARRATIVE_STATE_CACHE[key] = updated_state
             logger.info(
                 "[Narrative Extractor] Updated state v%s for %s <-> %s",
                 updated_state["state_version"], user_id, persona_id
             )
         else:
-            _NARRATIVE_STATE_CACHE.pop(key, None)
             logger.info(
                 "[Narrative Extractor] Discarded stale extraction for %s <-> %s",
                 user_id, persona_id
