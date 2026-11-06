@@ -1,6 +1,8 @@
 import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from .chat_service import normalize_history_turns
 from .llm_client import normalize_bedrock_messages, parse_model_json_reply
@@ -69,7 +71,6 @@ class ConversationContinuityTests(SimpleTestCase):
             self.assertFalse(should_retrieve_from_reeve(message))
         self.assertTrue(should_retrieve_from_reeve("Remember our trip to Paris?"))
         self.assertTrue(should_retrieve_from_reeve("What happened to your sister?"))
-        self.assertFalse(should_ingest_into_reeve("Remember our trip to Paris?"))
 
     def test_json_parser_returns_only_reply_and_conflict_stage(self):
         expected = '*Elijah smiles.*\n\n"You made it."'
@@ -118,6 +119,100 @@ class ConversationContinuityTests(SimpleTestCase):
         # JSON object was truncated after it.
         self.assertEqual(reply, "Hello")
         self.assertEqual(stage, 1)
+
+    def _jev_response(
+        self,
+        store_probability=0.95,
+        memory_type="profile_fact",
+        type_probability=0.90,
+        sensitive_probability=0.01,
+    ):
+        other_type = "other" if memory_type != "other" else "fictional_roleplay"
+        return SimpleNamespace(
+            model="jev-latest",
+            choices={
+                "memory_type": SimpleNamespace(
+                    choice=memory_type,
+                    probabilities={
+                        memory_type: type_probability,
+                        other_type: 1 - type_probability,
+                    },
+                ),
+            },
+            nouls={
+                "store_worthiness": SimpleNamespace(noul=store_probability),
+                "sensitive_data": SimpleNamespace(noul=sensitive_probability),
+            },
+        )
+
+    @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
+    @patch("memory.reeve_service._get_jev_client")
+    def test_jev_approves_supported_real_world_user_fact(self, get_client):
+        client = MagicMock()
+        client.system_one.return_value = self._jev_response()
+        get_client.return_value = client
+        history = [
+            {"sender": "user", "text": "I work as a backend engineer."},
+            {"sender": "bot", "text": "What kind of systems do you build?"},
+        ]
+
+        self.assertTrue(
+            should_ingest_into_reeve("I live in Pune and prefer backend engineering.", history)
+        )
+        request = client.system_one.call_args.kwargs
+        self.assertEqual(
+            request["state"]["candidate_user_message"],
+            "I live in Pune and prefer backend engineering.",
+        )
+        self.assertEqual(len(request["state"]["recent_conversation_for_disambiguation_only"]), 2)
+
+    @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
+    @patch("memory.reeve_service._get_jev_client")
+    def test_jev_discards_small_talk_and_fictional_roleplay(self, get_client):
+        get_client.return_value.system_one.return_value = self._jev_response(
+            store_probability=0.95,
+            memory_type="fictional_roleplay",
+            type_probability=0.98,
+        )
+        self.assertFalse(should_ingest_into_reeve("The castle guards are approaching."))
+
+    @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
+    @patch("memory.reeve_service._get_jev_client")
+    def test_jev_blocks_sensitive_personal_data(self, get_client):
+        get_client.return_value.system_one.return_value = self._jev_response(
+            sensitive_probability=0.91,
+        )
+        self.assertFalse(should_ingest_into_reeve("My bank account number is ..."))
+
+    @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
+    @patch("memory.reeve_service._get_jev_client")
+    def test_jev_uncertain_decisions_fail_closed(self, get_client):
+        get_client.return_value.system_one.return_value = self._jev_response(
+            store_probability=0.61,
+        )
+        self.assertFalse(should_ingest_into_reeve("I live in Pune."))
+
+    @override_settings(TYPESAFE_API_KEY="")
+    @patch("memory.reeve_service._get_jev_client")
+    def test_missing_jev_key_skips_memory_write(self, get_client):
+        self.assertFalse(should_ingest_into_reeve("I live in Pune."))
+        get_client.assert_not_called()
+
+    @override_settings(TYPESAFE_API_KEY="test-typesafe-key", JEV_MODEL="jev-latest")
+    @patch("memory.reeve_service._get_jev_client")
+    def test_jev_receives_candidate_and_limited_recent_context(self, get_client):
+        client = get_client.return_value
+        client.system_one.return_value = self._jev_response()
+        history = [
+            {"sender": "user", "text": "I like cooking."},
+            {"sender": "bot", "text": "What do you enjoy making?"},
+        ]
+
+        self.assertTrue(should_ingest_into_reeve("I live in Pune.", history))
+        request = client.system_one.call_args.kwargs
+        self.assertEqual(request["state"]["candidate_user_message"], "I live in Pune.")
+        self.assertEqual(len(request["state"]["recent_conversation_for_disambiguation_only"]), 2)
+        self.assertEqual(set(request["questions"]), {"store_worthiness", "memory_type", "sensitive_data"})
 
     def test_namespace_is_consistent(self):
         self.assertEqual(

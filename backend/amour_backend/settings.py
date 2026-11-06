@@ -155,6 +155,9 @@ SIMPLE_JWT = {
 
 # Reeve & Google OAuth Settings
 REEVE_API_KEY = os.environ.get("REEVE_API_KEY", "")
+TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY", "")
+JEV_MODEL = os.environ.get("JEV_MODEL", "jev-latest")
+JEV_TIMEOUT_SECONDS = float(os.environ.get("JEV_TIMEOUT_SECONDS", "1.5"))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")

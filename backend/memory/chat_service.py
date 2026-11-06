@@ -105,9 +105,9 @@ def generate_companion_reply(
         except Exception as exc:
             logger.warning("Failed to retrieve Reeve context: %s", exc)
 
-    # Preserve meaningful user facts in Reeve after retrieval. Generated assistant
-    # prose and exact dialogue remain in PostgreSQL, not long-term memory.
-    if should_ingest_into_reeve(message):
+    # Jev makes one typed memory-worthiness decision; Reeve's native async
+    # PersistWorker handles the approved write without adding an LLM generation call.
+    if should_ingest_into_reeve(message, conversation_history=conversation_history):
         try:
             store_text = (
                 f"User ({user_clean_name}): {message}"
@@ -115,7 +115,7 @@ def generate_companion_reply(
             )
             store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
         except Exception as exc:
-            logger.warning("Failed to store user memory: %s", exc)
+            logger.warning("Approved Reeve memory write failed: %s", exc)
 
     # 3. BUILD TIME / TEMPORAL GROUNDING
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
