@@ -340,71 +340,113 @@ Output ONLY a JSON object with this exact schema:
         new_thread = extracted_obj.new_plot_thread
         new_chars = extracted_obj.new_characters or []
 
-        if scene_changed or new_event or new_thread or new_chars:
-            updated_state = dict(base_state)
-            updated_state["state_version"] = updated_state.get("state_version", 1) + 1
+        updated_state = dict(base_state)
+        if scene_changed:
+            current_scene = dict(updated_state.get("current_scene") or {})
+            if new_loc:
+                current_scene["location"] = new_loc
+            if new_sit:
+                current_scene["situation"] = new_sit
+            updated_state["current_scene"] = current_scene
 
-            if scene_changed:
-                current_scene = dict(updated_state.get("current_scene") or {})
-                if new_loc:
-                    current_scene["location"] = new_loc
-                if new_sit:
-                    current_scene["situation"] = new_sit
-                updated_state["current_scene"] = current_scene
-
-            if new_event:
-                events = list(updated_state.get("recent_events") or [])
-                ev_id = f"event_{int(time.time())}"
+        if new_event:
+            events = list(updated_state.get("recent_events") or [])
+            normalized_event = " ".join(new_event.casefold().split())
+            already_recorded = any(
+                " ".join(str(event.get("summary", "")).casefold().split()) == normalized_event
+                for event in events if isinstance(event, dict)
+            )
+            if not already_recorded:
                 events.append({
-                    "event_id": ev_id,
+                    "event_id": f"event_{int(time.time() * 1000)}",
                     "summary": new_event,
                     "consequence": new_consequence,
                 })
                 updated_state["recent_events"] = events[-6:]
 
-            if new_thread:
-                threads = list(updated_state.get("plot_threads") or [])
-                th_id = f"thread_{int(time.time())}"
+        if new_thread:
+            threads = list(updated_state.get("plot_threads") or [])
+            normalized_thread = " ".join(new_thread.casefold().split())
+            if not any(
+                " ".join(str(thread.get("description", "")).casefold().split()) == normalized_thread
+                for thread in threads if isinstance(thread, dict)
+            ):
                 threads.append({
-                    "id": th_id,
+                    "id": f"thread_{int(time.time() * 1000)}",
                     "description": new_thread,
                     "status": "unresolved",
                 })
                 updated_state["plot_threads"] = threads[-4:]
 
-            if new_chars and isinstance(new_chars, list):
-                chars = list(updated_state.get("characters") or [])
-                existing_names = {c.get("name", "").lower() for c in chars if isinstance(c, dict)}
-                for nc in new_chars:
-                    if isinstance(nc, dict) and nc.get("name"):
-                        cname = nc.get("name")
-                        if cname.lower() not in existing_names:
-                            chars.append({
-                                "character_id": cname.lower().replace(" ", "_"),
-                                "name": cname,
-                                "role": nc.get("role", "supporting_character"),
-                            })
-                updated_state["characters"] = chars
+        if new_chars and isinstance(new_chars, list):
+            chars = list(updated_state.get("characters") or [])
+            character_indexes = {
+                character.get("name", "").strip().casefold(): index
+                for index, character in enumerate(chars)
+                if isinstance(character, dict) and character.get("name")
+            }
+            for new_character in new_chars:
+                if not isinstance(new_character, dict) or not new_character.get("name"):
+                    continue
+                name = new_character["name"].strip()
+                if not name:
+                    continue
+                normalized_name = name.casefold()
+                if normalized_name not in character_indexes:
+                    chars.append({
+                        "character_id": new_character.get("character_id") or name.lower().replace(" ", "_"),
+                        "name": name,
+                        "role": new_character.get("role", "supporting_character"),
+                        "personality_summary": new_character.get("personality_summary", ""),
+                        "independent_goals": new_character.get("independent_goals", []),
+                        "relationships": new_character.get("relationships", []),
+                        "current_activity": new_character.get("current_activity", ""),
+                    })
+                    character_indexes[normalized_name] = len(chars) - 1
+                else:
+                    existing = dict(chars[character_indexes[normalized_name]])
+                    for field in ("role", "personality_summary", "independent_goals", "relationships", "current_activity"):
+                        value = new_character.get(field)
+                        if value:
+                            existing[field] = value
+                    chars[character_indexes[normalized_name]] = existing
+            updated_state["characters"] = chars
 
-            # Update cache
-            key = (str(user_id), str(persona_id))
+        # Count each completed extraction, even when this exchange did not create
+        # a major event. State versions are guarded against stale background writes.
+        progression = dict(updated_state.get("story_progression") or {})
+        progression["turns_count"] = int(progression.get("turns_count", 0)) + 1
+        updated_state["story_progression"] = progression
+
+        from .models import PersonaNarrativeState
+        expected_version = int(base_state.get("state_version", 1))
+        updated_state["state_version"] = expected_version + 1
+        updated_rows = PersonaNarrativeState.objects.filter(
+            user_identifier=str(user_id),
+            persona_identifier=str(persona_id),
+            state_version=expected_version,
+        ).update(
+            state_version=updated_state["state_version"],
+            current_scene=updated_state.get("current_scene", {}),
+            story_arcs=updated_state.get("story_arcs", []),
+            plot_threads=updated_state.get("plot_threads", []),
+            characters=updated_state.get("characters", []),
+            recent_events=updated_state.get("recent_events", []),
+            story_progression=updated_state.get("story_progression", {}),
+        )
+        key = (str(user_id), str(persona_id))
+        if updated_rows:
             _NARRATIVE_STATE_CACHE[key] = updated_state
-
-            # Persist to Neon PostgreSQL
-            from .models import PersonaNarrativeState
-            PersonaNarrativeState.objects.filter(
-                user_identifier=str(user_id),
-                persona_identifier=str(persona_id),
-            ).update(
-                state_version=updated_state["state_version"],
-                current_scene=updated_state["current_scene"],
-                story_arcs=updated_state.get("story_arcs", []),
-                plot_threads=updated_state.get("plot_threads", []),
-                characters=updated_state.get("characters", []),
-                recent_events=updated_state.get("recent_events", []),
-                story_progression=updated_state.get("story_progression", {}),
+            logger.info(
+                "[Narrative Extractor] Updated state v%s for %s <-> %s",
+                updated_state["state_version"], user_id, persona_id
             )
-            logger.info(f"[Narrative Extractor] Updated state v{updated_state['state_version']} for {user_id} <-> {persona_id}")
+        else:
+            _NARRATIVE_STATE_CACHE.pop(key, None)
+            logger.info(
+                "[Narrative Extractor] Discarded stale extraction for %s <-> %s",
+                user_id, persona_id
+            )
     except Exception as exc:
         logger.warning(f"[Narrative Extractor] Error in background extraction: {exc}")
 
