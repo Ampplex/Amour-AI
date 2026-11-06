@@ -17,8 +17,9 @@ from django.conf import settings
 
 from .reeve_service import (
     retrieve_context_for_user,
-    store_memory_for_user,
     strip_emojis,
+    should_retrieve_from_reeve,
+    deduplicate_context,
 )
 from .narrative_service import (
     GLOBAL_COMPANION_DIRECTIVES,
@@ -33,6 +34,38 @@ from .llm_client import (
 )
 
 logger = logging.getLogger("amour.chat")
+
+ASSISTANT_SENDERS = {"bot", "assistant", "ai", "companion"}
+USER_SENDERS = {"user", "human"}
+
+
+def normalize_history_turns(conversation_history: list | None) -> list[dict]:
+    """Normalize supported history formats without silently dropping valid turns."""
+    normalized = []
+    for turn in conversation_history or []:
+        if not isinstance(turn, dict):
+            logger.warning("[History Normalizer] Skipping non-object history item")
+            continue
+        raw_sender = (turn.get("sender") or turn.get("role") or "").strip().lower()
+        if raw_sender in ASSISTANT_SENDERS:
+            sender = "bot"
+        elif raw_sender in USER_SENDERS:
+            sender = "user"
+        else:
+            logger.warning("[History Normalizer] Skipping unknown sender: %s", raw_sender or "<empty>")
+            continue
+        value = turn.get("text")
+        if value is None:
+            value = turn.get("content", "")
+        if not isinstance(value, str):
+            logger.warning("[History Normalizer] Skipping non-text content")
+            continue
+        text = value.strip()
+        if text:
+            normalized.append({"sender": sender, "text": text})
+    return normalized
+
+
 
 
 def generate_companion_reply(
@@ -57,25 +90,18 @@ def generate_companion_reply(
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
 
-    # 1. SMART INGESTION FILTER: Only store user message into Reeve if it has semantic substance
-    msg_words = message.strip().split()
-    is_ephemeral = (
-        len(msg_words) < 3
-        or message.strip().lower() in {"hi", "hello", "hey", "ok", "okay", "bye", "hmm", "k", "yeah", "yes", "no"}
-    )
-    if not is_ephemeral:
-        try:
-            store_text = f"User ({user_clean_name}): {message}" if user_clean_name else f"User: {message}"
-            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
-        except Exception as exc:
-            logger.warning(f"Failed to store memory: {exc}")
-
-    # 2. RETRIEVE REEVE LTM CONTEXT
+    # PostgreSQL is the source of truth for exact dialogue. Reeve is queried only
+    # when the message asks for historical context. Do not write raw dialogue or
+    # generated prose into LTM from this hot path.
     memory_context = ""
-    try:
-        memory_context = retrieve_context_for_user(message, namespace=namespace, user_key=user_key)
-    except Exception as exc:
-        logger.warning(f"Failed to retrieve context: {exc}")
+    if should_retrieve_from_reeve(message):
+        try:
+            memory_context = retrieve_context_for_user(
+                message, namespace=namespace, user_key=user_key
+            )
+            memory_context = deduplicate_context(memory_context or "")
+        except Exception as exc:
+            logger.warning("Failed to retrieve Reeve context: %s", exc)
 
     # 3. BUILD TIME / TEMPORAL GROUNDING
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
@@ -136,18 +162,10 @@ Update conflict_stage in your output JSON based on the emotional trajectory of t
     system_prompt = "\n\n".join(prompt_modules)
 
     # 9. ASSEMBLE CONVERSATION HISTORY & NORMALIZE FOR BEDROCK
-    history_turns = []
-    if conversation_history:
-        for turn in conversation_history:
-            sender = "bot" if turn.get("sender") == "bot" else "user"
-            text = (turn.get("text") or "").strip()
-            if text:
-                history_turns.append({"sender": sender, "text": text})
-
-    # Ensure latest message is present
-    if not history_turns or history_turns[-1].get("text") != message:
-        history_turns.append({"sender": "user", "text": message})
-
+    history_turns = normalize_history_turns(conversation_history)
+    # The API passes persisted history only; append this request once by position.
+    # Do not compare text: users can legitimately repeat identical messages.
+    history_turns.append({"sender": "user", "text": message})
     bedrock_messages = normalize_bedrock_messages(history_turns, persona_name=persona_name)
 
     # 10. DUAL-TIER INFERENCE: Bedrock Mistral Large 2 with Groq LPU failover
