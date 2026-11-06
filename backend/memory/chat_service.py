@@ -17,7 +17,9 @@ from django.conf import settings
 
 from .reeve_service import (
     retrieve_context_for_user,
+    store_memory_for_user,
     strip_emojis,
+    should_ingest_into_reeve,
     should_retrieve_from_reeve,
     deduplicate_context,
 )
@@ -90,9 +92,20 @@ def generate_companion_reply(
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
 
-    # PostgreSQL is the source of truth for exact dialogue. Reeve is queried only
-    # when the message asks for historical context. Do not write raw dialogue or
-    # generated prose into LTM from this hot path.
+    # Preserve durable user facts in Reeve, but never store generated assistant
+    # prose here. Exact conversation dialogue remains in PostgreSQL.
+    if should_ingest_into_reeve(message):
+        try:
+            store_text = (
+                f"User ({user_clean_name}): {message}"
+                if user_clean_name else f"User: {message}"
+            )
+            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
+        except Exception as exc:
+            logger.warning("Failed to store user memory: %s", exc)
+
+    # Retrieval has its own policy; an ingestible message is not automatically a
+    # retrieval query, and greetings/fillers should not trigger graph retrieval.
     memory_context = ""
     if should_retrieve_from_reeve(message):
         try:
