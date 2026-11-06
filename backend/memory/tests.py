@@ -1,3 +1,5 @@
+import json
+
 from django.test import SimpleTestCase
 
 from .chat_service import normalize_history_turns
@@ -70,38 +72,42 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertFalse(should_ingest_into_reeve("Remember our trip to Paris?"))
 
     def test_json_parser_returns_only_reply_and_conflict_stage(self):
-        raw = (
-            '{"reply":"*Elijah smiles.*\\n\\n\\"You made it.\\"","conflict_stage":2}'
-        )
+        expected = '*Elijah smiles.*\n\n"You made it."'
+        raw = json.dumps({"reply": expected, "conflict_stage": 2})
         reply, stage = parse_model_json_reply(raw, default_conflict_stage=0)
-        self.assertEqual(reply, '*Elijah smiles.*\n\n"You made it."')
+        self.assertEqual(reply, expected)
         self.assertEqual(stage, 2)
         self.assertNotIn('"conflict_stage"', reply)
 
     def test_json_parser_extracts_envelope_after_provider_prose(self):
-        raw = (
-            'Here is the response:\\n'
-            '{"reply":"*He looks over.* \\"Come sit down.\\"","conflict_stage":1}'
-        )
+        expected = '*He looks over.* "Come sit down."'
+        raw = "Here is the response:\n" + json.dumps({
+            "reply": expected,
+            "conflict_stage": 1,
+        })
         reply, stage = parse_model_json_reply(raw)
-        self.assertEqual(reply, '*He looks over.* "Come sit down."')
+        self.assertEqual(reply, expected)
         self.assertEqual(stage, 1)
         self.assertNotIn("conflict_stage", reply)
 
     def test_json_parser_handles_markdown_fenced_json(self):
-        raw = ' ```json\\n{"reply":"Hello there.","conflict_stage":0}\\n``` '
+        payload = json.dumps({"reply": "Hello there.", "conflict_stage": 0})
+        raw = f"```json\n{payload}\n```"
         reply, stage = parse_model_json_reply(raw)
         self.assertEqual(reply, "Hello there.")
         self.assertEqual(stage, 0)
 
     def test_json_parser_preserves_plain_text_provider_reply(self):
-        reply, stage = parse_model_json_reply("He smiles. \\"Good to see you.\\"")
-        self.assertEqual(reply, 'He smiles. "Good to see you."')
+        expected = 'He smiles. "Good to see you."'
+        reply, stage = parse_model_json_reply(expected)
+        self.assertEqual(reply, expected)
         self.assertEqual(stage, 0)
 
     def test_json_parser_never_returns_malformed_json_to_chat(self):
         raw = '{"reply": "Hello", "conflict_stage":'
         reply, stage = parse_model_json_reply(raw, default_conflict_stage=1)
+        # The complete reply string can still be recovered even if the outer
+        # JSON object was truncated after it.
         self.assertEqual(reply, "Hello")
         self.assertEqual(stage, 1)
 
