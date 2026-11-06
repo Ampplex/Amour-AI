@@ -156,7 +156,9 @@ def get_or_create_narrative_state(
             "participants": [persona_name, "User"],
         }
         if greeting:
-            initial_scene["situation"] = greeting[:120].strip()
+            # The greeting is already delivered dialogue in PostgreSQL. Keep the
+            # scene state as a concise status, not a copy of the opening script.
+            initial_scene["situation"] = "Opening scene established; conversation is underway"
 
         initial_char = {
             "character_id": persona_name.lower().replace(" ", "_"),
@@ -175,7 +177,7 @@ def get_or_create_narrative_state(
 
         initial_event = {
             "event_id": "event_001",
-            "summary": f"{persona_name} initiated contact: {greeting[:100]}" if greeting else "Conversation began",
+            "summary": "Opening greeting delivered" if greeting else "Conversation began",
             "consequence": "Conversation began",
         }
 
