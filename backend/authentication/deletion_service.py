@@ -192,6 +192,7 @@ def delete_user_account_and_memories(user_or_id_or_email: Any) -> Dict[str, Any]
             PublisherFollow,
             PersonaChatMessage,
             PersonaRelationshipState,
+            PersonaNarrativeState,
             UserMemoryKeyBackup,
         )
 
@@ -205,11 +206,16 @@ def delete_user_account_and_memories(user_or_id_or_email: Any) -> Dict[str, Any]
         ).delete()
         report["postgres"]["memory_key_backups_deleted"] = del_backups[0]
 
-        # 3. Relationship States
+        # 3. Relationship & Narrative States
         del_rel = PersonaRelationshipState.objects.filter(
             Q(user_identifier=user_id) | Q(user_identifier=email)
         ).delete()
         report["postgres"]["relationship_states_deleted"] = del_rel[0]
+
+        del_narrative = PersonaNarrativeState.objects.filter(
+            Q(user_identifier=user_id) | Q(user_identifier=email)
+        ).delete()
+        report["postgres"]["narrative_states_deleted"] = del_narrative[0]
 
         # 4. Chat Messages
         del_chats = PersonaChatMessage.objects.filter(

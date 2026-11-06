@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -16,6 +17,8 @@ from .reeve_service import (
     retrieve_context_for_user,
     clear_user_memories,
     generate_companion_reply,
+    get_or_create_narrative_state,
+    extract_narrative_state_async,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,6 +279,15 @@ class ChatMemoryView(APIView):
         )
         current_conflict_stage = rel_state.conflict_stage
 
+        # Fetch or bootstrap canonical narrative state (inhabits living world, location, goals)
+        narrative_state = get_or_create_narrative_state(
+            user_id=str(user_id),
+            persona_id=str(persona_id),
+            persona_name=persona_name,
+            greeting=greeting,
+            memory_prompt=memory_prompt,
+        )
+
         # Fetch recent dialogue history (last 6 turns) for fast, low-latency conversation context
         recent_turns_qs = list(
             PersonaChatMessage.objects.filter(
@@ -316,7 +328,7 @@ class ChatMemoryView(APIView):
         except Exception as e:
             logger.warning(f"Could not persist user message to DB: {e}")
 
-        # 2. Generate companion reply (Reeve memory graph storage, recall, dialogue context, and Groq LLM)
+        # 2. Generate companion reply (AWS Bedrock Mistral Large 2 primary with Groq failover + Reeve memory graph)
         try:
             result = generate_companion_reply(
                 message=message,
@@ -330,21 +342,46 @@ class ChatMemoryView(APIView):
                 user_name=user_name,
                 conversation_history=conversation_history,
                 current_conflict_stage=current_conflict_stage,
+                narrative_state=narrative_state,
                 user_key=user_key,
             )
             reply_text = result.get("reply", "").strip()
             new_conflict_stage = result.get("conflict_stage", current_conflict_stage)
 
-            # Persist updated conflict stage into PostgreSQL database
-            if rel_state.conflict_stage != new_conflict_stage:
+            # Persist updated conflict stage & durable relationship history into PostgreSQL
+            stage_changed = rel_state.conflict_stage != new_conflict_stage
+            if stage_changed:
                 rel_state.conflict_stage = new_conflict_stage
-                rel_state.save(update_fields=["conflict_stage", "updated_at"])
+                now_iso = datetime.now().isoformat()
+                history = list(rel_state.relationship_history or [])
+                if new_conflict_stage == 1:
+                    rel_state.relationship_status = "broken"
+                    history.append({"event": "conflict_started", "at": now_iso})
+                elif new_conflict_stage == 2:
+                    rel_state.relationship_status = "reconciling"
+                elif new_conflict_stage == 3:
+                    rel_state.relationship_status = "reconciled"
+                    history.append({"event": "reconciled", "at": now_iso})
+                elif new_conflict_stage == 0 and rel_state.relationship_status in ("reconciled", "reconciling"):
+                    rel_state.relationship_status = "stable"
+                    history.append({"event": "baseline_restored_post_reconciliation", "at": now_iso})
+                rel_state.relationship_history = history
+                rel_state.save(update_fields=["conflict_stage", "relationship_status", "relationship_history", "updated_at"])
 
             if not reply_text:
                 return Response(
                     {"error": "Failed to generate companion reply from model"},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
+
+            # Fire Option B background narrative state extraction non-blockingly
+            extract_narrative_state_async(
+                user_id=str(user_id),
+                persona_id=str(persona_id),
+                user_message=message,
+                reply=reply_text,
+                base_state=narrative_state,
+            )
 
             # 3. Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
             try:

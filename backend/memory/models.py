@@ -148,6 +148,8 @@ class PersonaRelationshipState(models.Model):
     persona_identifier = models.CharField(max_length=128, db_index=True)
     conflict_stage = models.IntegerField(default=0, db_index=True)
     conflict_reason = models.TextField(blank=True, default="")
+    relationship_status = models.CharField(max_length=64, default="stable", db_index=True)
+    relationship_history = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -155,10 +157,73 @@ class PersonaRelationshipState(models.Model):
         unique_together = ("user_identifier", "persona_identifier")
         indexes = [
             models.Index(fields=["user_identifier", "persona_identifier"]),
+            models.Index(fields=["relationship_status"]),
         ]
 
     def __str__(self):
-        return f"{self.user_identifier} <-> {self.persona_identifier} (Stage {self.conflict_stage})"
+        return f"{self.user_identifier} <-> {self.persona_identifier} ({self.relationship_status}, Stage {self.conflict_stage})"
+
+
+class PersonaNarrativeState(models.Model):
+    """
+    Maintains the canonical current fictional world state for a specific user-persona pair.
+    Answers: 'What is happening right now in this fictional world?'
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_identifier = models.CharField(max_length=128, db_index=True)
+    persona_identifier = models.CharField(max_length=128, db_index=True)
+    state_version = models.IntegerField(default=1, db_index=True)
+
+    # Current scene & setting
+    current_scene = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Current location, fictional time of day, active participants, and immediate situation",
+    )
+    # Active storylines and goals
+    story_arcs = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Active narrative arcs and developments",
+    )
+    # Unresolved plot questions or mysteries
+    plot_threads = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Unresolved plot threads and questions",
+    )
+    # Active supporting characters and their goals
+    characters = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Key characters present or active in the narrative",
+    )
+    # Bounded sliding window of recent story events with consequences
+    recent_events = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Bounded list of recent fictional events and consequences",
+    )
+    # Story progression indicators
+    story_progression = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Current arc ID, last scene change turn, last major event ID",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user_identifier", "persona_identifier")
+        indexes = [
+            models.Index(fields=["user_identifier", "persona_identifier"]),
+            models.Index(fields=["state_version"]),
+        ]
+
+    def __str__(self):
+        loc = self.current_scene.get("location", "Unknown Location") if isinstance(self.current_scene, dict) else "Unknown"
+        return f"NarrativeState (v{self.state_version}) for {self.user_identifier} <-> {self.persona_identifier} @ {loc}"
 
 
 class UserMemoryKeyBackup(models.Model):
