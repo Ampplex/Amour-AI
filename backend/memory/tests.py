@@ -9,7 +9,11 @@ from .llm_client import (
     parse_memory_store_decision,
     parse_model_json_reply,
 )
-from .narrative_service import SCENE_DRIVEN_STORYTELLING, format_narrative_state_for_prompt
+from .narrative_service import (
+    AUTONOMOUS_NARRATIVE_ENGINE,
+    SCENE_DRIVEN_STORYTELLING,
+    format_narrative_state_for_prompt,
+)
 from .views import build_reeve_namespace
 
 
@@ -176,6 +180,18 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertIn("must be wrapped in double asterisks", SCENE_DRIVEN_STORYTELLING)
         self.assertNotIn("2-4 developed paragraphs", SCENE_DRIVEN_STORYTELLING)
         self.assertNotIn("120-220 words", SCENE_DRIVEN_STORYTELLING)
+
+    def test_story_progression_prompt_uses_turn_cadence(self):
+        prompt = format_narrative_state_for_prompt(
+            {
+                "current_scene": {"location": "Cafe", "situation": "Having coffee"},
+                "story_progression": {"turns_count": 8, "last_progress_turn": 4},
+            }
+        )
+        self.assertIn("user turn 8", prompt)
+        self.assertIn("4 user turns since the last recorded story development", prompt)
+        self.assertIn("Every reply must move at least one element of the story forward", AUTONOMOUS_NARRATIVE_ENGINE)
+        self.assertIn("clearly noticeable development", AUTONOMOUS_NARRATIVE_ENGINE)
 
     def test_narrative_state_labels_recent_events_as_history(self):
         prompt = format_narrative_state_for_prompt(
