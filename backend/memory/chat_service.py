@@ -19,7 +19,6 @@ from .reeve_service import (
     retrieve_context_for_user,
     store_memory_for_user,
     strip_emojis,
-    should_retrieve_from_reeve,
     deduplicate_context,
 )
 from .narrative_service import (
@@ -93,17 +92,17 @@ def generate_companion_reply(
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
 
-    # Retrieve historical context before writing this turn, so a recall question
-    # cannot immediately retrieve and repeat itself as a newly stored memory.
+    # Always retrieve relevant long-term context for every incoming user turn.
+    # The current message is the semantic query; Reeve ranks what is useful.
+    # Retrieval is independent of the memory-write decision made by the LLM.
     memory_context = ""
-    if should_retrieve_from_reeve(message):
-        try:
-            memory_context = retrieve_context_for_user(
-                message, namespace=namespace, user_key=user_key
-            )
-            memory_context = deduplicate_context(memory_context or "")
-        except Exception as exc:
-            logger.warning("Failed to retrieve Reeve context: %s", exc)
+    try:
+        memory_context = retrieve_context_for_user(
+            message, namespace=namespace, user_key=user_key
+        )
+        memory_context = deduplicate_context(memory_context or "")
+    except Exception as exc:
+        logger.warning("Failed to retrieve Reeve context: %s", exc)
 
     # 3. BUILD TIME / TEMPORAL GROUNDING
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
