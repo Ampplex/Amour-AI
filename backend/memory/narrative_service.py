@@ -265,7 +265,19 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     if chars:
         char_names = [c.get("name") for c in chars if c.get("name")]
         if char_names:
-            lines.append(f"World Characters: {', '.join(char_names[:4])}")
+            lines.append(f"World Characters: {', '.join(char_names[:8])}")
+            for character in chars[:8]:
+                if not isinstance(character, dict):
+                    continue
+                details = []
+                if character.get("personality_summary"):
+                    details.append(f"personality: {character['personality_summary']}")
+                if character.get("independent_goals"):
+                    details.append(f"goals: {', '.join(character['independent_goals'][:3])}")
+                if character.get("current_activity"):
+                    details.append(f"activity: {character['current_activity']}")
+                if details:
+                    lines.append(f"{character.get('name', 'Character')}: {'; '.join(details)}")
 
     lines.append("---------------------------------------------")
     return "\n".join(lines)
@@ -306,7 +318,16 @@ Output ONLY a JSON object with this exact schema:
   "new_event_summary": null,
   "new_event_consequence": null,
   "new_plot_thread": null,
-  "new_characters": []
+  "new_characters": [
+    {{
+      "name": "Character name",
+      "role": "Relationship or narrative role",
+      "personality_summary": "Established traits only",
+      "independent_goals": ["Established goal"],
+      "relationships": ["Established relationship"],
+      "current_activity": "Current activity if established"
+    }}
+  ]
 }}"""
 
         conv_messages = [
