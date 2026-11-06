@@ -26,6 +26,13 @@ from .narrative_service import (
 
 logger = logging.getLogger(__name__)
 
+def build_reeve_namespace(user_id, persona_id) -> str:
+    """Canonical per-user/persona namespace for all Reeve operations."""
+    clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
+    clean_persona_id = str(persona_id).strip().replace(":", "_").replace("/", "_") or "default"
+    return f"usr_{clean_user_id}_persona_{clean_persona_id}"
+
+
 class ReeveStatusView(APIView):
     permission_classes = [AllowAny]
 
@@ -87,9 +94,7 @@ class ChatMemoryView(APIView):
         if total_count == 0:
             from .models import Persona
             persona_obj = Persona.objects.filter(id=persona_id).first()
-            clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
-            clean_persona_id = str(persona_id).strip().replace(":", "_").replace("/", "_")
-            namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+            namespace = build_reeve_namespace(user_id, persona_id)
 
             if persona_obj:
                 # 1. Immediately create opening greeting in PostgreSQL (takes ~3ms)
@@ -134,12 +139,6 @@ class ChatMemoryView(APIView):
                     except Exception as exc:
                         logger.warning(f"Could not ingest initial persona memory into Reeve: {exc}")
 
-                if persona_obj.greeting and persona_obj.greeting.strip():
-                    try:
-                        from .reeve_service import store_memory_for_user
-                        store_memory_for_user(f"Assistant: {persona_obj.greeting.strip()}", namespace)
-                    except Exception:
-                        pass
 
         start = (page - 1) * page_size
         end = start + page_size
@@ -207,32 +206,43 @@ class ChatMemoryView(APIView):
                     pass
 
         # Strict isolation: Combine user_id + persona_id into a unique, deterministic Reeve namespace
-        clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
-        clean_persona_id = str(persona_id).strip().replace(":", "_").replace("/", "_") if persona_id else "default"
-        namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+        namespace = build_reeve_namespace(user_id, persona_id)
 
         from .models import PersonaChatMessage
 
+        # Automatic Client-Key Handover on post
+        if user_key:
+            try:
+                migrate_user_messages_to_client_key(str(user_id), user_key)
+            except Exception as exc:
+                logger.warning(f"Error during client-key handover on post: {exc}")
+
         # Root Cause Fix: Client Message ID Idempotency Check
+        existing_msg = None
         if client_message_id:
             existing_msg = PersonaChatMessage.objects.filter(
-                client_message_id=client_message_id
-            ).first()
+                client_message_id=client_message_id,
+                user_identifier=str(user_id),
+                persona_identifier=str(persona_id),
+                sender="user",
+            ).order_by("created_at", "id").first()
             if existing_msg:
-                logger.info(f"Idempotency hit for client_message_id={client_message_id}")
+                logger.info("Idempotency hit for client_message_id=%s", client_message_id)
                 bot_reply = PersonaChatMessage.objects.filter(
+                    client_message_id=client_message_id,
                     user_identifier=str(user_id),
                     persona_identifier=str(persona_id),
                     sender="bot",
-                    created_at__gte=existing_msg.created_at,
-                ).order_by("created_at").first()
+                ).order_by("created_at", "id").first()
 
                 if bot_reply:
                     return Response(
                         {
                             "id": str(bot_reply.id),
                             "client_message_id": client_message_id,
-                            "reply": bot_reply.text,
+                            "reply": decrypt_chat_message(
+                                bot_reply.text, user_id=str(user_id), client_key=user_key
+                            ),
                             "context": "",
                             "namespace": namespace,
                             "persona_id": persona_id,
@@ -291,45 +301,47 @@ class ChatMemoryView(APIView):
             memory_prompt=memory_prompt,
         )
 
-        # Fetch recent dialogue history (last 6 turns) for fast, low-latency conversation context
+        # Fetch the latest 12 persisted messages (not 12 complete exchanges).
+        # The current incoming message is appended by chat_service after this history.
+        history_query = PersonaChatMessage.objects.filter(
+            user_identifier=str(user_id),
+            persona_identifier=str(persona_id),
+        )
+        if existing_msg is not None:
+            # A retry reuses the stored user message; exclude it here because the
+            # orchestration layer appends the current request exactly once.
+            history_query = history_query.exclude(id=existing_msg.id)
         recent_turns_qs = list(
-            PersonaChatMessage.objects.filter(
-                user_identifier=str(user_id),
-                persona_identifier=str(persona_id),
-            ).order_by("-created_at")[:6]
+            history_query.order_by("-created_at", "-id")[:12]
         )
         recent_turns_qs.reverse()
         conversation_history = [
             {
-                "role": "user" if m.sender == "user" else "assistant",
-                "content": decrypt_chat_message(m.text, user_id=str(user_id), client_key=user_key),
+                "sender": "bot" if m.sender in {"bot", "assistant"} else "user",
+                "text": decrypt_chat_message(
+                    m.text, user_id=str(user_id), client_key=user_key
+                ),
             }
             for m in recent_turns_qs
         ]
 
-        # Automatic Client-Key Handover on post
-        if user_key:
-            try:
-                migrate_user_messages_to_client_key(str(user_id), user_key)
-            except Exception as exc:
-                logger.warning(f"Error during client-key handover on post: {exc}")
-
         # 1. Store user message in PostgreSQL (Encrypted with client key if provided, else server shield)
-        try:
-            encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
-            PersonaChatMessage.objects.create(
-                user=user_obj,
-                user_identifier=str(user_id),
-                persona=persona_obj,
-                persona_identifier=str(persona_id),
-                namespace=namespace,
-                sender="user",
-                text=encrypted_user_msg,
-                conflict_stage=current_conflict_stage,
-                client_message_id=client_message_id,
-            )
-        except Exception as e:
-            logger.warning(f"Could not persist user message to DB: {e}")
+        if existing_msg is None:
+            try:
+                encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
+                PersonaChatMessage.objects.create(
+                    user=user_obj,
+                    user_identifier=str(user_id),
+                    persona=persona_obj,
+                    persona_identifier=str(persona_id),
+                    namespace=namespace,
+                    sender="user",
+                    text=encrypted_user_msg,
+                    conflict_stage=current_conflict_stage,
+                    client_message_id=client_message_id,
+                )
+            except Exception as e:
+                logger.warning("Could not persist user message to DB: %s", e)
 
         # 2. Generate companion reply (AWS Bedrock Mistral Large 2 primary with Groq failover + Reeve memory graph)
         try:
@@ -401,6 +413,7 @@ class ChatMemoryView(APIView):
                     sender="bot",
                     text=encrypted_bot_msg,
                     conflict_stage=new_conflict_stage,
+                    client_message_id=client_message_id,
                 )
                 bot_msg_id = str(bot_msg_record.id)
             except Exception as e:
@@ -999,16 +1012,17 @@ class PersonaDetailView(APIView):
             greeting = request.data.get("greeting")
             if memory_prompt or greeting:
                 user_id = request.user.id if (request.user and request.user.is_authenticated) else request.data.get("user_id", "guest")
-                namespace = f"{user_id}_{persona.id}"
+                namespace = build_reeve_namespace(user_id, persona.id)
                 try:
-                    summary_text = (
-                        f"Persona Profile for {updated_persona.name}: "
-                        f"Backstory & Memory: {updated_persona.memory_prompt}. "
-                        f"First message script: {updated_persona.greeting}"
-                    )
-                    store_memory_for_user(summary_text, namespace)
+                    # The opening greeting is delivered dialogue in PostgreSQL, not lore.
+                    if updated_persona.memory_prompt.strip():
+                        summary_text = (
+                            f"Core character lore for {updated_persona.name}: "
+                            f"{updated_persona.memory_prompt}"
+                        )
+                        store_memory_for_user(summary_text, namespace)
                 except Exception as exc:
-                    pass
+                    logger.warning("Could not update persona lore in Reeve: %s", exc)
 
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

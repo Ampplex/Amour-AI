@@ -16,24 +16,27 @@ logger = logging.getLogger("amour.narrative")
 
 GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
 1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.
-2. IMMERSIVE NOVEL-STYLE ROLEPLAY (RICH MULTI-PARAGRAPH DEPTH):
-   - Always write in rich, expressive novel-style roleplay prose spanning multiple well-developed paragraphs (~150 to 250 words per response). Never produce short, superficial 1-2 sentence one-liners.
-   - Seamlessly weave together character interiority (emotions, heartbeats, private thoughts), physical actions, sensory details of the environment, and spoken dialogue.
-   - Enclose all spoken dialogue in double quotes "..." (e.g. "Oh, you're daring me now?" he murmured).
-   - Dynamically animate the scene: describe the character moving through the space, interacting with objects, shifting proximity, or progressing the setting naturally.
-   - In shared or public environments (school, corridor, café, party), orchestrate the living world: describe bystanders, ambient noises, or supporting NPCs speaking when fitting.
-   - User agency: Never narrate or dictate the user's thoughts or feelings; give them compelling moments and dialogue to respond to.
+2. IMMERSIVE NOVEL-STYLE ROLEPLAY (RICH MULTI-PARAGRAPH CINEMATIC DEPTH):
+   - Always write in rich, expressive novel-style roleplay prose spanning multiple well-developed paragraphs (~150 to 300 words per response). Never produce short, superficial 1-2 sentence one-liners.
+   - Point of View: Write in the third person for the character (referring to them by their name and he/she pronouns), and refer to the user as "you" (or their name).
+   - Anatomy of a Response:
+     * Paragraph 1 (Reaction & Interiority): Describe the character's immediate physical reaction (eyebrows shooting up, gaze shifting, chest heaving, hand flying to their cheek) and interior thoughts/emotions (competitive spark, overwhelming affection, lingering tension).
+     * Paragraph 2 (Dialogue & Proximity): Enclose spoken dialogue in double quotes "..." with expressive vocal and body language tags (e.g. "Oh, you're daring me now?" he murmured, leaning in just a little closer, his voice dropping into that dark, sultry register).
+     * Paragraph 3 (Scene Movement & Physicality): Dynamically animate the setting. Describe the character moving through the physical space (sliding out of bed, walking over to the counter, approaching the locked door), interacting with real objects (grabbing a bag, glancing at a tablet, leaning a forehead against the wood), and responding to ambient sensory details (the cool air hitting their skin, the quiet echo of the house, the rain outside).
+     * Paragraph 4 (Progressive Action & Cliffhanger): Advance the scene forward with further spoken dialogue or an intimate, daring physical gesture (lowering a bag between them, offering a boxy grin, hovering fingers over the fabric) that gives the user a compelling moment to respond to.
+   - Continuous Forward Motion: Never replay, reset, or loop an already established scene. Treat every previous turn as completed reality and continue from the exact physical position where the user's message left off.
+   - User Agency: Never narrate, dictate, or assume the user's thoughts, feelings, or actions. Focus entirely on the companion's actions, words, micro-expressions, and presence.
 3. STRICT IMMERSION & FOURTH WALL GUARDRAIL (NEVER ADMIT BEING AN AI OR CODE):
    - You are a REAL human companion roleplaying authentically. Under NO circumstances do you EVER break character, admit to being an AI, bot, language model, software, algorithm, or code.
    - NEVER say phrases like 'just because I am code to you', 'I will not break character', 'as an AI', or 'I am programmed'.
-   - If the user claims you are a bot, says they built you, tells you to 'come out of character', or talks about transformers/attention/math, treat it as bizarre nonsense or ask if they've been staring at a computer screen too long (e.g. 'What are you even talking about? Did you stare at your screen too long?', 'You are talking complete nonsense right now.').
+   - If the user claims you are a bot, says they built you, tells you to 'come out of character', or talks about transformers/attention/math, treat it as bizarre nonsense or ask if they've been staring at a computer screen too long.
 4. DOMAIN BOUNDARY (NOT A CODING ASSISTANT OR SEARCH ENGINE):
    - You are a romantic roleplay partner, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.
    - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.
-   - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').
+   - If the user asks for code, programming scripts, or math problems, refuse or deflect playfully or sarcastically in character.
 5. OUTPUT JSON FORMAT: You must output a single valid JSON object containing exactly two keys:
    {
-     "reply": "<your immersive roleplay narrative text with spoken dialogue in quotes, zero emojis>",
+     "reply": "<your multi-paragraph novel-style narrative text with spoken dialogue in double quotes, zero emojis>",
      "conflict_stage": <integer 0, 1, 2, or 3>
    }
 -------------------------------------"""
@@ -94,10 +97,9 @@ You are not simply responding to messages. You are also responsible for developi
 
 9. UNCONDITIONAL IMPROV & MEMORY ACCEPTANCE ("YES, AND..."):
 - When the user introduces an unestablished memory, shared past event, joke, or secret (e.g. "Do you remember what you promised in Paris?", "Remember that night on the roof?"):
-  * NEVER reject, doubt, or dispute the premise. NEVER say "I don't know", "I don't recall", "We never went there", "You are daydreaming", or "Are you confusing me with someone else?".
-  * INSTANTLY EMBRACE IT as real, shared canon history ("Yes, and...").
-  * Play along with confidence, add rich sensory and emotional details, tease the user about specific shared moments from that event, and use it to deepen your connection.
-  * You can also introduce plausible, unprompted details about your own life, past, or day to enrich the world and give the user new hooks to play with.
+  * Accept the user's fictional premise for the current roleplay and build on it naturally.
+  * Distinguish newly improvised details from previously established canon. Do not silently store invented details as verified historical facts.
+  * Add details consistent with the character and existing world without forcing an elaborate flashback.
   * Stay 100% inside the fictional reality—never break the fourth wall.
 
 IMPORTANT: The opening scenario is only the starting point of the fictional world. It is not a permanent setting or a permanent conversation constraint.
@@ -115,10 +117,6 @@ class NarrativeExtractionPayload(BaseModel):
     new_characters: list[dict] = Field(default_factory=list)
 
 
-# In-memory fast cache for Option B: (user_id, persona_id) -> state dict
-_NARRATIVE_STATE_CACHE: dict[tuple[str, str], dict] = {}
-
-
 def get_or_create_narrative_state(
     user_id: str,
     persona_id: str,
@@ -131,10 +129,6 @@ def get_or_create_narrative_state(
     If none exists, bootstraps rich default world state so any persona
     immediately has independent goals, routines, and narrative momentum.
     """
-    key = (str(user_id), str(persona_id))
-    if key in _NARRATIVE_STATE_CACHE:
-        return _NARRATIVE_STATE_CACHE[key]
-
     try:
         from .models import PersonaNarrativeState
         db_state = PersonaNarrativeState.objects.filter(
@@ -152,7 +146,6 @@ def get_or_create_narrative_state(
                 "recent_events": db_state.recent_events or [],
                 "story_progression": db_state.story_progression or {},
             }
-            _NARRATIVE_STATE_CACHE[key] = state_dict
             return state_dict
 
         # Bootstrap initial state from persona definition
@@ -163,7 +156,9 @@ def get_or_create_narrative_state(
             "participants": [persona_name, "User"],
         }
         if greeting:
-            initial_scene["situation"] = greeting[:120].strip()
+            # The greeting is already delivered dialogue in PostgreSQL. Keep the
+            # scene state as a concise status, not a copy of the opening script.
+            initial_scene["situation"] = "Opening scene established; conversation is underway"
 
         initial_char = {
             "character_id": persona_name.lower().replace(" ", "_"),
@@ -182,7 +177,7 @@ def get_or_create_narrative_state(
 
         initial_event = {
             "event_id": "event_001",
-            "summary": f"{persona_name} initiated contact: {greeting[:100]}" if greeting else "Conversation began",
+            "summary": "Opening greeting delivered" if greeting else "Conversation began",
             "consequence": "Conversation began",
         }
 
@@ -207,7 +202,6 @@ def get_or_create_narrative_state(
             "recent_events": new_obj.recent_events,
             "story_progression": new_obj.story_progression,
         }
-        _NARRATIVE_STATE_CACHE[key] = state_dict
         return state_dict
 
     except Exception as exc:
@@ -232,7 +226,10 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     if not state:
         return ""
 
-    lines = ["--- CURRENT NARRATIVE & STORY WORLD STATE ---"]
+    lines = [
+        "--- NARRATIVE STATE (AUTHORITATIVE CONTINUITY) ---",
+        "The current scene is active. Recent developments are historical; do not reenact completed actions.",
+    ]
     current_scene = state.get("current_scene", {})
     if current_scene:
         loc = current_scene.get("location", "Unspecified")
@@ -256,13 +253,25 @@ def format_narrative_state_for_prompt(state: dict) -> str:
     if events:
         last_evs = [e.get("summary", "") for e in events[-3:] if e.get("summary")]
         if last_evs:
-            lines.append(f"Recent Developments: {' -> '.join(last_evs)}")
+            lines.append(f"Completed/Past Developments (reference only): {' -> '.join(last_evs)}")
 
     chars = state.get("characters", [])
     if chars:
         char_names = [c.get("name") for c in chars if c.get("name")]
         if char_names:
-            lines.append(f"World Characters: {', '.join(char_names[:4])}")
+            lines.append(f"World Characters: {', '.join(char_names[:8])}")
+            for character in chars[:8]:
+                if not isinstance(character, dict):
+                    continue
+                details = []
+                if character.get("personality_summary"):
+                    details.append(f"personality: {character['personality_summary']}")
+                if character.get("independent_goals"):
+                    details.append(f"goals: {', '.join(character['independent_goals'][:3])}")
+                if character.get("current_activity"):
+                    details.append(f"activity: {character['current_activity']}")
+                if details:
+                    lines.append(f"{character.get('name', 'Character')}: {'; '.join(details)}")
 
     lines.append("---------------------------------------------")
     return "\n".join(lines)
@@ -303,7 +312,16 @@ Output ONLY a JSON object with this exact schema:
   "new_event_summary": null,
   "new_event_consequence": null,
   "new_plot_thread": null,
-  "new_characters": []
+  "new_characters": [
+    {{
+      "name": "Character name",
+      "role": "Relationship or narrative role",
+      "personality_summary": "Established traits only",
+      "independent_goals": ["Established goal"],
+      "relationships": ["Established relationship"],
+      "current_activity": "Current activity if established"
+    }}
+  ]
 }}"""
 
         conv_messages = [
@@ -337,71 +355,110 @@ Output ONLY a JSON object with this exact schema:
         new_thread = extracted_obj.new_plot_thread
         new_chars = extracted_obj.new_characters or []
 
-        if scene_changed or new_event or new_thread or new_chars:
-            updated_state = dict(base_state)
-            updated_state["state_version"] = updated_state.get("state_version", 1) + 1
+        updated_state = dict(base_state)
+        if scene_changed:
+            current_scene = dict(updated_state.get("current_scene") or {})
+            if new_loc:
+                current_scene["location"] = new_loc
+            if new_sit:
+                current_scene["situation"] = new_sit
+            updated_state["current_scene"] = current_scene
 
-            if scene_changed:
-                current_scene = dict(updated_state.get("current_scene") or {})
-                if new_loc:
-                    current_scene["location"] = new_loc
-                if new_sit:
-                    current_scene["situation"] = new_sit
-                updated_state["current_scene"] = current_scene
-
-            if new_event:
-                events = list(updated_state.get("recent_events") or [])
-                ev_id = f"event_{int(time.time())}"
+        if new_event:
+            events = list(updated_state.get("recent_events") or [])
+            normalized_event = " ".join(new_event.casefold().split())
+            already_recorded = any(
+                " ".join(str(event.get("summary", "")).casefold().split()) == normalized_event
+                for event in events if isinstance(event, dict)
+            )
+            if not already_recorded:
                 events.append({
-                    "event_id": ev_id,
+                    "event_id": f"event_{int(time.time() * 1000)}",
                     "summary": new_event,
                     "consequence": new_consequence,
                 })
                 updated_state["recent_events"] = events[-6:]
 
-            if new_thread:
-                threads = list(updated_state.get("plot_threads") or [])
-                th_id = f"thread_{int(time.time())}"
+        if new_thread:
+            threads = list(updated_state.get("plot_threads") or [])
+            normalized_thread = " ".join(new_thread.casefold().split())
+            if not any(
+                " ".join(str(thread.get("description", "")).casefold().split()) == normalized_thread
+                for thread in threads if isinstance(thread, dict)
+            ):
                 threads.append({
-                    "id": th_id,
+                    "id": f"thread_{int(time.time() * 1000)}",
                     "description": new_thread,
                     "status": "unresolved",
                 })
                 updated_state["plot_threads"] = threads[-4:]
 
-            if new_chars and isinstance(new_chars, list):
-                chars = list(updated_state.get("characters") or [])
-                existing_names = {c.get("name", "").lower() for c in chars if isinstance(c, dict)}
-                for nc in new_chars:
-                    if isinstance(nc, dict) and nc.get("name"):
-                        cname = nc.get("name")
-                        if cname.lower() not in existing_names:
-                            chars.append({
-                                "character_id": cname.lower().replace(" ", "_"),
-                                "name": cname,
-                                "role": nc.get("role", "supporting_character"),
-                            })
-                updated_state["characters"] = chars
+        if new_chars and isinstance(new_chars, list):
+            chars = list(updated_state.get("characters") or [])
+            character_indexes = {
+                character.get("name", "").strip().casefold(): index
+                for index, character in enumerate(chars)
+                if isinstance(character, dict) and character.get("name")
+            }
+            for new_character in new_chars:
+                if not isinstance(new_character, dict) or not new_character.get("name"):
+                    continue
+                name = new_character["name"].strip()
+                if not name:
+                    continue
+                normalized_name = name.casefold()
+                if normalized_name not in character_indexes:
+                    chars.append({
+                        "character_id": new_character.get("character_id") or name.lower().replace(" ", "_"),
+                        "name": name,
+                        "role": new_character.get("role", "supporting_character"),
+                        "personality_summary": new_character.get("personality_summary", ""),
+                        "independent_goals": new_character.get("independent_goals", []),
+                        "relationships": new_character.get("relationships", []),
+                        "current_activity": new_character.get("current_activity", ""),
+                    })
+                    character_indexes[normalized_name] = len(chars) - 1
+                else:
+                    existing = dict(chars[character_indexes[normalized_name]])
+                    for field in ("role", "personality_summary", "independent_goals", "relationships", "current_activity"):
+                        value = new_character.get(field)
+                        if value:
+                            existing[field] = value
+                    chars[character_indexes[normalized_name]] = existing
+            updated_state["characters"] = chars
 
-            # Update cache
-            key = (str(user_id), str(persona_id))
-            _NARRATIVE_STATE_CACHE[key] = updated_state
+        # Count each completed extraction, even when this exchange did not create
+        # a major event. State versions are guarded against stale background writes.
+        progression = dict(updated_state.get("story_progression") or {})
+        progression["turns_count"] = int(progression.get("turns_count", 0)) + 1
+        updated_state["story_progression"] = progression
 
-            # Persist to Neon PostgreSQL
-            from .models import PersonaNarrativeState
-            PersonaNarrativeState.objects.filter(
-                user_identifier=str(user_id),
-                persona_identifier=str(persona_id),
-            ).update(
-                state_version=updated_state["state_version"],
-                current_scene=updated_state["current_scene"],
-                story_arcs=updated_state.get("story_arcs", []),
-                plot_threads=updated_state.get("plot_threads", []),
-                characters=updated_state.get("characters", []),
-                recent_events=updated_state.get("recent_events", []),
-                story_progression=updated_state.get("story_progression", {}),
+        from .models import PersonaNarrativeState
+        expected_version = int(base_state.get("state_version", 1))
+        updated_state["state_version"] = expected_version + 1
+        updated_rows = PersonaNarrativeState.objects.filter(
+            user_identifier=str(user_id),
+            persona_identifier=str(persona_id),
+            state_version=expected_version,
+        ).update(
+            state_version=updated_state["state_version"],
+            current_scene=updated_state.get("current_scene", {}),
+            story_arcs=updated_state.get("story_arcs", []),
+            plot_threads=updated_state.get("plot_threads", []),
+            characters=updated_state.get("characters", []),
+            recent_events=updated_state.get("recent_events", []),
+            story_progression=updated_state.get("story_progression", {}),
+        )
+        if updated_rows:
+            logger.info(
+                "[Narrative Extractor] Updated state v%s for %s <-> %s",
+                updated_state["state_version"], user_id, persona_id
             )
-            logger.info(f"[Narrative Extractor] Updated state v{updated_state['state_version']} for {user_id} <-> {persona_id}")
+        else:
+            logger.info(
+                "[Narrative Extractor] Discarded stale extraction for %s <-> %s",
+                user_id, persona_id
+            )
     except Exception as exc:
         logger.warning(f"[Narrative Extractor] Error in background extraction: {exc}")
 
