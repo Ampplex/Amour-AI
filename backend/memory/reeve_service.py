@@ -19,6 +19,9 @@ For chat pipeline orchestration, see `backend/memory/chat_service.py`.
 import os
 import re
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore
 from django.conf import settings
 
 logger = logging.getLogger("amour.reeve")
@@ -200,74 +203,240 @@ TRIVIAL_GREETINGS_AND_FILLERS = {
     "what", "huh", "why",
 }
 
-RELATIONSHIP_TRIGGER_WORDS = {
-    "break", "broke", "breakup", "breaking", "leave", "left", "quit", "over", "end",
-    "girlfriend", "boyfriend", "partner", "love", "hate", "cheat", "dating", "marry",
-    "sorry", "forgive", "mistake", "promise", "secret", "trip", "travel", "live", "work",
-    "job", "family", "mother", "father", "sister", "brother", "friend", "birthday", "dump", "dumped",
+# --------------------------------------------------------------------------------------
+# Jev-powered memory write gate
+# --------------------------------------------------------------------------------------
+
+# Jev evaluates typed decisions; application code applies the policy and performs writes.
+# The bounded pool keeps classification and graph writes off the chat response path.
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+_MEMORY_INGESTION_WORKERS = _positive_env_int("REEVE_MEMORY_WORKERS", 2)
+_MEMORY_INGESTION_MAX_PENDING = max(0, int(os.getenv("REEVE_MEMORY_MAX_PENDING", "64")))
+_MEMORY_INGESTION_POOL = ThreadPoolExecutor(
+    max_workers=_MEMORY_INGESTION_WORKERS,
+    thread_name_prefix="amour-jev-memory",
+)
+# Bound active + queued tasks. Under overload we preserve the PostgreSQL transcript
+# and skip this best-effort memory write rather than allowing an unbounded queue.
+_MEMORY_INGESTION_CAPACITY = BoundedSemaphore(
+    _MEMORY_INGESTION_WORKERS + _MEMORY_INGESTION_MAX_PENDING
+)
+_JEV_THREAD_LOCAL = threading.local()
+
+_STOREABLE_MEMORY_TYPES = {
+    "profile_fact",
+    "preference",
+    "relationship",
+    "goal_or_plan",
+    "significant_event",
 }
 
 
+def _get_jev_client():
+    """Reuse one pooled TypeSafe client per worker thread."""
+    api_key = getattr(settings, "TYPESAFE_API_KEY", "") or os.getenv("TYPESAFE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("TYPESAFE_API_KEY is not configured")
 
-def should_retrieve_from_reeve(text: str) -> bool:
+    client = getattr(_JEV_THREAD_LOCAL, "client", None)
+    if client is None:
+        from typesafe_sdk import RetryPolicy, TypeSafeClient
+
+        client = TypeSafeClient(
+            api_key=api_key,
+            model=getattr(settings, "JEV_MODEL", "jev-latest"),
+            timeout=float(getattr(settings, "JEV_TIMEOUT_SECONDS", 3.0)),
+            retry=RetryPolicy(max_retries=0),
+        )
+        _JEV_THREAD_LOCAL.client = client
+    return client
+
+
+def _build_jev_context(conversation_history: list | None) -> list[dict]:
+    """Keep only a small recent window for roleplay-vs-real-life disambiguation."""
+    context = []
+    for turn in (conversation_history or [])[-6:]:
+        if not isinstance(turn, dict):
+            continue
+        sender = (turn.get("sender") or turn.get("role") or "").strip().lower()
+        if sender in {"assistant", "ai", "companion"}:
+            sender = "companion"
+        elif sender in {"human"}:
+            sender = "user"
+        if sender not in {"user", "bot", "companion"}:
+            continue
+        value = turn.get("text")
+        if value is None:
+            value = turn.get("content", "")
+        if isinstance(value, str) and value.strip():
+            context.append({"speaker": sender, "text": value.strip()[:600]})
+    return context
+
+
+def should_ingest_into_reeve(
+    text: str,
+    conversation_history: list | None = None,
+) -> bool:
     """
-    Decide whether the current message benefits from long-term recall.
+    Ask Jev whether this user message is worth retaining as long-term memory.
 
-    This is intentionally separate from should_ingest_into_reeve(): a message
-    worth remembering is not necessarily a query that needs historical context.
+    No keyword or message-length heuristic decides the write. Jev returns typed
+    decisions; deterministic code enforces confidence, category, and sensitivity
+    thresholds. On missing configuration or model failure, this fails closed.
     """
     if not text or not text.strip():
         return False
 
-    clean = re.sub(r"[^\w\s]", "", text.strip().lower())
-    words = clean.split()
-    if not words or clean in TRIVIAL_GREETINGS_AND_FILLERS:
-        return False
-    if len(words) <= 2 and all(word in TRIVIAL_GREETINGS_AND_FILLERS for word in words):
+    if not (getattr(settings, "TYPESAFE_API_KEY", "") or os.getenv("TYPESAFE_API_KEY", "")):
+        logger.warning("[Jev Memory Gate] TYPESAFE_API_KEY missing; skipping memory write")
         return False
 
-    recall_patterns = (
-        r"\bremember\b",
-        r"\brecall\b",
-        r"\bwhat happened\b",
-        r"\bwhat did .{1,80} (?:say|do|tell)\b",
-        r"\bwho (?:is|was)\b",
-        r"\btell me about\b",
-        r"\blast time\b",
-        r"\bprevious(?:ly)?\b",
-        r"\bearlier\b",
-        r"\bour (?:trip|visit|promise|plan|anniversary)\b",
-        r"\byour (?:sister|brother|mother|father|friend)\b",
-        r"\bmy (?:birthday|preference|favorite)\b",
-        r"\bwhat was the name\b",
-    )
-    return any(re.search(pattern, clean) for pattern in recall_patterns)
+    state = {
+        "candidate_user_message": text.strip()[:4000],
+        "recent_conversation_for_disambiguation_only": _build_jev_context(conversation_history),
+        "interaction_mode": "fictional companion roleplay chat",
+        "decision_goal": (
+            "Decide whether this exact user message contains a durable, useful, "
+            "real-world fact about the user for future personalization."
+        ),
+    }
+
+    try:
+        from typesafe_sdk import Choice, Noul
+
+        response = _get_jev_client().system_one(
+            state=state,
+            questions={
+                "memory_action": Choice(
+                    instructions=(
+                        "Should this exact candidate user message be saved to long-term "
+                        "personal memory? Choose STORE only when the candidate clearly "
+                        "communicates a durable or reusable real-world fact about the user, "
+                        "such as a stable profile fact, preference, real relationship, ongoing "
+                        "goal or plan, or significant real-life event. The candidate message "
+                        "itself must support the fact. Use recent conversation only to "
+                        "disambiguate whether the user is speaking in-character or about real "
+                        "life; never infer a new fact from context. Choose DISCARD for small "
+                        "talk, jokes, generic observations, temporary moods or conditions, "
+                        "one-off details without future value, hypothetical examples, "
+                        "roleplay dialogue or fictional-world facts, recall questions, "
+                        "requests to retrieve something already remembered, or ambiguity."
+                    ),
+                    criteria={
+                        "store": "A supported, useful real-world user memory should be retained.",
+                        "discard": "No supported durable real-world user memory should be retained.",
+                    },
+                ),
+                "memory_type": Choice(
+                    instructions=(
+                        "Classify the candidate message by its primary memory type. "
+                        "Classify only what the user explicitly states; use the recent "
+                        "conversation only to distinguish real life from fictional roleplay."
+                    ),
+                    criteria={
+                        "profile_fact": "A durable real-world fact about the user.",
+                        "preference": "A stable user preference, taste, or recurring personal choice.",
+                        "relationship": "A real-world relationship or durable fact about someone close to the user.",
+                        "goal_or_plan": "An ongoing real-world goal, commitment, or future plan.",
+                        "significant_event": "A meaningful real-world life event worth recalling later.",
+                        "fictional_roleplay": "An in-character statement, fictional person, or event in the roleplay world.",
+                        "temporary_state": "A temporary mood, location, condition, or one-off status.",
+                        "small_talk": "A greeting, joke, reaction, or casual conversation without durable information.",
+                        "recall_query": "A request to remember, retrieve, or repeat information already stored.",
+                        "hypothetical": "A hypothetical, example, speculation, or unconfirmed possibility.",
+                        "other": "Anything that does not fit the categories above.",
+                    },
+                ),
+                "sensitive_data": Noul(
+                    instructions=(
+                        "Does the candidate contain highly sensitive personal data or secrets "
+                        "that should not be placed in general-purpose companion memory? Treat "
+                        "credentials, passwords, authentication tokens, payment or bank details, "
+                        "government identifiers, precise home addresses, and highly sensitive "
+                        "medical or intimate details as sensitive. Ordinary hobbies, preferences, "
+                        "and non-sensitive relationship facts are not sensitive."
+                    ),
+                ),
+            },
+        )
+
+        action = response.choices["memory_action"]
+        memory_type = response.choices["memory_type"]
+        sensitive_probability = float(response.nouls["sensitive_data"].noul)
+        store_probability = float(action.probabilities.get("store", 0.0))
+        action_confidence = float(action.confidence or 0.0)
+        type_confidence = float(memory_type.confidence or 0.0)
+        category = memory_type.choice
+
+        approved = (
+            action.choice == "store"
+            and store_probability >= 0.80
+            and action_confidence >= 0.65
+            and category in _STOREABLE_MEMORY_TYPES
+            and type_confidence >= 0.60
+            and sensitive_probability < 0.50
+        )
+        logger.info(
+            "[Jev Memory Gate] decision=%s category=%s store_probability=%.3f "
+            "action_confidence=%.3f type_confidence=%.3f sensitive_probability=%.3f",
+            "store" if approved else "discard",
+            category,
+            store_probability,
+            action_confidence,
+            type_confidence,
+            sensitive_probability,
+        )
+        return approved
+    except Exception as exc:
+        # No hardcoded fallback: if Jev cannot make the decision, do not write.
+        logger.warning("[Jev Memory Gate] Decision failed; skipping memory write: %s", exc)
+        return False
 
 
-def should_ingest_into_reeve(text: str) -> bool:
-    """
-    Cost & Performance Optimizer:
-    Prevents calling expensive Bedrock Mistral Large graph extraction for trivial 1-2 word filler messages.
-    PostgreSQL tracks short-term chat history. Reeve only ingests meaningful facts and lore.
-    """
+def enqueue_memory_ingestion(
+    text: str,
+    namespace: str,
+    user_name: str = "",
+    user_key: str = None,
+    conversation_history: list | None = None,
+) -> bool:
+    """Run Jev classification and an approved Reeve write outside the chat request."""
     if not text or not text.strip():
         return False
-    # Recall prompts are retrieval queries, not new facts to persist.
-    if should_retrieve_from_reeve(text):
+    if not (getattr(settings, "TYPESAFE_API_KEY", "") or os.getenv("TYPESAFE_API_KEY", "")):
+        logger.warning("[Jev Memory Gate] TYPESAFE_API_KEY missing; memory ingestion is disabled")
         return False
-    clean = re.sub(r"[^\w\s]", "", text.strip().lower())
-    words = clean.split()
-    if not words:
+    if not _MEMORY_INGESTION_CAPACITY.acquire(blocking=False):
+        logger.warning("[Jev Memory Gate] Ingestion queue is full; retaining transcript only")
         return False
-    if any(w in RELATIONSHIP_TRIGGER_WORDS for w in words):
+
+    history_snapshot = list(conversation_history or [])
+
+    def _classify_and_store():
+        try:
+            if not should_ingest_into_reeve(text, history_snapshot):
+                return
+            store_text = f"User ({user_name}): {text}" if user_name else f"User: {text}"
+            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
+            logger.info("[Jev Memory Gate] Approved memory stored in Reeve for namespace=%s", namespace)
+        except Exception as exc:
+            logger.warning("[Jev Memory Gate] Approved memory write failed: %s", exc)
+        finally:
+            _MEMORY_INGESTION_CAPACITY.release()
+
+    try:
+        _MEMORY_INGESTION_POOL.submit(_classify_and_store)
         return True
-    if clean in TRIVIAL_GREETINGS_AND_FILLERS:
+    except RuntimeError as exc:
+        _MEMORY_INGESTION_CAPACITY.release()
+        logger.warning("[Jev Memory Gate] Could not enqueue memory classification: %s", exc)
         return False
-    if len(words) <= 2 and all(w in TRIVIAL_GREETINGS_AND_FILLERS for w in words):
-        return False
-    if len(words) < 3:
-        return False
-    return True
 
 
 # --------------------------------------------------------------------------------------
