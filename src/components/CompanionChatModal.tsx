@@ -528,7 +528,12 @@ export default function CompanionChatModal({
                 </View>
                 <Text style={styles.emptyPersonaName}>{activePersona.name}</Text>
                 {activePersona.greeting ? (
-                  <Text style={styles.emptyTagline}>"{activePersona.greeting}"</Text>
+                  <MarkdownText
+                    content={activePersona.greeting}
+                    style={[styles.emptyTagline, { color: '#F3F4F6', fontStyle: 'normal' }]}
+                    actionStyle={styles.botActionText}
+                    boldStyle={{ color: '#FFFFFF', fontWeight: '700', fontStyle: 'normal' }}
+                  />
                 ) : (
                   <Text style={styles.emptyTagline}>Always here to talk</Text>
                 )}

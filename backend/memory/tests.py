@@ -129,6 +129,9 @@ class ConversationContinuityTests(SimpleTestCase):
         self.assertIn("short user message does not erase the established scene", SCENE_DRIVEN_STORYTELLING)
         self.assertIn("Do not target a particular number of paragraphs or words", SCENE_DRIVEN_STORYTELLING)
         self.assertIn("Do not force a dramatic event", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("required Markdown presentation convention", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("must be wrapped in single asterisks", SCENE_DRIVEN_STORYTELLING)
+        self.assertIn("must be wrapped in double asterisks", SCENE_DRIVEN_STORYTELLING)
         self.assertNotIn("2-4 developed paragraphs", SCENE_DRIVEN_STORYTELLING)
         self.assertNotIn("120-220 words", SCENE_DRIVEN_STORYTELLING)
 
