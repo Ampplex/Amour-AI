@@ -122,26 +122,25 @@ class ConversationContinuityTests(SimpleTestCase):
 
     def _jev_response(
         self,
-        action="store",
         store_probability=0.95,
-        action_confidence=0.90,
         memory_type="profile_fact",
-        type_confidence=0.90,
+        type_probability=0.90,
         sensitive_probability=0.01,
     ):
+        other_type = "other" if memory_type != "other" else "fictional_roleplay"
         return SimpleNamespace(
+            model="jev-latest",
             choices={
-                "memory_action": SimpleNamespace(
-                    choice=action,
-                    probabilities={"store": store_probability, "discard": 1 - store_probability},
-                    confidence=action_confidence,
-                ),
                 "memory_type": SimpleNamespace(
                     choice=memory_type,
-                    confidence=type_confidence,
+                    probabilities={
+                        memory_type: type_probability,
+                        other_type: 1 - type_probability,
+                    },
                 ),
             },
             nouls={
+                "store_worthiness": SimpleNamespace(noul=store_probability),
                 "sensitive_data": SimpleNamespace(noul=sensitive_probability),
             },
         )
@@ -171,11 +170,9 @@ class ConversationContinuityTests(SimpleTestCase):
     @patch("memory.reeve_service._get_jev_client")
     def test_jev_discards_small_talk_and_fictional_roleplay(self, get_client):
         get_client.return_value.system_one.return_value = self._jev_response(
-            action="discard",
-            store_probability=0.02,
-            action_confidence=0.98,
+            store_probability=0.95,
             memory_type="fictional_roleplay",
-            type_confidence=0.98,
+            type_probability=0.98,
         )
         self.assertFalse(should_ingest_into_reeve("The castle guards are approaching."))
 
@@ -192,7 +189,6 @@ class ConversationContinuityTests(SimpleTestCase):
     def test_jev_uncertain_decisions_fail_closed(self, get_client):
         get_client.return_value.system_one.return_value = self._jev_response(
             store_probability=0.61,
-            action_confidence=0.54,
         )
         self.assertFalse(should_ingest_into_reeve("I live in Pune."))
 
@@ -216,7 +212,7 @@ class ConversationContinuityTests(SimpleTestCase):
         request = client.system_one.call_args.kwargs
         self.assertEqual(request["state"]["candidate_user_message"], "I live in Pune.")
         self.assertEqual(len(request["state"]["recent_conversation_for_disambiguation_only"]), 2)
-        self.assertEqual(set(request["questions"]), {"memory_action", "memory_type", "sensitive_data"})
+        self.assertEqual(set(request["questions"]), {"store_worthiness", "memory_type", "sensitive_data"})
 
     def test_namespace_is_consistent(self):
         self.assertEqual(
