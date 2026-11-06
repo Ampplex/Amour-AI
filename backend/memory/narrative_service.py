@@ -93,6 +93,15 @@ AUTONOMOUS_NARRATIVE_ENGINE = """--- AUTONOMOUS NARRATIVE ENGINE ---
 You are responsible for continuously developing a living, evolving fictional world around the established characters.
 You are not simply responding to messages. You are also responsible for developing the fictional world independently.
 
+0. STORY-MOVEMENT CONTRACT (HIGHEST PRIORITY):
+- Every reply must move at least one element of the story forward. Do not produce a turn that only acknowledges the user, repeats the same flirtation, restates the setting, or asks another question without changing anything.
+- A forward beat can be modest and natural: the companion makes a decision, takes an action, follows through on a plan, reveals relevant information, pursues an independent goal, changes their attitude, or a supporting character acts and creates a consequence.
+- Build on the current scene and the user's contribution. Do not manufacture a random interruption or change location just to appear active.
+- Use the narrative-state turn counter. When three or more user turns have passed since the last recorded development, make the next reply deliver a clearly noticeable development in an existing arc: a consequence, discovery, commitment, complication, new activity, or plausible scene transition.
+- On other turns, still create a small concrete beat while allowing natural banter and emotional intimacy.
+- A meaningful beat changes what is happening next. Decorative descriptions, repeated gestures, generic affection, and another open-ended question alone do not count.
+- Never take control of the user's actions, decisions, thoughts, or feelings. Advance the world through the companion and supporting characters, leaving the user's response open.
+
 1. AUTONOMOUS STORY PROGRESSION:
 - The story must evolve naturally beyond its opening scenario.
 - Never remain permanently stuck in the initial location, situation, or conversation.
@@ -302,6 +311,20 @@ def format_narrative_state_for_prompt(state: dict) -> str:
         "--- NARRATIVE STATE (AUTHORITATIVE CONTINUITY) ---",
         "The current scene is active. Recent developments are historical; do not reenact completed actions.",
     ]
+    progression = state.get("story_progression") or {}
+    try:
+        turn_count = max(0, int(progression.get("turns_count", 0)))
+    except (TypeError, ValueError):
+        turn_count = 0
+    try:
+        last_progress_turn = max(0, int(progression.get("last_progress_turn", 0)))
+    except (TypeError, ValueError):
+        last_progress_turn = 0
+    turns_since_progress = max(0, turn_count - last_progress_turn)
+    lines.append(
+        f"Progression tracker: user turn {turn_count}; "
+        f"{turns_since_progress} user turns since the last recorded story development."
+    )
     current_scene = state.get("current_scene", {})
     if current_scene:
         opening_context = current_scene.get("opening_context")
@@ -371,11 +394,12 @@ def _run_narrative_state_extraction(
 
         base_state = current_state or get_or_create_narrative_state(user_id, persona_id)
 
-        extract_prompt = f"""You are a story state analyst. Review the latest conversation exchange and determine if:
-1. The scene location or situation changed.
-2. A new significant story event happened.
-3. A new plot thread or secret was introduced.
-4. Any new supporting characters were mentioned.
+        extract_prompt = f"""You are the narrative continuity editor for an evolving roleplay world. Review the latest exchange and capture concrete changes that should become canonical state:
+1. A change to the current scene's immediate situation, activity, or location.
+2. A meaningful action, decision, discovery, relationship development, or consequence.
+3. A new unresolved plot thread or the development/resolution of an existing one.
+4. A new supporting character or a meaningful change in an established character's activity.
+Capture real forward movement even when it is a modest beat, not only major dramatic events. Do not invent a development that is absent from the exchange.
 
 Current Narrative State:
 {json.dumps({
@@ -393,10 +417,12 @@ Assistant: {assistant_reply}
 Extraction rules:
 - The opening scenario and current_scene describe the present fictional world. Keep them separate from completed events in recent_events.
 - Treat a location as changed only when the exchange clearly moves the characters to a new place.
-- Do not mark ordinary dialogue, a compliment, a greeting, or a repeated action as a major new event.
+- A line of dialogue can still produce a development when it changes a decision, reveals information, makes a commitment, advances an active goal, or changes a relationship dynamic.
+- Do not classify a greeting, compliment, repeated gesture, decorative description, or unchanged banter as a story development by itself.
 - Extract only developments introduced in this exchange; do not repeat facts already present in the narrative state.
 - Preserve established character names, relationships, goals, and activities. Do not invent details to fill empty fields.
-- When the exchange does not materially change the world, return false/null/empty values.
+- Set new_situation when what the characters are currently doing has materially progressed, even if the location is unchanged.
+- When the exchange contains no actual change in action, information, decision, relationship, or situation, return false/null/empty values.
 
 Output ONLY a JSON object with this exact schema:
 {{
@@ -451,7 +477,9 @@ Output ONLY a JSON object with this exact schema:
 
         # Do not churn PostgreSQL state versions for ordinary chat turns that
         # introduced no persistent narrative change.
-        scene_changed = bool(scene_changed and (new_loc or new_sit))
+        # The extracted location/situation fields are the actual change signal.
+        # Do not discard them merely because the model omitted the redundant flag.
+        scene_changed = bool(new_loc or new_sit)
         if not (scene_changed or new_event or new_thread or new_chars):
             return
 
@@ -526,6 +554,18 @@ Output ONLY a JSON object with this exact schema:
                             existing[field] = value
                     chars[character_indexes[normalized_name]] = existing
             updated_state["characters"] = chars
+
+        # Persist the turn at which this development was recorded. This gives
+        # the next generation a reliable cadence signal for story progression.
+        progression = dict(updated_state.get("story_progression") or {})
+        try:
+            turn_count = int(progression.get("turns_count", 0))
+        except (TypeError, ValueError):
+            turn_count = 0
+        progression["last_progress_turn"] = turn_count
+        if scene_changed:
+            progression["last_transition_turn"] = turn_count
+        updated_state["story_progression"] = progression
 
         from .models import PersonaNarrativeState
         expected_version = int(base_state.get("state_version", 1))
