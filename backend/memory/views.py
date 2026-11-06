@@ -343,6 +343,18 @@ class ChatMemoryView(APIView):
             except Exception as e:
                 logger.warning("Could not persist user message to DB: %s", e)
 
+        # Attach the durable conversation turn count to the narrative prompt.
+        # This is derived from persisted user messages, not an in-memory counter,
+        # so it survives restarts and is scoped to this user/persona conversation.
+        narrative_state = dict(narrative_state or {})
+        story_progression = dict(narrative_state.get("story_progression") or {})
+        story_progression["turns_count"] = PersonaChatMessage.objects.filter(
+            user_identifier=str(user_id),
+            persona_identifier=str(persona_id),
+            sender="user",
+        ).count()
+        narrative_state["story_progression"] = story_progression
+
         # 2. Generate companion reply (AWS Bedrock Mistral Large 2 primary with Groq failover + Reeve memory graph)
         try:
             result = generate_companion_reply(
