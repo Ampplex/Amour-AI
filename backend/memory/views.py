@@ -378,13 +378,16 @@ class ChatMemoryView(APIView):
                 )
 
             # Fire Option B background narrative state extraction non-blockingly
-            extract_narrative_state_async(
-                user_id=str(user_id),
-                persona_id=str(persona_id),
-                user_message=message,
-                reply=reply_text,
-                base_state=narrative_state,
-            )
+            try:
+                extract_narrative_state_async(
+                    user_id=str(user_id),
+                    persona_id=str(persona_id),
+                    user_message=message,
+                    reply=reply_text,
+                    base_state=narrative_state,
+                )
+            except Exception as n_exc:
+                logger.warning(f"Failed to start async narrative extraction: {n_exc}")
 
             # 3. Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
             try:

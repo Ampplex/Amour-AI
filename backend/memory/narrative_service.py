@@ -410,13 +410,18 @@ def extract_narrative_state_async(
     user_id: str,
     persona_id: str,
     user_message: str,
-    assistant_reply: str,
-    current_state: dict,
+    assistant_reply: str = "",
+    current_state: dict = None,
+    reply: str = None,
+    base_state: dict = None,
+    **kwargs,
 ):
     """Spawns non-blocking thread for narrative state extraction."""
+    final_reply = reply if reply is not None else assistant_reply
+    final_state = base_state if base_state is not None else current_state
     t = threading.Thread(
         target=_run_narrative_state_extraction,
-        args=(user_id, persona_id, user_message, assistant_reply, current_state),
+        args=(user_id, persona_id, user_message, final_reply, final_state),
         daemon=True,
     )
     t.start()
