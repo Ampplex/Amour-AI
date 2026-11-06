@@ -272,13 +272,13 @@ def parse_model_json_reply(raw_content: str, default_conflict_stage: int = 0) ->
 
     # Handle a truncated outer object when the reply value itself is complete.
     # JSONDecoder safely unescapes quotes/newlines without unicode_escape damage.
-    reply_key = re.search(r'"reply"\\s*:\\s*', text)
+    reply_key = re.search(r'"reply"\s*:\s*', text)
     if reply_key:
         value_start = reply_key.end()
         try:
             reply_value, _end = decoder.raw_decode(text[value_start:])
             if isinstance(reply_value, str) and reply_value.strip():
-                stage_match = re.search(r'"conflict_stage"\\s*:\\s*(-?\\d+)', text)
+                stage_match = re.search(r'"conflict_stage"\s*:\s*(-?\d+)', text)
                 stage = int(stage_match.group(1)) if stage_match else default_conflict_stage
                 stage = max(0, min(3, stage))
                 return reply_value.strip(), stage
@@ -290,12 +290,12 @@ def parse_model_json_reply(raw_content: str, default_conflict_stage: int = 0) ->
     looks_structured = (
         text.lstrip().startswith(("{", "[", "```json"))
         or '"conflict_stage"' in text
-        or re.search(r'"reply"\\s*:', text) is not None
+        or re.search(r'"reply"\s*:', text) is not None
     )
     if looks_structured:
         logger.warning("[LLM Parser] Model returned an invalid companion JSON payload")
         return "", default_conflict_stage
 
     # Remove generic Markdown fences around a plain-text response, if any.
-    plain_text = re.sub(r"^```(?:text)?\\s*|\\s*```$", "", text, flags=re.IGNORECASE).strip()
+    plain_text = re.sub(r"^```(?:text)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
     return plain_text, default_conflict_stage
