@@ -92,20 +92,8 @@ def generate_companion_reply(
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
 
-    # Preserve durable user facts in Reeve, but never store generated assistant
-    # prose here. Exact conversation dialogue remains in PostgreSQL.
-    if should_ingest_into_reeve(message):
-        try:
-            store_text = (
-                f"User ({user_clean_name}): {message}"
-                if user_clean_name else f"User: {message}"
-            )
-            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
-        except Exception as exc:
-            logger.warning("Failed to store user memory: %s", exc)
-
-    # Retrieval has its own policy; an ingestible message is not automatically a
-    # retrieval query, and greetings/fillers should not trigger graph retrieval.
+    # Retrieve historical context before writing this turn, so a recall question
+    # cannot immediately retrieve and repeat itself as a newly stored memory.
     memory_context = ""
     if should_retrieve_from_reeve(message):
         try:
@@ -115,6 +103,18 @@ def generate_companion_reply(
             memory_context = deduplicate_context(memory_context or "")
         except Exception as exc:
             logger.warning("Failed to retrieve Reeve context: %s", exc)
+
+    # Preserve meaningful user facts in Reeve after retrieval. Generated assistant
+    # prose and exact dialogue remain in PostgreSQL, not long-term memory.
+    if should_ingest_into_reeve(message):
+        try:
+            store_text = (
+                f"User ({user_clean_name}): {message}"
+                if user_clean_name else f"User: {message}"
+            )
+            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
+        except Exception as exc:
+            logger.warning("Failed to store user memory: %s", exc)
 
     # 3. BUILD TIME / TEMPORAL GROUNDING
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
