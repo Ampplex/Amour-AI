@@ -252,6 +252,9 @@ def should_ingest_into_reeve(text: str) -> bool:
     """
     if not text or not text.strip():
         return False
+    # Recall prompts are retrieval queries, not new facts to persist.
+    if should_retrieve_from_reeve(text):
+        return False
     clean = re.sub(r"[^\w\s]", "", text.strip().lower())
     words = clean.split()
     if not words:
