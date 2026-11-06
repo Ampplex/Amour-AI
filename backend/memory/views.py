@@ -16,7 +16,10 @@ from .reeve_service import (
     query_memory_for_user,
     retrieve_context_for_user,
     clear_user_memories,
-    generate_companion_reply,
+    strip_emojis,
+)
+from .chat_service import generate_companion_reply
+from .narrative_service import (
     get_or_create_narrative_state,
     extract_narrative_state_async,
 )

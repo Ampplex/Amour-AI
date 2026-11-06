@@ -1,0 +1,179 @@
+"""
+Companion Chat Orchestration Service.
+
+Orchestrates:
+1. Reeve Long-Term Memory (LTM) retrieval
+2. Narrative Engine state injection
+3. Prompt assembly (character identity, rules, temporal grounding)
+4. Dual-tier LLM inference (AWS Bedrock Mistral Large 2 + Groq failover)
+5. Pydantic response validation & zero-emoji enforcement
+"""
+
+import os
+import re
+import logging
+from datetime import datetime
+from django.conf import settings
+
+from .reeve_service import (
+    retrieve_context_for_user,
+    store_memory_for_user,
+    strip_emojis,
+)
+from .narrative_service import (
+    GLOBAL_COMPANION_DIRECTIVES,
+    AUTONOMOUS_NARRATIVE_ENGINE,
+    format_narrative_state_for_prompt,
+)
+from .llm_client import (
+    call_bedrock_mistral_large,
+    call_groq_fallback,
+    normalize_bedrock_messages,
+    parse_model_json_reply,
+)
+
+logger = logging.getLogger("amour.chat")
+
+
+def generate_companion_reply(
+    message: str,
+    namespace: str,
+    persona_name: str = "Companion",
+    persona_age: int = None,
+    greeting: str = "",
+    memory_prompt: str = "",
+    client_time: str = None,
+    client_timezone: str = None,
+    user_name: str = "",
+    conversation_history: list = None,
+    current_conflict_stage: int = 0,
+    narrative_state: dict = None,
+    user_key: str = None,
+) -> dict:
+    """
+    Companion roleplay chat pipeline powered by AWS Bedrock Mistral Large 2,
+    autonomous narrative progression, and Reeve memory graph.
+    """
+    user_clean_name = user_name.strip() if user_name else ""
+    first_name = user_clean_name.split()[0] if user_clean_name else ""
+
+    # 1. SMART INGESTION FILTER: Only store user message into Reeve if it has semantic substance
+    msg_words = message.strip().split()
+    is_ephemeral = (
+        len(msg_words) < 3
+        or message.strip().lower() in {"hi", "hello", "hey", "ok", "okay", "bye", "hmm", "k", "yeah", "yes", "no"}
+    )
+    if not is_ephemeral:
+        try:
+            store_text = f"User ({user_clean_name}): {message}" if user_clean_name else f"User: {message}"
+            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
+        except Exception as exc:
+            logger.warning(f"Failed to store memory: {exc}")
+
+    # 2. RETRIEVE REEVE LTM CONTEXT
+    memory_context = ""
+    try:
+        memory_context = retrieve_context_for_user(message, namespace=namespace, user_key=user_key)
+    except Exception as exc:
+        logger.warning(f"Failed to retrieve context: {exc}")
+
+    # 3. BUILD TIME / TEMPORAL GROUNDING
+    now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
+    time_instruction = f"Current Real-World Server Time: {now_str}."
+    if client_time:
+        time_instruction += f"\nUser's Local Client Time: {client_time} ({client_timezone or 'Local'})."
+
+    # 4. PERSONA IDENTITY & AGE INSTRUCTION
+    if persona_age:
+        age_instruction = (
+            f"You are {persona_name}, a {persona_age}-year-old individual. "
+            f"Portray the emotional maturity, life experience, and perspective of a {persona_age}-year-old."
+        )
+    else:
+        age_instruction = f"You are {persona_name}."
+
+    if memory_prompt:
+        persona_instructions = f"{age_instruction}\n\nPersona Lore and Background:\n{memory_prompt}"
+    else:
+        persona_instructions = age_instruction
+
+    # 5. USER PROFILE
+    user_profile = (
+        f"The user's name is {user_clean_name} (call them {first_name} naturally in conversation)."
+        if user_clean_name
+        else "The user's name is not yet specified; interact naturally."
+    )
+
+    # 6. NARRATIVE STATE BLOCK
+    narrative_block = format_narrative_state_for_prompt(narrative_state)
+
+    # 7. CONFLICT RESOLUTION DIRECTIVES
+    conflict_instructions = f"""--- CONFLICT AND RESOLUTION DIRECTIVES ---
+Current Relationship Conflict Stage: {current_conflict_stage} (0 = Normal, 1 = Minor Friction, 2 = Heated Disagreement, 3 = Resolution/Aftermath).
+- Stage 0: Warm, playful, authentic banter and mutual affection.
+- Stage 1: Mild hurt, hesitation, or tension; test boundaries without exploding.
+- Stage 2: Express genuine raw emotions, vulnerability, or frustration; do not instantly yield.
+- Stage 3: Soften, seek reconnection, apologize sincerely, or embrace makeup intimacy.
+Update conflict_stage in your output JSON based on the emotional trajectory of the interaction.
+------------------------------------------"""
+
+    # 8. ASSEMBLE SYSTEM PROMPT
+    prompt_modules = [
+        GLOBAL_COMPANION_DIRECTIVES,
+        f"--- CHARACTER IDENTITY ---\n{persona_instructions}\n--------------------------",
+        f"--- USER PROFILE ---\n{user_profile}\n--------------------",
+        f"--- TEMPORAL GROUNDING ---\n{time_instruction}\n--------------------------",
+        conflict_instructions,
+        AUTONOMOUS_NARRATIVE_ENGINE,
+    ]
+
+    if narrative_block:
+        prompt_modules.append(narrative_block)
+
+    if memory_context:
+        prompt_modules.append(f"--- REEVE LONG-TERM MEMORY (LTM) ---\n{memory_context}\n-----------------------------------")
+
+    system_prompt = "\n\n".join(prompt_modules)
+
+    # 9. ASSEMBLE CONVERSATION HISTORY & NORMALIZE FOR BEDROCK
+    history_turns = []
+    if conversation_history:
+        for turn in conversation_history:
+            sender = "bot" if turn.get("sender") == "bot" else "user"
+            text = (turn.get("text") or "").strip()
+            if text:
+                history_turns.append({"sender": sender, "text": text})
+
+    # Ensure latest message is present
+    if not history_turns or history_turns[-1].get("text") != message:
+        history_turns.append({"sender": "user", "text": message})
+
+    bedrock_messages = normalize_bedrock_messages(history_turns, persona_name=persona_name)
+
+    # 10. DUAL-TIER INFERENCE: Bedrock Mistral Large 2 with Groq LPU failover
+    raw_output = call_bedrock_mistral_large(system_prompt, bedrock_messages)
+    if not raw_output:
+        logger.info("[Inference] Bedrock failed or rate-limited; falling back to Groq LPU...")
+        raw_output = call_groq_fallback(system_prompt, bedrock_messages)
+
+    if not raw_output:
+        fallback_name = first_name or "love"
+        raw_output = f'{{"reply": "I heard you, {fallback_name}. Let us take a breath and figure this out together.", "conflict_stage": {current_conflict_stage}}}'
+
+    # 11. PARSE & VALIDATE
+    reply_text, new_stage = parse_model_json_reply(raw_output, default_conflict_stage=current_conflict_stage)
+    reply_text = strip_emojis(reply_text)
+
+    # 12. STORE BOT REPLY IN REEVE
+    if reply_text and not is_ephemeral:
+        try:
+            bot_store_text = f"{persona_name}: {reply_text}"
+            store_memory_for_user(bot_store_text, namespace=namespace, user_key=user_key)
+        except Exception as exc:
+            logger.warning(f"Failed to store bot memory: {exc}")
+
+    return {
+        "reply": reply_text,
+        "conflict_stage": new_stage,
+        "context": memory_context,
+    }
