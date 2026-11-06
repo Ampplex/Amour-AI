@@ -17,7 +17,7 @@ Amour AI ("we", "our", or "us") is dedicated to protecting your personal informa
 
 ## 3. Third-Party Services
 - **Google OAuth 2.0:** Used solely for authentication. Google's use of information received from Google APIs adheres to the Google API Services User Data Policy.
-- **TypeSafe AI (Jev):** For long-term memory decisions, Amour sends the incoming user message and up to six recent conversation turns to TypeSafe AI's Jev API. Jev returns structured memory-worthiness, category, and sensitive-data decisions; it does not generate the companion's chat reply. Messages approved for retention are then sent to Reeve for memory storage.
+- **AI response and memory services:** The configured language-model providers (AWS Bedrock as the primary provider and Groq as fallback) process the current message and conversation context to generate companion replies. The same model response includes an internal decision about whether the latest user message contains a durable real-world fact suitable for long-term personalization. Messages approved for retention are then sent to Reeve for memory storage. Amour does not make a separate TypeSafe Jev request.
 
 ## 4. Data Security & Retention
 Your data is protected using industry-standard encryption protocols. You can request deletion of your account and associated session data at any time.
