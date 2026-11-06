@@ -170,7 +170,12 @@ Update conflict_stage in your output JSON based on the emotional trajectory of t
         prompt_modules.append(narrative_block)
 
     if memory_context:
-        prompt_modules.append(f"--- REEVE LONG-TERM MEMORY (LTM) ---\n{memory_context}\n-----------------------------------")
+        prompt_modules.append(
+            "--- REEVE LONG-TERM MEMORY (HISTORICAL REFERENCE ONLY) ---\n"
+            "These are background facts or past events, not the active scene. "
+            "Do not reenact or retell them unless the user explicitly asks.\n"
+            f"{memory_context}\n-----------------------------------"
+        )
 
     system_prompt = "\n\n".join(prompt_modules)
 
@@ -195,13 +200,8 @@ Update conflict_stage in your output JSON based on the emotional trajectory of t
     reply_text, new_stage = parse_model_json_reply(raw_output, default_conflict_stage=current_conflict_stage)
     reply_text = strip_emojis(reply_text)
 
-    # 12. STORE BOT REPLY IN REEVE
-    if reply_text and not is_ephemeral:
-        try:
-            bot_store_text = f"{persona_name}: {reply_text}"
-            store_memory_for_user(bot_store_text, namespace=namespace, user_key=user_key)
-        except Exception as exc:
-            logger.warning(f"Failed to store bot memory: {exc}")
+    # Generated prose remains in PostgreSQL dialogue history. Reeve stores curated memories, not raw replies.
+
 
     return {
         "reply": reply_text,
