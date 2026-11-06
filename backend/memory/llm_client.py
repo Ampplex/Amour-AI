@@ -223,36 +223,79 @@ class CompanionReplyPayload(BaseModel):
 
 def parse_model_json_reply(raw_content: str, default_conflict_stage: int = 0) -> tuple[str, int]:
     """
-    Parses companion JSON reply using Pydantic, handling markdown fences and LLM formatting quirks.
+    Return only the user-facing companion reply and its internal conflict stage.
+
+    Models sometimes wrap the JSON in Markdown, prepend explanatory text, or
+    append a second JSON envelope after the prose. Search for a valid payload
+    instead of returning the raw model output (which can leak JSON into chat).
     """
-    if not raw_content:
+    if not raw_content or not raw_content.strip():
         return "", default_conflict_stage
+
     text = raw_content.strip()
+    decoder = json.JSONDecoder()
 
-    # 1. Strip markdown code fence if present
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    if fence_match:
-        text = fence_match.group(1).strip()
+    def validated_payload(value):
+        if isinstance(value, str):
+            # Some providers double-encode the JSON object as a JSON string.
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        if not isinstance(value, dict) or "reply" not in value:
+            return None
+        try:
+            return CompanionReplyPayload.model_validate(value)
+        except Exception:
+            return None
 
-    # 2. Extract outermost JSON object {...}
-    json_match = re.search(r"\{[\s\S]*\}", text)
-    candidate_json = json_match.group(0) if json_match else text
-
-    # 3. Pydantic fast schema validation
+    # First try the complete response, including a normal JSON string response.
     try:
-        parsed = CompanionReplyPayload.model_validate_json(candidate_json)
-        if parsed.reply:
+        parsed = validated_payload(json.loads(text))
+        if parsed and parsed.reply:
             return parsed.reply, parsed.conflict_stage
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         pass
 
-    # 4. Fallback regex extraction if JSON is slightly truncated or has unescaped characters
-    reply_m = re.search(r'"reply"\s*:\s*"([\s\S]*?)(?<!\\)"', text)
-    if reply_m:
+    # Then scan for complete JSON objects inside Markdown fences or surrounding
+    # explanatory prose. A valid {"reply": ..., "conflict_stage": ...} wins.
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
         try:
-            reply = reply_m.group(1).encode().decode("unicode_escape").strip()
-            return reply, default_conflict_stage
-        except Exception:
+            value, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        parsed = validated_payload(value)
+        if parsed and parsed.reply:
+            return parsed.reply, parsed.conflict_stage
+
+    # Handle a truncated outer object when the reply value itself is complete.
+    # JSONDecoder safely unescapes quotes/newlines without unicode_escape damage.
+    reply_key = re.search(r'"reply"\\s*:\\s*', text)
+    if reply_key:
+        value_start = reply_key.end()
+        try:
+            reply_value, _end = decoder.raw_decode(text[value_start:])
+            if isinstance(reply_value, str) and reply_value.strip():
+                stage_match = re.search(r'"conflict_stage"\\s*:\\s*(-?\\d+)', text)
+                stage = int(stage_match.group(1)) if stage_match else default_conflict_stage
+                stage = max(0, min(3, stage))
+                return reply_value.strip(), stage
+        except (json.JSONDecodeError, ValueError):
             pass
 
-    return text, default_conflict_stage
+    # Never show a malformed JSON envelope, schema keys, or Markdown JSON fence
+    # to the user. Plain-text provider responses remain a safe last resort.
+    looks_structured = (
+        text.lstrip().startswith(("{", "[", "```json"))
+        or '"conflict_stage"' in text
+        or re.search(r'"reply"\\s*:', text) is not None
+    )
+    if looks_structured:
+        logger.warning("[LLM Parser] Model returned an invalid companion JSON payload")
+        return "", default_conflict_stage
+
+    # Remove generic Markdown fences around a plain-text response, if any.
+    plain_text = re.sub(r"^```(?:text)?\\s*|\\s*```$", "", text, flags=re.IGNORECASE).strip()
+    return plain_text, default_conflict_stage
