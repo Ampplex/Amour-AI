@@ -125,16 +125,21 @@ def generate_companion_reply(
     # 4. PERSONA IDENTITY & AGE INSTRUCTION
     if persona_age:
         age_instruction = (
-            f"You are {persona_name}, a {persona_age}-year-old individual. "
+            f"You portray {persona_name}, a {persona_age}-year-old individual. "
             f"Portray the emotional maturity, life experience, and perspective of a {persona_age}-year-old."
         )
     else:
-        age_instruction = f"You are {persona_name}."
+        age_instruction = f"You portray {persona_name}."
+
+    pov_instruction = (
+        f"In narrative descriptions and speech tags, write in the third person for {persona_name} "
+        f"(using '{persona_name}', 'he' or 'she'). Address and interact with the user directly as 'you'."
+    )
 
     if memory_prompt:
-        persona_instructions = f"{age_instruction}\n\nPersona Lore and Background:\n{memory_prompt}"
+        persona_instructions = f"{age_instruction}\n{pov_instruction}\n\nPersona Lore and Background:\n{memory_prompt}"
     else:
-        persona_instructions = age_instruction
+        persona_instructions = f"{age_instruction}\n{pov_instruction}"
 
     # 5. USER PROFILE
     user_profile = (
