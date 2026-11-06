@@ -228,37 +228,30 @@ TRIVIAL_GREETINGS_AND_FILLERS = {
     "what", "huh", "why",
 }
 
-RELATIONSHIP_TRIGGER_WORDS = {
-    "break", "broke", "breakup", "breaking", "leave", "left", "quit", "over", "end",
-    "girlfriend", "boyfriend", "partner", "love", "hate", "cheat", "dating", "marry",
-    "sorry", "forgive", "mistake", "promise", "secret", "trip", "travel", "live", "work",
-    "job", "family", "mother", "father", "sister", "brother", "friend", "birthday", "dump", "dumped",
-}
-
-
-def should_ingest_into_reeve(text: str) -> bool:
-    """
-    Cost & Performance Optimizer:
-    Prevents calling expensive Bedrock Mistral Large graph extraction for trivial 1-2 word filler messages (e.g. 'hi', 'ok', 'good morning').
-    PostgreSQL already tracks short-term chat history. Reeve should only ingest meaningful facts, preferences, stories, and relationship state changes.
-    """
-    if not text or not text.strip():
-        return False
-    clean = re.sub(r"[^\w\s]", "", text.strip().lower())
-    words = clean.split()
-    if not words:
-        return False
-    # Always ingest if message mentions relationship triggers, commitments, or key facts
-    if any(w in RELATIONSHIP_TRIGGER_WORDS for w in words):
-        return True
-    # Skip trivial greetings, affirmations, and fillers
-    if clean in TRIVIAL_GREETINGS_AND_FILLERS:
-        return False
-    if len(words) <= 2 and all(w in TRIVIAL_GREETINGS_AND_FILLERS for w in words):
-        return False
-    if len(words) < 3:
-        return False
-    return True
+# No hardcoded rule based decisions allowed
+# def should_ingest_into_reeve(text: str) -> bool:
+#     """
+#     Cost & Performance Optimizer:
+#     Prevents calling expensive Bedrock Mistral Large graph extraction for trivial 1-2 word filler messages (e.g. 'hi', 'ok', 'good morning').
+#     PostgreSQL already tracks short-term chat history. Reeve should only ingest meaningful facts, preferences, stories, and relationship state changes.
+#     """
+#     if not text or not text.strip():
+#         return False
+#     clean = re.sub(r"[^\w\s]", "", text.strip().lower())
+#     words = clean.split()
+#     if not words:
+#         return False
+#     # Always ingest if message mentions relationship triggers, commitments, or key facts
+#     if any(w in RELATIONSHIP_TRIGGER_WORDS for w in words):
+#         return True
+#     # Skip trivial greetings, affirmations, and fillers
+#     if clean in TRIVIAL_GREETINGS_AND_FILLERS:
+#         return False
+#     if len(words) <= 2 and all(w in TRIVIAL_GREETINGS_AND_FILLERS for w in words):
+#         return False
+#     if len(words) < 3:
+#         return False
+#     return True
 
 
 GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
@@ -337,12 +330,12 @@ def generate_companion_reply(
     # 1. SMART INGESTION FILTER: Only store user message into Reeve if it has semantic substance.
     # Trivial 1-2 word fillers (e.g. 'hi', 'ok', 'good morning') are kept in Postgres short-term context
     # and skipped from calling expensive Bedrock Mistral Large graph extraction.
-    if should_ingest_into_reeve(message):
-        speaker_tag = f"User ({first_name})" if first_name else "User"
-        try:
-            store_memory_for_user(f"{speaker_tag}: {message}", namespace, user_key=user_key)
-        except Exception as exc:
-            logger.warning(f"Failed to store user memory to Reeve: {exc}")
+   
+    speaker_tag = f"User ({first_name})" if first_name else "User"
+    try:
+        store_memory_for_user(f"{speaker_tag}: {message}", namespace, user_key=user_key)
+    except Exception as exc:
+        logger.warning(f"Failed to store user memory to Reeve: {exc}")
 
     # 2. Context Retrieval from Reeve for this user namespace
     try:
@@ -542,7 +535,7 @@ def generate_companion_reply(
     # Anti-Echo Storage Guard & Smart Ingestion Filter:
     # Only store assistant reply into Reeve graph if it contains substantive dialogue,
     # not trivial filler (e.g. 'Hey.', 'Fine.', 'Okay.').
-    if reply and should_ingest_into_reeve(reply):
+    if reply:
         clean_reply = " ".join(reply.split())
         clean_context = " ".join((memory_context or "").split())
         if clean_reply and clean_reply not in clean_context:
