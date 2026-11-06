@@ -210,6 +210,13 @@ class ChatMemoryView(APIView):
 
         from .models import PersonaChatMessage
 
+        # Automatic Client-Key Handover on post
+        if user_key:
+            try:
+                migrate_user_messages_to_client_key(str(user_id), user_key)
+            except Exception as exc:
+                logger.warning(f"Error during client-key handover on post: {exc}")
+
         # Root Cause Fix: Client Message ID Idempotency Check
         existing_msg = None
         if client_message_id:
@@ -293,13 +300,6 @@ class ChatMemoryView(APIView):
             greeting=greeting,
             memory_prompt=memory_prompt,
         )
-
-        # Automatic Client-Key Handover on post
-        if user_key:
-            try:
-                migrate_user_messages_to_client_key(str(user_id), user_key)
-            except Exception as exc:
-                logger.warning(f"Error during client-key handover on post: {exc}")
 
         # Fetch the latest 12 persisted messages (not 12 complete exchanges).
         # The current incoming message is appended by chat_service after this history.
