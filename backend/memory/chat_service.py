@@ -19,7 +19,6 @@ from .reeve_service import (
     retrieve_context_for_user,
     store_memory_for_user,
     strip_emojis,
-    should_ingest_into_reeve,
     should_retrieve_from_reeve,
     deduplicate_context,
 )
@@ -34,6 +33,7 @@ from .llm_client import (
     call_groq_fallback,
     normalize_bedrock_messages,
     parse_model_json_reply,
+    parse_memory_store_decision,
 )
 
 logger = logging.getLogger("amour.chat")
@@ -104,18 +104,6 @@ def generate_companion_reply(
             memory_context = deduplicate_context(memory_context or "")
         except Exception as exc:
             logger.warning("Failed to retrieve Reeve context: %s", exc)
-
-    # Jev makes one typed memory-worthiness decision; Reeve's native async
-    # PersistWorker handles the approved write without adding an LLM generation call.
-    if should_ingest_into_reeve(message, conversation_history=conversation_history):
-        try:
-            store_text = (
-                f"User ({user_clean_name}): {message}"
-                if user_clean_name else f"User: {message}"
-            )
-            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
-        except Exception as exc:
-            logger.warning("Approved Reeve memory write failed: %s", exc)
 
     # 3. BUILD TIME / TEMPORAL GROUNDING
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
@@ -207,6 +195,21 @@ Update conflict_stage in your output JSON based on the emotional trajectory of t
     reply_text, new_stage = parse_model_json_reply(
         raw_output, default_conflict_stage=current_conflict_stage
     )
+
+    # The same LLM response that generated the companion reply also decides
+    # whether the latest user message contains a durable real-world memory.
+    # No separate classifier/API call or keyword-based gate is involved.
+    if parse_memory_store_decision(raw_output):
+        try:
+            store_text = (
+                f"User ({user_clean_name}): {message}"
+                if user_clean_name else f"User: {message}"
+            )
+            store_memory_for_user(store_text, namespace=namespace, user_key=user_key)
+            logger.info("[Memory Decision] LLM approved the latest user message for Reeve")
+        except Exception as exc:
+            logger.warning("[Memory Decision] Approved Reeve memory write failed: %s", exc)
+
     reply_text = strip_emojis(reply_text)
 
     # Never expose a malformed provider JSON envelope in the chat bubble.
