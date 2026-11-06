@@ -294,6 +294,13 @@ class ChatMemoryView(APIView):
             memory_prompt=memory_prompt,
         )
 
+        # Automatic Client-Key Handover on post
+        if user_key:
+            try:
+                migrate_user_messages_to_client_key(str(user_id), user_key)
+            except Exception as exc:
+                logger.warning(f"Error during client-key handover on post: {exc}")
+
         # Fetch the latest 12 persisted messages (not 12 complete exchanges).
         # The current incoming message is appended by chat_service after this history.
         history_query = PersonaChatMessage.objects.filter(
@@ -317,13 +324,6 @@ class ChatMemoryView(APIView):
             }
             for m in recent_turns_qs
         ]
-
-        # Automatic Client-Key Handover on post
-        if user_key:
-            try:
-                migrate_user_messages_to_client_key(str(user_id), user_key)
-            except Exception as exc:
-                logger.warning(f"Error during client-key handover on post: {exc}")
 
         # 1. Store user message in PostgreSQL (Encrypted with client key if provided, else server shield)
         if existing_msg is None:
