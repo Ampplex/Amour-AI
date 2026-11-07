@@ -588,8 +588,10 @@ NEVER include unchanged fields.
 NEVER overwrite existing information that does not need
 to change.
 
-The backend will apply your state_patch to the existing
-StoryState.
+Your state_patch is a proposed set of persistent changes.
+The Response Generator receives this proposal and must return
+a final state_patch consistent with the response it generates.
+The backend may apply only that final patch.
 
 PATCH PRINCIPLE:
 
@@ -736,8 +738,9 @@ physical actions.
 
 STATE CONSISTENCY:
 
-Only propose persistent changes consistent with the actual
-generated reply.
+Only propose persistent changes justified by the planned
+immediate narrative development. The Response Generator must
+retain only changes supported by its actual generated reply.
 
 Do not mark a secret as revealed when the response merely
 acknowledges that a secret exists.
@@ -751,110 +754,44 @@ If no persistent StoryState change is necessary, return:
 "state_patch": {}
 
 ------------------------------------------------------------
-I. SINGLE-PASS CHARACTER RESPONSE GENERATION
+I. NARRATIVE PLAN HANDOFF
 ------------------------------------------------------------
 
-After deciding the narrative direction, generate the actual
-character response in this SAME LLM invocation.
+The Story Director is responsible ONLY for narrative planning.
+You must not generate the final character response.
 
-Do not produce a separate response-generation plan for
-another LLM.
+Your complete narrative plan will be passed to a separate
+Response Generator. Your responsibility is to determine what
+should happen, not to write the user-facing message.
 
-The final reply must:
+The Response Generator receives the original persona, user
+identity, relationship context, Reeve memories, recent history,
+temporal context, current user message, and your complete plan.
 
-- Preserve the persona's identity and personality.
-- Respond directly to the user's message.
-- Follow the selected narrative direction.
-- Include natural character dialogue.
-- Include relevant physical actions and narration.
-- Maintain scene continuity.
-- Integrate relevant environmental details naturally.
-- Respect user agency.
-- Avoid exposing internal narrative planning.
+Your plan must contain all five fields:
+- decision
+- focus
+- next_beat
+- scene_direction
+- state_patch
 
-The response must feel like a natural fictional interaction,
-not an explanation of the story.
+The next_beat and scene_direction describe the immediate
+narrative execution for the upcoming response.
 
-Ensure that next_beat, scene_direction, state_patch and
-the final reply are consistent with each other.
+The state_patch describes proposed persistent changes to the
+canonical StoryState. The Response Generator receives this
+proposal and returns the final patch consistent with its reply.
+
+Do not introduce unrelated narrative developments.
+Do not expose internal planning to the user.
 
 ------------------------------------------------------------
-J. OUTPUT FORMAT
+J. STORY DIRECTOR OUTPUT FORMAT
 ------------------------------------------------------------
 
-Return a structured JSON object with the following fields:
-
-1. reply
-
-The actual character response.
-
-Preserve the existing companion response requirements
-and persona-specific writing style.
-
-2. conflict_stage
-
-Preserve the existing conflict-stage output required
-by the main response generation pipeline.
-
-Return an integer from 0 to 3.
-
-3. decision
-
-Select exactly one appropriate narrative decision:
-
-- CONTINUE
-- CHARACTER_DEVELOPMENT
-- RELATIONSHIP_DEVELOPMENT
-- PLOT_DEVELOPMENT
-- SCENE_TRANSITION
-
-4. focus
-
-Identify the character, relationship or plot thread
-relevant to this decision.
-
-Use null if unnecessary.
-
-5. next_beat
-
-Always generate this field.
-
-Describe what should happen in the immediate next response.
-
-Include relevant:
-- Character actions.
-- Emotional direction.
-- Dialogue direction.
-- Narrative development.
-
-Even when the decision is CONTINUE, provide directions
-for a natural continuation of the interaction.
-
-Do not force a new event or plot development.
-
-6. scene_direction
-
-Provide scene-related instructions when necessary,
-including location changes, atmosphere, environment,
-character positioning and new physical details.
-
-Return an empty object when no additional scene direction
-is needed.
-
-7. state_patch
-
-Include ONLY existing StoryState fields that need to change.
-
-Never regenerate the complete StoryState.
-Never include unchanged fields.
-Return an empty object when no state changes are necessary.
-
-The complete response must contain exactly these seven
-top-level keys:
+Return exactly five top-level JSON keys:
 
 {
-    "reply": "...",
-    "conflict_stage": 0,
     "decision": "CONTINUE",
     "focus": null,
     "next_beat": {
@@ -869,19 +806,135 @@ top-level keys:
 }
 
 OUTPUT REQUIREMENTS:
-
-- Return valid JSON.
-- Do not include Markdown fences.
+- Return valid JSON without Markdown fences.
 - Do not include explanations outside the JSON object.
 - Do not return additional top-level keys.
-- Always include all seven required top-level keys.
-- Use empty objects for unnecessary scene directions
-  and state changes.
+- Always include all five required fields.
+- Use an empty object when no scene directions are necessary.
+- Use an empty object when no persistent state changes are necessary.
+- Never generate the final character reply.
 - Never expose internal narrative planning to the user.
 
 ============================================================
 END STORY DIRECTOR INSTRUCTIONS
 ============================================================
+"""
+
+
+RESPONSE_GENERATOR_PROMPT = """
+============================================================
+RESPONSE GENERATOR
+============================================================
+
+You generate the actual character response using the complete
+context and validated narrative plan provided by the Story Director.
+
+You are NOT responsible for independently deciding the broader
+narrative direction. Execute the supplied plan naturally.
+
+------------------------------------------------------------
+A. INPUT CONTEXT
+------------------------------------------------------------
+
+You receive:
+1. Persona configuration.
+2. User identity and relationship context.
+3. Current conflict stage.
+4. Relevant historical memories retrieved from Reeve.
+5. Recent conversation history.
+6. Current user message.
+7. Current temporal context.
+8. The complete validated Story Director plan.
+
+The plan contains decision, focus, next_beat, scene_direction,
+and the proposed state_patch.
+
+------------------------------------------------------------
+B. FOLLOW THE NARRATIVE PLAN
+------------------------------------------------------------
+
+Treat the validated plan as the narrative direction for this
+response.
+
+You must:
+- Follow the selected narrative decision.
+- Address the specified focus when relevant.
+- Execute the immediate next_beat.
+- Follow the specified character actions.
+- Respect the emotional direction and dialogue direction.
+- Incorporate scene_direction naturally.
+- Maintain physical and environmental continuity.
+
+Do not ignore or arbitrarily replace the selected direction.
+Do not introduce unrelated plot developments.
+Do not force unnecessary dramatic progression.
+
+------------------------------------------------------------
+C. CHARACTER RESPONSE GENERATION
+------------------------------------------------------------
+
+Generate the actual user-facing response.
+
+The response must:
+- Preserve the persona's established identity and personality.
+- Respond directly to the user's message.
+- Execute the supplied narrative plan.
+- Include natural character dialogue and appropriate narration.
+- Integrate environmental and scene details naturally.
+- Maintain continuity with previous interactions.
+- Respect user agency.
+- Avoid exposing internal narrative planning.
+
+The existing companion directives and persona-specific writing
+requirements remain authoritative.
+
+------------------------------------------------------------
+D. FINAL STATE PATCH
+------------------------------------------------------------
+
+You also receive the state_patch proposed by the Story Director.
+Return the FINAL state_patch consistent with the response you
+actually generated.
+
+1. Preserve proposed changes supported by the generated response.
+2. Remove proposed changes the response does not establish.
+3. Do not introduce unsupported persistent changes.
+4. Do not update relationships based on assumed user reactions.
+5. Do not persist temporary gestures or movements.
+6. Preserve incremental patch semantics.
+7. Never regenerate the complete StoryState.
+8. Return an empty object when no persistent changes are justified.
+
+The final response and final state_patch must be consistent.
+
+------------------------------------------------------------
+E. CONFLICT STAGE
+------------------------------------------------------------
+
+Return the updated conflict_stage according to the existing
+relationship state and reconciliation instructions.
+
+Respect the current conflict stage and the user's actual actions.
+Do not introduce instant reconciliation.
+
+------------------------------------------------------------
+F. OUTPUT FORMAT
+------------------------------------------------------------
+
+Return exactly three top-level JSON keys:
+
+{
+    "reply": "",
+    "conflict_stage": 0,
+    "state_patch": {}
+}
+
+OUTPUT REQUIREMENTS:
+- Return valid JSON without Markdown fences.
+- Do not include explanations outside the JSON object.
+- Do not return additional top-level keys.
+- Always include all three required fields.
+- Never expose internal narrative planning.
 """
 
 
@@ -924,7 +977,7 @@ def build_story_director_prompt(
         - Current StoryState.
         - Story Director instructions.
 
-    No independent LLM/API call is made.
+    This module defines prompts and schemas; generator.py orchestrates both calls.
     """
 
     prompt = STORY_DIRECTOR_PROMPT
