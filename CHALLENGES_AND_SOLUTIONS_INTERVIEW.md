@@ -45,7 +45,7 @@ Why did this happen even though the breakup was stored in the Reeve knowledge gr
 2. **Attention Weight Drowning**: In transformer self-attention layers, high-level character instructions at the beginning of the prompt act as massive attention attractors. When the user sent a neutral greeting like `"Hello"`, the model had very little semantic signal to latch onto. The attention heads defaulted to the sweet baseline prompt, overpowering the negative episodic memory retrieved from the graph.
 
 ### The Engineering Solution
-We decoupled baseline persona traits from **active relationship state** and introduced strict emotional continuity rules in `backend/memory/reeve_service.py`:
+We decoupled baseline persona traits from **active relationship state** and introduced strict emotional continuity rules in the main response generator (`backend/response_generator/generator.py`):
 
 ```python
 # Directive 5: Emotional Continuity & Breakup Status
@@ -454,7 +454,7 @@ We completely removed all technical labels, database references, and storage str
 
 | Challenge | Root Cause | Engineering Solution | Key Metric / Outcome |
 | :--- | :--- | :--- | :--- |
-| **Breakup Amnesia** | Static opening prompt overriding graph memory | State override rules in `reeve_service.py` | 100% emotional continuity on breakup greetings |
+| **Breakup Amnesia** | Static opening prompt overriding graph memory | State override rules in `response_generator` | 100% emotional continuity on breakup greetings |
 | **Pushover Companion** | RLHF agreeableness bias | 3-Stage Realistic Reconciliation Protocol | Authentic multi-turn relationship repair |
 | **Cache Invalidation** | Seconds-level timestamps & top-placed dynamic context | 30-min temporal bucketing & hierarchical prefix order | 92%+ KV cache hits; TTFT dropped to <280ms |
 | **Bedrock Mistral Costs** | Blind graph ingestion of 1-word fillers | Smart Memory Ingestion Filter (`should_ingest_into_reeve`) | >64% reduction in AWS Bedrock API bills |

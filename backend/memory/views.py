@@ -15,8 +15,8 @@ from .reeve_service import (
     query_memory_for_user,
     retrieve_context_for_user,
     clear_user_memories,
-    generate_companion_reply,
 )
+from response_generator import generate_companion_reply, strip_emojis
 
 logger = logging.getLogger(__name__)
 
@@ -492,7 +492,7 @@ class GenerateAvatarPersonaView(APIView):
         import re
         import requests
         from django.conf import settings
-        from .reeve_service import strip_emojis
+        from response_generator import strip_emojis
 
         field = request.data.get("field", "all")
         avatar_name = (request.data.get("name") or "").strip()

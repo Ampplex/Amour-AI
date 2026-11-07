@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     # Amour AI apps
     "authentication",
     "memory",
+    "response_generator",
 ]
 
 MIDDLEWARE = [

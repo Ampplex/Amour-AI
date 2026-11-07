@@ -54,8 +54,8 @@ flowchart TD
 
     subgraph Backend ["Django REST Framework Backend (Port 8000)"]
         AuthApp["authentication App (User, S3 Upload, Profile)"]
-        MemApp["memory App (Persona, Chat, Feed, Likes, Follows)"]
-        ReeveSvc["reeve_service.py (Prompt Cache & LLM Engine)"]
+        MemApp["memory App (Persona, Chat, Feed, Likes, Follows, Reeve LTM)"]
+        RespGen["response_generator (Prompt Cache & LLM Engine)"]
     end
 
     subgraph Storage ["Cloud Infrastructure & Databases"]
@@ -367,7 +367,7 @@ erDiagram
 
 ## 4. Inference Engine, Prompt Caching & KV Cache Architecture
 
-Roleplay conversational generation is orchestrated by `backend/memory/reeve_service.py`, engineered for minimum latency, zero prompt degradation, and maximum **KV Cache Reuse** on modern LLM inference engines (Groq LPUs, Anthropic, vLLM).
+Roleplay conversational generation is orchestrated by `backend/response_generator/generator.py` (decoupled from the Reeve memory retrieval service `backend/memory/reeve_service.py`), engineered for minimum latency, zero prompt degradation, and maximum **KV Cache Reuse** on modern LLM inference engines (Groq LPUs, Anthropic, vLLM).
 
 ### 4.1 Prefix Stability & KV Cache Maximization
 
@@ -531,7 +531,8 @@ Standard AI chatbots suffer from "breakup amnesia" and fold on the first simple 
 | `backend/authentication/views.py` | Auth & Profile endpoints | Google JWT verification, username uniqueness, persona handle sync |
 | `backend/memory/models.py` | Persona, Chat, Like, Follow schemas | Neon PostgreSQL UUID keys, client idempotency keys |
 | `backend/memory/views.py` | Feed, Chat, & Persona endpoints | Paginated history, idempotency check, seed ingestion |
-| `backend/memory/reeve_service.py` | Inference & memory engine | Prompt caching, KV cache stability, 30m time bucket, Groq failover |
+| `backend/memory/reeve_service.py` | Memory & retrieval service | Reeve LTM Neo4j integration, client-managed zero-knowledge encryption |
+| `backend/response_generator/` | Main response generator | Prompt caching, KV cache stability, 30m time bucket, Groq failover |
 
 ---
 
