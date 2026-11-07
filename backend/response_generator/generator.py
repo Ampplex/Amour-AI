@@ -401,7 +401,8 @@ def generate_companion_reply(
         if fallback not in models_to_try:
             models_to_try.append(fallback)
 
-    # 8. Story Director: first LLM call.
+    # 8. STORY DIRECTOR: PREPARE AND EXECUTE THE FIRST LLM REQUEST.
+    # This step only assembles the messages; it does not call the LLM.
     planner_messages = _build_llm_messages(
         shared_system_prompt=shared_system_prompt,
         stage_prompt=build_story_director_prompt(),
@@ -409,6 +410,8 @@ def generate_companion_reply(
         message=message,
     )
 
+    # This helper sends the API request, validates the returned JSON against
+    # StoryDirectorOutput, and tries fallback models if the attempt fails.
     story_plan, planner_model = _call_structured_llm(
         messages=planner_messages,
         output_model=StoryDirectorOutput,
@@ -429,7 +432,8 @@ def generate_companion_reply(
             "namespace": namespace,
         }
 
-    # 9. Response Generator: second LLM call.
+    # 9. RESPONSE GENERATOR: PREPARE AND EXECUTE THE SECOND LLM REQUEST.
+    # Serialize the validated plan so the writer receives all five planner fields.
     serialized_story_plan = json.dumps(
         story_plan,
         ensure_ascii=False,
@@ -445,6 +449,8 @@ def generate_companion_reply(
         + serialized_story_plan
     )
 
+    # Prepare the writer's messages. This assembles context and instructions
+    # only; the actual LLM request happens in _call_structured_llm below.
     writer_messages = _build_llm_messages(
         shared_system_prompt=shared_system_prompt,
         stage_prompt=writer_prompt,
@@ -452,6 +458,7 @@ def generate_companion_reply(
         message=message,
     )
 
+    # Execute the second LLM request and validate its response schema.
     writer_output, writer_model = _call_structured_llm(
         messages=writer_messages,
         output_model=CompanionReplyOutput,
