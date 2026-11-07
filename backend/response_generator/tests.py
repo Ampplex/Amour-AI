@@ -1,20 +1,77 @@
 import json
 from unittest import TestCase
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
+
 from response_generator import (
+    GLOBAL_COMPANION_DIRECTIVES,
     generate_companion_reply,
+    get_bucketed_time_str,
     sanitize_companion_reply,
     strip_emojis,
-    get_bucketed_time_str,
-    GLOBAL_COMPANION_DIRECTIVES,
 )
 from response_generator.story_director import (
-    CompanionResponseOutput,
+    CompanionReplyOutput,
     NARRATIVE_DECISIONS,
+    RESPONSE_GENERATOR_PROMPT,
     STORY_DIRECTOR_PROMPT,
+    StoryDirectorOutput,
 )
+
+
+VALID_STORY_PLAN = {
+    "decision": "RELATIONSHIP_DEVELOPMENT",
+    "focus": "maya",
+    "next_beat": {
+        "event": None,
+        "narrative_development": "Maya gradually becomes more comfortable.",
+        "character_actions": [
+            "Maya moves closer.",
+            "She briefly maintains eye contact.",
+        ],
+        "emotional_direction": "Guarded but softening",
+        "dialogue_direction": "More emotionally vulnerable",
+    },
+    "scene_direction": {
+        "atmosphere": "Quiet evening",
+        "physical_details": ["Maya sits closer to the user."],
+    },
+    "state_patch": {
+        "characters": {
+            "maya": {
+                "current_emotional_state": "Guarded but gradually softening"
+            }
+        }
+    },
+}
+
+
+VALID_WRITER_OUTPUT = {
+    "reply": (
+        "She looks at you for a moment before moving closer. "
+        "I guess I don't mind having you around."
+    ),
+    "conflict_stage": 2,
+    "state_patch": {
+        "characters": {
+            "maya": {
+                "current_emotional_state": "Guarded but gradually softening"
+            }
+        }
+    },
+}
+
+
+def make_mock_response(payload, status_code=200):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(payload)}}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 20},
+    }
+    response.text = ""
+    return response
 
 
 class ResponseGeneratorUnitTests(TestCase):
@@ -27,8 +84,8 @@ class ResponseGeneratorUnitTests(TestCase):
         self.assertEqual(" ".join(cleaned.split()), "Hello! Have a great day!")
 
     def test_sanitize_companion_reply(self):
-        text_with_fences = "Hey! ```python\nprint('secret')\n``` (no emojis) How are you?"
-        cleaned = sanitize_companion_reply(text_with_fences)
+        text = "Hey! ```python\\nprint('secret')\\n``` (no emojis) How are you?"
+        cleaned = sanitize_companion_reply(text)
         self.assertNotIn("```", cleaned)
         self.assertNotIn("no emojis", cleaned)
         self.assertIn("Hey!", cleaned)
@@ -36,129 +93,86 @@ class ResponseGeneratorUnitTests(TestCase):
 
     def test_get_bucketed_time_str(self):
         bucketed = get_bucketed_time_str()
-        self.assertTrue(len(bucketed) > 0)
+        self.assertTrue(bucketed)
         self.assertTrue(":00" in bucketed or ":30" in bucketed)
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
-    def test_generate_companion_reply_success(
+    def test_two_stage_handoff_and_combined_reeve_storage(
         self, mock_retrieve, mock_store, mock_post
     ):
         mock_retrieve.return_value = "Past user memory"
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": json.dumps(
-                            {
-                                "reply": "I missed you today.",
-                                "conflict_stage": 0,
-                                "decision": "CONTINUE",
-                                "focus": None,
-                                "next_beat": {
-                                    "event": None,
-                                    "narrative_development": "Continue conversation",
-                                    "character_actions": [],
-                                    "emotional_direction": "Warm",
-                                    "dialogue_direction": "Casual greeting",
-                                },
-                                "scene_direction": {},
-                                "state_patch": {},
-                            }
-                        )
-                    }
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 50,
-                "completion_tokens": 10,
-                "prompt_time": 0.05,
-                "completion_time": 0.02,
-            },
-        }
-        mock_post.return_value = mock_resp
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
 
         result = generate_companion_reply(
             message="Hey, are you free tonight?",
             namespace="user_123_companion_456",
             persona_name="Aria",
             user_name="John Doe",
+            conversation_history=[
+                {"role": "user", "content": "We met yesterday."},
+                {"role": "assistant", "content": "I remember."},
+            ],
+            user_key="user-123",
         )
 
-        self.assertEqual(result["reply"], "I missed you today.")
-        self.assertEqual(result["conflict_stage"], 0)
-        self.assertEqual(result["decision"], "CONTINUE")
+        self.assertEqual(result["reply"], VALID_WRITER_OUTPUT["reply"])
+        self.assertEqual(result["conflict_stage"], 2)
+        self.assertEqual(result["decision"], "RELATIONSHIP_DEVELOPMENT")
+        self.assertEqual(result["focus"], "maya")
+        self.assertEqual(result["next_beat"], VALID_STORY_PLAN["next_beat"])
+        self.assertEqual(result["scene_direction"], VALID_STORY_PLAN["scene_direction"])
+        self.assertEqual(result["planner_state_patch"], VALID_STORY_PLAN["state_patch"])
+        self.assertEqual(result["state_patch"], VALID_WRITER_OUTPUT["state_patch"])
         self.assertEqual(result["namespace"], "user_123_companion_456")
         self.assertEqual(result["context"], "Past user memory")
-        # Check that user message was stored
-        mock_store.assert_any_call("User (John): Hey, are you free tonight?", "user_123_companion_456", user_key=None)
-        # Check that assistant reply was stored
-        mock_store.assert_any_call("Assistant: I missed you today.", "user_123_companion_456", user_key=None)
+        self.assertEqual(mock_post.call_count, 2)
 
-        # Verify Story Director instructions are included
-        self.assertEqual(mock_post.call_count, 1)
-        request_payload = mock_post.call_args.kwargs["json"]
-        system_prompt = request_payload["messages"][0]["content"]
-        self.assertIn(STORY_DIRECTOR_PROMPT, system_prompt)
-        self.assertIn(
-            "No initialized StoryState was provided.",
-            system_prompt,
+        # Verify that the complete plan and original context reach the writer.
+        writer_messages = mock_post.call_args_list[1].kwargs["json"]["messages"]
+        writer_system_prompt = "\n".join(
+            item["content"] for item in writer_messages if item["role"] == "system"
         )
-        # Verify existing context is preserved
-        self.assertIn("Past user memory", system_prompt)
-        self.assertIn("PERSONA IDENTITY", system_prompt)
-        self.assertIn(
-            GLOBAL_COMPANION_DIRECTIVES,
-            system_prompt,
+        self.assertIn(RESPONSE_GENERATOR_PROMPT, writer_system_prompt)
+        self.assertIn("RELATIONSHIP_DEVELOPMENT", writer_system_prompt)
+        self.assertIn("Maya gradually becomes more comfortable.", writer_system_prompt)
+        self.assertIn("scene_direction", writer_system_prompt)
+        self.assertIn("Past user memory", writer_system_prompt)
+        self.assertIn("PERSONA IDENTITY", writer_system_prompt)
+        self.assertIn(GLOBAL_COMPANION_DIRECTIVES, writer_system_prompt)
+        self.assertIn("We met yesterday.", [m["content"] for m in writer_messages])
+        self.assertIn("Hey, are you free tonight?", [m["content"] for m in writer_messages])
+
+        # The user message is ingested for retrieval, and the complete
+        # user + final assistant exchange is stored after generation.
+        mock_store.assert_any_call(
+            "User (John): Hey, are you free tonight?",
+            "user_123_companion_456",
+            user_key="user-123",
+        )
+        mock_store.assert_any_call(
+            "User: Hey, are you free tonight?\\nAssistant: "
+            + VALID_WRITER_OUTPUT["reply"],
+            "user_123_companion_456",
+            user_key="user-123",
         )
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
-    def test_generate_companion_reply_validation_failover(
+    def test_planner_validation_failover_then_writer(
         self, mock_retrieve, mock_store, mock_post
     ):
         mock_retrieve.return_value = ""
-        # First model returns invalid output (missing required keys)
-        resp_invalid = MagicMock()
-        resp_invalid.status_code = 200
-        resp_invalid.json.return_value = {
-            "choices": [{"message": {"content": json.dumps({"reply": "hi"})}}],
-            "usage": {},
-        }
-        # Second model returns valid 7-key output
-        resp_valid = MagicMock()
-        resp_valid.status_code = 200
-        resp_valid.json.return_value = {
-            "choices": [
-                {
-                    "message": {
-                        "content": json.dumps(
-                            {
-                                "reply": "Hello there!",
-                                "conflict_stage": 1,
-                                "decision": "CONTINUE",
-                                "focus": None,
-                                "next_beat": {
-                                    "event": None,
-                                    "narrative_development": "Keep chatting",
-                                    "character_actions": [],
-                                    "emotional_direction": "Calm",
-                                    "dialogue_direction": "Friendly",
-                                },
-                                "scene_direction": {},
-                                "state_patch": {},
-                            }
-                        )
-                    }
-                }
-            ],
-            "usage": {},
-        }
-        mock_post.side_effect = [resp_invalid, resp_valid]
+        mock_post.side_effect = [
+            make_mock_response({"reply": "not a plan"}),
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
 
         result = generate_companion_reply(
             message="Hi",
@@ -166,59 +180,100 @@ class ResponseGeneratorUnitTests(TestCase):
             persona_name="Aria",
         )
 
-        self.assertEqual(result["reply"], "Hello there!")
-        self.assertEqual(result["conflict_stage"], 1)
-        self.assertEqual(result["decision"], "CONTINUE")
-        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(result["reply"], VALID_WRITER_OUTPUT["reply"])
+        self.assertEqual(mock_post.call_count, 3)
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_planner_failure_does_not_call_writer(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        mock_post.side_effect = [
+            make_mock_response({"reply": "invalid"}),
+            make_mock_response({"reply": "still invalid"}),
+            make_mock_response({"reply": "invalid again"}),
+        ]
+
+        result = generate_companion_reply(
+            message="Hi",
+            namespace="user_123_companion_456",
+            persona_name="Aria",
+        )
+
+        self.assertEqual(result["reply"], "")
+        self.assertEqual(mock_post.call_count, 3)
+        mock_store.assert_called_once()
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_writer_failure_does_not_fabricate_reply(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response({"reply": "invalid"}),
+            make_mock_response({"reply": "invalid"}),
+            make_mock_response({"reply": "invalid"}),
+        ]
+
+        result = generate_companion_reply(
+            message="Hi",
+            namespace="user_123_companion_456",
+            persona_name="Aria",
+        )
+
+        self.assertEqual(result["reply"], "")
+        self.assertEqual(result["decision"], VALID_STORY_PLAN["decision"])
+        self.assertEqual(mock_post.call_count, 4)
 
 
 class StructuredOutputTests(TestCase):
     def setUp(self):
-        self.valid_output = {
-            "reply": "Maya looks away nervously.",
-            "conflict_stage": 0,
-            "decision": "CHARACTER_DEVELOPMENT",
-            "focus": "maya",
-            "next_beat": {
-                "event": None,
-                "narrative_development": "Maya becomes hesitant.",
-                "character_actions": ["Avoids eye contact"],
-                "emotional_direction": "Anxious",
-                "dialogue_direction": "Respond cautiously",
-            },
-            "scene_direction": {},
-            "state_patch": {},
-        }
+        self.valid_plan = dict(VALID_STORY_PLAN)
+        self.valid_writer = dict(VALID_WRITER_OUTPUT)
 
-    def test_valid_output(self):
-        result = CompanionResponseOutput.model_validate(
-            self.valid_output
-        )
-        self.assertEqual(
-            result.decision,
-            "CHARACTER_DEVELOPMENT",
-        )
+    def test_valid_story_plan(self):
+        output = StoryDirectorOutput.model_validate(self.valid_plan)
+        self.assertEqual(output.decision, "RELATIONSHIP_DEVELOPMENT")
 
     def test_all_narrative_decisions_are_valid(self):
         for decision in NARRATIVE_DECISIONS:
-            output = {
-                **self.valid_output,
-                "decision": decision,
-            }
-            result = CompanionResponseOutput.model_validate(output)
-            self.assertEqual(result.decision, decision)
+            plan = {**self.valid_plan, "decision": decision}
+            self.assertEqual(
+                StoryDirectorOutput.model_validate(plan).decision,
+                decision,
+            )
 
     def test_invalid_decision_raises(self):
-        output = {**self.valid_output, "decision": "INVALID_DECISION"}
+        plan = {**self.valid_plan, "decision": "INVALID_DECISION"}
         with self.assertRaises(ValidationError):
-            CompanionResponseOutput.model_validate(output)
+            StoryDirectorOutput.model_validate(plan)
 
-    def test_extra_keys_forbidden(self):
-        output = {**self.valid_output, "extra_key": "forbidden"}
-        with self.assertRaises(ValidationError):
-            CompanionResponseOutput.model_validate(output)
+    def test_planner_missing_fields_and_extra_fields_raise(self):
+        for field in ("next_beat", "scene_direction", "state_patch"):
+            incomplete = {k: v for k, v in self.valid_plan.items() if k != field}
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                StoryDirectorOutput.model_validate(incomplete)
 
-    def test_missing_required_keys_raises(self):
-        incomplete = {k: v for k, v in self.valid_output.items() if k != "reply"}
+        extra = {**self.valid_plan, "unexpected": True}
         with self.assertRaises(ValidationError):
-            CompanionResponseOutput.model_validate(incomplete)
+            StoryDirectorOutput.model_validate(extra)
+
+    def test_valid_writer_output(self):
+        output = CompanionReplyOutput.model_validate(self.valid_writer)
+        self.assertEqual(output.reply, VALID_WRITER_OUTPUT["reply"])
+
+    def test_writer_invalid_outputs_raise(self):
+        cases = [
+            {**self.valid_writer, "reply": ""},
+            {**self.valid_writer, "conflict_stage": 4},
+            {**self.valid_writer, "unexpected": True},
+            {k: v for k, v in self.valid_writer.items() if k != "state_patch"},
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(ValidationError):
+                CompanionReplyOutput.model_validate(payload)

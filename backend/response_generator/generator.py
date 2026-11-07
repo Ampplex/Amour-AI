@@ -1,10 +1,10 @@
 """
 Main Response Generator Service.
 
-Handles companion persona response generation, KV-cache-optimized prompt assembly,
-temporal grounding, character directives, Groq/LLM inference with model failover,
-JSON response parsing, output sanitization (zero-emoji enforcement), and coordination
-with the Reeve memory retrieval/storage service.
+Orchestrates a two-stage narrative pipeline: Story Director planning followed
+by final character-response generation. Handles shared prompt assembly,
+temporal grounding, structured LLM inference with model failover, output
+sanitization, and Reeve memory retrieval/storage.
 """
 
 import os
@@ -481,22 +481,24 @@ def generate_companion_reply(
     reply = sanitize_companion_reply(writer_output["reply"])
     writer_output["reply"] = reply
 
-    # 11. Store only the final assistant response in Reeve.
+    # 11. Store the complete exchange in Reeve.
+    # The user message is also ingested before retrieval above so it can
+    # participate in the current turn's memory context. This second record
+    # deliberately stores BOTH sides together after the final reply exists.
+    # Do not skip this write merely because the reply appears in retrieved
+    # context: the combined exchange is the durable user/assistant pair.
     if reply:
-        clean_reply = " ".join(reply.split())
-        clean_context = " ".join((memory_context or "").split())
-        if clean_reply and clean_reply not in clean_context:
-            try:
-                store_memory_for_user(
-                    f"User: {message.strip()}, Assistant: {reply}",
-                    namespace,
-                    user_key=user_key,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to store user and assistant reply to Reeve: %s",
-                    exc,
-                )
+        try:
+            store_memory_for_user(
+                f"User: {message.strip()}\nAssistant: {reply}",
+                namespace,
+                user_key=user_key,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to store complete user/assistant exchange to Reeve: %s",
+                exc,
+            )
 
     # 12. Return final response and internal narrative metadata.
     return {

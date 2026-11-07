@@ -3,20 +3,18 @@
 Story Director for Amour AI
 ===========================
 
-Provides narrative decision-making instructions, canonical
-StoryState schemas, and structured output validation for
-the existing companion response generation LLM.
+Provides narrative planning instructions, canonical StoryState
+schemas, and structured output validation for the two-stage
+companion response pipeline.
 
 Architecture:
-    - Single existing LLM call.
-    - Story Director instructions are injected into the
-      existing main system prompt.
-    - The same LLM decides narrative progression and
-      generates the final character response.
+    - Story Director produces a validated five-field narrative plan.
+    - Response Generator turns that plan into the final reply.
     - Reeve remains responsible for historical memory.
     - StoryState represents the current canonical story state.
 
-This module does not make independent LLM/API calls.
+This module defines prompts and schemas; generator.py orchestrates
+the two sequential LLM calls.
 """
 
 import json
@@ -128,23 +126,33 @@ class NextBeat(BaseModel):
     dialogue_direction: str
 
 
-class CompanionResponseOutput(BaseModel):
+class StoryDirectorOutput(BaseModel):
     """
-    Complete structured output expected from the existing LLM.
+    Structured narrative plan produced by the Story Director.
     """
     model_config = ConfigDict(
         extra="forbid",
         strict=True,
     )
-    reply: str = Field(min_length=1)
-    conflict_stage: int = Field(
-        ge=0,
-        le=3,
-    )
+
     decision: NarrativeDecision
     focus: str | None
     next_beat: NextBeat
     scene_direction: dict[str, Any]
+    state_patch: dict[str, Any]
+
+
+class CompanionReplyOutput(BaseModel):
+    """
+    Final user-facing response produced from a validated story plan.
+    """
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+    )
+
+    reply: str = Field(min_length=1)
+    conflict_stage: int = Field(ge=0, le=3)
     state_patch: dict[str, Any]
 
 
@@ -160,18 +168,13 @@ STORY DIRECTOR
 You are the Story Director of an interactive fictional world.
 
 Your responsibility is to determine the most natural and
-meaningful next development in the story while generating
-the actual character response.
+meaningful next development in the story.
 
-IMPORTANT ARCHITECTURAL CONTEXT:
+You are the planning stage of a two-stage response pipeline.
+A separate Response Generator will use your validated plan to
+write the final character response.
 
-You are part of the existing companion response generation
-process.
-
-You must perform narrative decision-making and generate the
-final character response within the SAME LLM invocation.
-
-You are not handing instructions to another LLM or agent.
+You must not generate the final user-facing character reply.
 
 You receive:
 
@@ -232,11 +235,12 @@ B. DECISION PROCESS
 
 5. Select the most suitable narrative decision.
 
-6. Generate the next narrative beat, scene directions
-   and actual character response.
+6. Generate the complete narrative plan, including the
+   selected decision, focus, next beat, scene directions,
+   and proposed persistent StoryState changes.
 
-7. Identify only the persistent StoryState fields that
-   genuinely need to change.
+7. Return the planning information as structured JSON.
+   Do not generate the final character response.
 
 ------------------------------------------------------------
 C. NARRATIVE DECISION TYPES
@@ -868,6 +872,8 @@ You must:
 Do not ignore or arbitrarily replace the selected direction.
 Do not introduce unrelated plot developments.
 Do not force unnecessary dramatic progression.
+The plan never overrides the user's agency, established facts,
+or a direct user action that makes a planned beat inappropriate.
 
 ------------------------------------------------------------
 C. CHARACTER RESPONSE GENERATION
@@ -965,19 +971,11 @@ def build_story_director_prompt(
     story_state: StoryState | Mapping[str, Any] | None = None,
 ) -> str:
     """
-    Build the Story Director prompt fragment.
+    Build the planner-specific Story Director prompt fragment.
 
-    This fragment is appended to the existing main system prompt.
-
-    The existing LLM receives:
-        - Main companion instructions.
-        - Persona configuration.
-        - Reeve memory context.
-        - Recent conversation history.
-        - Current StoryState.
-        - Story Director instructions.
-
-    This module defines prompts and schemas; generator.py orchestrates both calls.
+    The planner receives shared persona, user, temporal and Reeve
+    context, recent conversation history, and optionally StoryState.
+    generator.py orchestrates the planner and response-generator calls.
     """
 
     prompt = STORY_DIRECTOR_PROMPT
