@@ -84,7 +84,7 @@ class ResponseGeneratorUnitTests(TestCase):
         self.assertEqual(" ".join(cleaned.split()), "Hello! Have a great day!")
 
     def test_sanitize_companion_reply(self):
-        text = "Hey! ```python\\nprint('secret')\\n``` (no emojis) How are you?"
+        text = "Hey! ```python\nprint('secret')\n``` (no emojis) How are you?"
         cleaned = sanitize_companion_reply(text)
         self.assertNotIn("```", cleaned)
         self.assertNotIn("no emojis", cleaned)
@@ -155,7 +155,7 @@ class ResponseGeneratorUnitTests(TestCase):
             user_key="user-123",
         )
         mock_store.assert_any_call(
-            "User: Hey, are you free tonight?\\nAssistant: "
+            "User: Hey, are you free tonight?\nAssistant: "
             + VALID_WRITER_OUTPUT["reply"],
             "user_123_companion_456",
             user_key="user-123",
