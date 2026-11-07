@@ -21,22 +21,23 @@ This module does not make independent LLM/API calls.
 
 import json
 
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============================================================
 # 1. NARRATIVE DECISION TYPES
 # ============================================================
 
-NARRATIVE_DECISIONS = (
+NarrativeDecision = Literal[
     "CONTINUE",
     "CHARACTER_DEVELOPMENT",
     "RELATIONSHIP_DEVELOPMENT",
     "PLOT_DEVELOPMENT",
     "SCENE_TRANSITION",
-)
+]
+NARRATIVE_DECISIONS = get_args(NarrativeDecision)
 
 
 # ============================================================
@@ -118,41 +119,33 @@ class StoryState(BaseModel):
 # 3. LLM OUTPUT SCHEMA
 # ============================================================
 
+class NextBeat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event: str | None
+    narrative_development: str
+    character_actions: list[str]
+    emotional_direction: str
+    dialogue_direction: str
+
+
 class CompanionResponseOutput(BaseModel):
     """
     Complete structured output expected from the existing LLM.
-
-    Includes the existing response fields and the new
-    Story Director fields.
     """
-
-    reply: str
-
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+    )
+    reply: str = Field(min_length=1)
     conflict_stage: int = Field(
-        default=0,
         ge=0,
         le=3,
     )
-
-    decision: Literal[
-        "CONTINUE",
-        "CHARACTER_DEVELOPMENT",
-        "RELATIONSHIP_DEVELOPMENT",
-        "PLOT_DEVELOPMENT",
-        "SCENE_TRANSITION",
-    ]
-
-    focus: str | None = None
-
-    next_beat: dict[str, Any]
-
-    scene_direction: dict[str, Any] = Field(
-        default_factory=dict
-    )
-
-    state_patch: dict[str, Any] = Field(
-        default_factory=dict
-    )
+    decision: NarrativeDecision
+    focus: str | None
+    next_beat: NextBeat
+    scene_direction: dict[str, Any]
+    state_patch: dict[str, Any]
 
 
 # ============================================================

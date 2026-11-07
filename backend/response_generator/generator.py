@@ -15,11 +15,17 @@ import logging
 from datetime import datetime
 import requests
 from django.conf import settings
+from pydantic import ValidationError
 
 from memory.reeve_service import (
     store_memory_for_user,
     retrieve_context_for_user,
     deduplicate_context,
+)
+from .story_director import (
+    STORY_DIRECTOR_PROMPT,
+    build_story_director_prompt,
+    CompanionResponseOutput,
 )
 
 logger = logging.getLogger("amour.response_generator")
@@ -68,11 +74,6 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - You are a romantic partner texting on WhatsApp, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.
    - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.
    - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').
-5. OUTPUT JSON FORMAT: You must output a single valid JSON object containing exactly two keys:
-   {
-     "reply": "<your short WhatsApp-style reply text, zero emojis>",
-     "conflict_stage": <integer 0, 1, 2, or 3>
-   }
 -------------------------------------"""
 
 
@@ -195,14 +196,12 @@ def generate_companion_reply(
     )
 
     # 6. KV-Cache Optimized System Prompt Assembly
-    # Prefix Order:
-    # [1] GLOBAL_COMPANION_DIRECTIVES (100% invariant across all requests - cache hit anchor)
-    # [2] PERSONA IDENTITY & STORY (100% invariant per persona)
-    # [3] USER PROFILE (stable per user)
-    # [4] TEMPORAL ANCHOR (bucketed to prevent 60-second invalidation)
-    # [5] DYNAMIC REEVE MEMORIES (placed at the tail to prevent busting prefix cache)
+    # Story Director instructions are static.
+    # No StoryState is supplied at this implementation stage.
+    story_director_section = build_story_director_prompt()
     prompt_sections = [
         GLOBAL_COMPANION_DIRECTIVES,
+        story_director_section,
         persona_block,
     ]
     if user_identity_block:
@@ -252,6 +251,7 @@ def generate_companion_reply(
 
     reply = ""
     new_conflict_stage = current_conflict_stage
+    validated_output = None
     if groq_api_key:
         for current_model in models_to_try:
             try:
@@ -304,21 +304,34 @@ def generate_companion_reply(
                     )
 
                     try:
+                        # 1. Parse JSON text
                         parsed = json.loads(raw_content)
-                        raw_reply = parsed.get("reply", "")
-                        if "conflict_stage" in parsed:
-                            try:
-                                new_conflict_stage = int(parsed["conflict_stage"])
-                            except (ValueError, TypeError):
-                                new_conflict_stage = current_conflict_stage
-                    except Exception:
-                        raw_reply = raw_content
 
-                    if raw_reply:
-                        reply = raw_reply
+                        # 2. Validate against the complete Pydantic schema
+                        structured_response = CompanionResponseOutput.model_validate(
+                            parsed
+                        )
+
+                        # 3. Convert to JSON-compatible Python dictionary
+                        validated_output = structured_response.model_dump(
+                            mode="json"
+                        )
+
+                        # 4. Extract existing response fields
+                        reply = structured_response.reply
+                        new_conflict_stage = structured_response.conflict_stage
+
+                        logger.info(
+                            f"Validated structured response | "
+                            f"Decision: {structured_response.decision}"
+                        )
+
                         break
-                    else:
-                        logger.warning(f"Model {current_model} returned empty response. Trying fallback...")
+                    except (json.JSONDecodeError, ValidationError) as exc:
+                        logger.warning(
+                            f"Model {current_model} returned invalid structured output: "
+                            f"{exc}. Trying fallback..."
+                        )
                         continue
                 else:
                     logger.warning(f"Groq API error ({resp.status_code}) for model {current_model}: {resp.text[:120]}. Falling back...")
@@ -330,21 +343,28 @@ def generate_companion_reply(
     # Enforce zero emojis, no raw code blocks, and clean formatting
     if reply:
         reply = sanitize_companion_reply(reply)
+        if validated_output is not None:
+            validated_output["reply"] = reply
 
-    # Anti-Echo Storage Guard:
-    # Only store assistant reply into Reeve graph if it contains substantive dialogue
+    # storing user and assistant message
     if reply:
         clean_reply = " ".join(reply.split())
         clean_context = " ".join((memory_context or "").split())
         if clean_reply and clean_reply not in clean_context:
             try:
-                store_memory_for_user(f"Assistant: {reply}", namespace, user_key=user_key)
+                store_memory_for_user(f"User: {message.strip()}, Assistant: {reply}", namespace, user_key=user_key)
             except Exception as exc:
-                logger.warning(f"Failed to store assistant reply to Reeve: {exc}")
+                logger.warning(f"Failed to store user and assistant reply to Reeve: {exc}")
 
     return {
-        "reply": reply,
-        "conflict_stage": new_conflict_stage,
+        **(
+            validated_output
+            if validated_output is not None
+            else {
+                "reply": reply,
+                "conflict_stage": new_conflict_stage,
+            }
+        ),
         "context": memory_context,
         "namespace": namespace,
     }
