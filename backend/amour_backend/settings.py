@@ -78,7 +78,7 @@ DATABASES = {
 # Auto-configure from cloud DATABASE_URL (Neon, Render, Supabase, AWS RDS)
 # Best practice per Neon skill: Use direct unpooled connection for migrations, pooled for web app
 import sys
-is_migrating = any(cmd in sys.argv for cmd in ["migrate", "makemigrations", "inspectdb", "dbshell"])
+is_migrating = any(cmd in sys.argv for cmd in ["migrate", "makemigrations", "inspectdb", "dbshell", "test"])
 target_db_url = os.environ.get("DATABASE_URL_UNPOOLED") if is_migrating else os.environ.get("DATABASE_URL")
 if not target_db_url:
     target_db_url = os.environ.get("DATABASE_URL")
@@ -87,8 +87,8 @@ if target_db_url:
     try:
         import dj_database_url
         is_pooler = "-pooler" in target_db_url
-        DATABASES["default"] = dj_database_url.config(
-            default=target_db_url,
+        DATABASES["default"] = dj_database_url.parse(
+            target_db_url,
             conn_max_age=0 if is_pooler else 600,
             conn_health_checks=not is_pooler,
             ssl_require=True,
