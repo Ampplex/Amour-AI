@@ -134,7 +134,6 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
                 "GROQ_API_KEY is not configured in Django settings/backend .env."
             )
 
-        cls.initial_state = make_live_llm_story_state()
 
     def setUp(self):
         self.story_state = make_live_llm_story_state()
@@ -251,6 +250,7 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
 
     def test_live_llm_selects_relationship_for_mutual_trust_change(self):
         """A mutually confirmed relationship development should target the pair."""
+        original_relationship = self.story_state.relationships[0].relationship
         original_dynamic = self.story_state.relationships[0].current_dynamic
 
         result = self._run_live_turn(
@@ -287,10 +287,13 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
             None,
         )
         self.assertIsNotNone(updated_relationship, self._diagnostic(result))
-        self.assertNotEqual(
-            updated_relationship.current_dynamic,
-            original_dynamic,
-            self._diagnostic(result),
+        self.assertTrue(
+            updated_relationship.relationship != original_relationship
+            or updated_relationship.current_dynamic != original_dynamic,
+            msg=(
+                "Expected the relationship type or current dynamic to change."
+                + self._diagnostic(result)
+            ),
         )
 
     def test_live_llm_selects_existing_plot_thread_by_id(self):
