@@ -494,8 +494,18 @@ def _call_structured_llm(
     Returns (validated_output, successful_model), or (None, None)
     when every configured model fails.
     """
-    if not llm_api_key:
-        logger.error("%s: API key is not configured for the selected LLM provider.", stage_name)
+    is_bedrock_endpoint = (
+        (urlparse(llm_base_url).hostname or "").startswith(
+            "bedrock-runtime."
+        )
+    )
+    # Bedrock can authenticate through AWS IAM credentials/default profiles
+    # with no bearer API key. Other OpenAI-compatible providers need an API key.
+    if not llm_api_key and not is_bedrock_endpoint:
+        logger.error(
+            "%s: API key is not configured for the selected LLM provider.",
+            stage_name,
+        )
         return None, None
 
     headers = {
