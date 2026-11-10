@@ -37,6 +37,15 @@ from response_generator.story_director import (
 )
 
 
+TEST_LLM_SETTINGS = {
+    "LLM_PROVIDER": "mistral",
+    "MISTRAL_API_KEY": "test-mistral-api-key",
+    "LLM_BASE_URL": "https://api.mistral.ai/v1",
+    "LLM_MODEL": "mistral-large-4",
+    "LLM_FALLBACK_MODELS": ("mistral-small-2603",),
+}
+
+
 class LLMProviderConfigurationTests(TestCase):
 
     @override_settings(
@@ -191,6 +200,7 @@ def make_patch_test_story_state():
     })
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class ResponseGeneratorUnitTests(TestCase):
     def test_strip_emojis(self):
         sample = "Hello! ❤️ 😊 Have a great day! 🔥"
@@ -595,6 +605,7 @@ VALID_INITIAL_STORY_STATE = {
 }
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class StoryStateInitializationTests(DjangoTestCase):
     def setUp(self):
         self.namespace = f"usr_test-user_persona_{TEST_PERSONA_ID}"
@@ -1229,6 +1240,7 @@ class StoryStatePatchValidationTests(TestCase):
         )
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class StoryStatePatchRepairTests(TestCase):
 
     def setUp(self):
@@ -1754,6 +1766,7 @@ class StoryStatePatchApplicationTests(TestCase):
         self.assertEqual(self.state.model_dump(mode="json"), original)
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class StoryStatePatchPipelineTests(TestCase):
 
     @patch("response_generator.generator.requests.post")
