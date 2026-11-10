@@ -732,6 +732,160 @@ PATCH PRINCIPLE:
   elements need to be added, modified or removed.
 - Use explicit operations for array modifications.
 
+PATCH SECTION ROUTING AND TARGET IDENTIFICATION (REQUIRED):
+
+The state_patch MUST be a JSON object. Its TOP-LEVEL KEYS identify
+which sections of the canonical StoryState must be changed.
+
+Use only these exact top-level keys:
+
+1. "story_summary"
+   - A string containing the replacement overall story summary.
+   - Include it only when a meaningful development changes the
+     overall narrative summary.
+
+2. "characters"
+   - An object keyed by the exact, stable character IDs from StoryState.
+   - Each character ID identifies the character to update or add.
+   - Each nested key identifies the CharacterState property to change.
+   - For a new character, use a new stable character ID and provide
+     the complete CharacterState object.
+
+3. "relationships"
+   - A list of relationship operations.
+   - Every operation must be INSIDE this "relationships" list.
+   - Use "op": "add", "update" or "remove".
+   - Existing relationships are targeted by their "characters" IDs.
+   - New relationships use a complete RelationshipState under "value".
+
+4. "plot_threads"
+   - A list of plot-thread operations.
+   - Every operation must be INSIDE this "plot_threads" list.
+   - Use "op": "add", "update" or "remove".
+   - Existing plot threads are targeted by their stable "id".
+   - New plot threads use a complete PlotThread under "value".
+
+5. "current_scene"
+   - An object containing only the changed properties of the one
+     current scene.
+   - Update scalar properties directly.
+   - Update "participants" and "continuity_details" using explicit
+     "add" and "remove" arrays.
+
+The following examples show the COMPLETE required wrapper structure.
+Do not output bare operations outside their enclosing top-level key.
+
+STORY SUMMARY:
+{
+    "story_summary": "Maya and the user have reconciled after their disagreement."
+}
+
+CHARACTER:
+{
+    "characters": {
+        "maya": {
+            "current_emotional_state": "Anxious but willing to listen"
+        }
+    }
+}
+
+RELATIONSHIP UPDATE:
+{
+    "relationships": [
+        {
+            "op": "update",
+            "characters": ["maya", "user"],
+            "changes": {
+                "current_dynamic": "Growing mutual trust"
+            }
+        }
+    ]
+}
+
+RELATIONSHIP ADD:
+{
+    "relationships": [
+        {
+            "op": "add",
+            "value": {
+                "characters": ["maya", "alex"],
+                "relationship": "Close friends",
+                "current_dynamic": "Growing mutual trust"
+            }
+        }
+    ]
+}
+
+RELATIONSHIP REMOVE:
+{
+    "relationships": [
+        {
+            "op": "remove",
+            "characters": ["maya", "alex"]
+        }
+    ]
+}
+
+PLOT THREAD UPDATE:
+{
+    "plot_threads": [
+        {
+            "op": "update",
+            "id": "thread_1",
+            "changes": {
+                "description": "Maya has partially revealed her secret."
+            }
+        }
+    ]
+}
+
+PLOT THREAD ADD:
+{
+    "plot_threads": [
+        {
+            "op": "add",
+            "value": {
+                "id": "thread_2",
+                "description": "An unknown person is contacting Maya.",
+                "status": "active",
+                "involved_characters": ["maya"]
+            }
+        }
+    ]
+}
+
+PLOT THREAD REMOVE:
+{
+    "plot_threads": [
+        {
+            "op": "remove",
+            "id": "thread_1"
+        }
+    ]
+}
+
+CURRENT SCENE:
+{
+    "current_scene": {
+        "situation": "Maya has acknowledged hiding something.",
+        "continuity_details": {
+            "add": ["Maya's phone has received a message"],
+            "remove": []
+        }
+    }
+}
+
+IMPORTANT:
+- Multiple top-level sections may appear in one state_patch.
+- Omit every section that does not need to change.
+- Never return a relationship operation without "relationships".
+- Never return a plot-thread operation without "plot_threads".
+- Never return a character change without "characters" and its character ID.
+- Never return a scene change without "current_scene".
+- Do not invent alternative section names or target identifiers.
+- Do not include unchanged fields or empty update sections.
+- The backend validates this exact structure and rejects malformed wrappers.
+
 CHARACTER UPDATES:
 
 Identify characters using their existing dictionary IDs.
@@ -751,12 +905,16 @@ Example:
 Do not include Maya's unchanged goals, knowledge,
 physical state or other characters.
 
-For important_knowledge, use:
+For important_knowledge, use this complete character wrapper:
 
 {
-    "important_knowledge": {
-        "add": ["The user knows about the secret"],
-        "remove": []
+    "characters": {
+        "maya": {
+            "important_knowledge": {
+                "add": ["The user knows about the secret"],
+                "remove": []
+            }
+        }
     }
 }
 
@@ -772,29 +930,41 @@ Use explicit operations.
 Add:
 
 {
-    "op": "add",
-    "value": {
-        "characters": ["maya", "user"],
-        "relationship": "Close friends",
-        "current_dynamic": "Growing mutual trust"
-    }
+    "relationships": [
+        {
+            "op": "add",
+            "value": {
+                "characters": ["maya", "user"],
+                "relationship": "Close friends",
+                "current_dynamic": "Growing mutual trust"
+            }
+        }
+    ]
 }
 
 Update:
 
 {
-    "op": "update",
-    "characters": ["maya", "user"],
-    "changes": {
-        "current_dynamic": "Growing emotional tension"
-    }
+    "relationships": [
+        {
+            "op": "update",
+            "characters": ["maya", "user"],
+            "changes": {
+                "current_dynamic": "Growing emotional tension"
+            }
+        }
+    ]
 }
 
 Remove:
 
 {
-    "op": "remove",
-    "characters": ["maya", "user"]
+    "relationships": [
+        {
+            "op": "remove",
+            "characters": ["maya", "user"]
+        }
+    ]
 }
 
 For updates, include only changed properties.
@@ -806,30 +976,42 @@ Use explicit operations.
 Add:
 
 {
-    "op": "add",
-    "value": {
-        "id": "thread_2",
-        "description": "An unknown person is contacting Maya.",
-        "status": "active",
-        "involved_characters": ["maya"]
-    }
+    "plot_threads": [
+        {
+            "op": "add",
+            "value": {
+                "id": "thread_2",
+                "description": "An unknown person is contacting Maya.",
+                "status": "active",
+                "involved_characters": ["maya"]
+            }
+        }
+    ]
 }
 
 Update:
 
 {
-    "op": "update",
-    "id": "thread_1",
-    "changes": {
-        "description": "Maya has partially revealed her secret."
-    }
+    "plot_threads": [
+        {
+            "op": "update",
+            "id": "thread_1",
+            "changes": {
+                "description": "Maya has partially revealed her secret."
+            }
+        }
+    ]
 }
 
 Remove:
 
 {
-    "op": "remove",
-    "id": "thread_1"
+    "plot_threads": [
+        {
+            "op": "remove",
+            "id": "thread_1"
+        }
+    ]
 }
 
 Do not recreate existing plot threads unnecessarily.
@@ -1036,6 +1218,40 @@ actually generated.
 6. Preserve incremental patch semantics.
 7. Never regenerate the complete StoryState.
 8. Return an empty object when no persistent changes are justified.
+
+9. PATCH SECTION ROUTING AND TARGET IDENTIFICATION
+
+The final state_patch MUST use the exact top-level StoryState section keys:
+
+- "story_summary": replacement summary string.
+- "characters": object keyed by the exact character ID being changed.
+- "relationships": list of add/update/remove operations, each inside this list.
+- "plot_threads": list of add/update/remove operations, each inside this list.
+- "current_scene": object containing only changed scene properties.
+
+For character changes, the path is:
+"characters" -> exact_character_id -> changed_property.
+
+For relationship changes, always return the complete enclosing
+"relationships" list. Target an existing relationship by its
+"characters" IDs. Never return a bare operation object.
+
+For plot-thread changes, always return the complete enclosing
+"plot_threads" list. Target an existing thread by its stable "id".
+Never return a bare operation object.
+
+For scene changes, always use the "current_scene" wrapper.
+Scalar fields are updated directly. "participants" and
+"continuity_details" use {"add": [...], "remove": [...]}.
+
+For story summary changes, use the top-level "story_summary" key.
+
+Only return sections and targets approved by the Story Director.
+You may omit unsupported proposed changes or refine approved values,
+but never introduce a new section, target, field or operation.
+
+The final state_patch must be directly consumable by the backend
+StoryState patch validator and applier.
 
 The final response and final state_patch must be consistent.
 

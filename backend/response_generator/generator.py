@@ -37,6 +37,10 @@ from .state_patch_validator import (
     PatchValidationError,
     validate_story_state_patch,
 )
+from .state_patch_applier import (
+    StoryStatePatchApplicationError,
+    apply_story_state_patch,
+)
 
 logger = logging.getLogger("amour.response_generator")
 
@@ -1101,6 +1105,33 @@ def generate_companion_reply(
                 story_plan=story_plan,
             )
 
+    # FEATURE 6: Apply the final validated writer patch to an isolated
+    # copy of the canonical StoryState. The planner patch is passed again
+    # to enforce the same approved scope at the application boundary.
+    #
+    # This is an in-memory transition only. PostgreSQL persistence and
+    # revision increments are handled by Feature 7.
+    try:
+        updated_story_state = apply_story_state_patch(
+            story_state=story_state,
+            patch=writer_output["state_patch"],
+            planner_patch=story_plan["state_patch"],
+        )
+    except StoryStatePatchApplicationError as exc:
+        logger.exception(
+            "StoryState patch application failed for namespace %s.",
+            namespace,
+        )
+        return _build_generation_error_result(
+            code="STORY_STATE_PATCH_APPLICATION_FAILED",
+            stage="state_application",
+            namespace=namespace,
+            memory_context=memory_context,
+            current_conflict_stage=current_conflict_stage,
+            errors=[str(exc)],
+            story_plan=story_plan,
+        )
+
     # 10. Sanitize the final user-facing response.
     reply = sanitize_companion_reply(writer_output["reply"])
     writer_output["reply"] = reply
@@ -1135,6 +1166,8 @@ def generate_companion_reply(
         "scene_direction": story_plan["scene_direction"],
         "planner_state_patch": story_plan["state_patch"],
         "state_patch": writer_output["state_patch"],
+        # FEATURE 6: Complete updated canonical state, still in memory.
+        "updated_story_state": updated_story_state,
         "context": memory_context,
         "namespace": namespace,
     }

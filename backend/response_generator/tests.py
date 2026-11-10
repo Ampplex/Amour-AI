@@ -21,6 +21,10 @@ from response_generator.state_patch_validator import (
     validate_story_state_patch,
     validate_patch_scope,
 )
+from response_generator.state_patch_applier import (
+    StoryStatePatchApplicationError,
+    apply_story_state_patch,
+)
 from response_generator.story_director import (
     StoryState,
     CompanionReplyOutput,
@@ -1328,3 +1332,418 @@ class StoryStatePatchRepairTests(TestCase):
         # Only the initial user-message ingestion is allowed.
         # No final reply or combined exchange may be stored.
         mock_store.assert_called_once()
+
+
+class StoryStatePatchApplicationTests(TestCase):
+
+    def setUp(self):
+        self.state = make_patch_test_story_state()
+
+    def test_empty_patch_returns_unchanged_copy(self):
+        original = self.state.model_dump(mode="json")
+        updated = apply_story_state_patch(self.state, {})
+
+        self.assertIsInstance(updated, StoryState)
+        self.assertIsNot(updated, self.state)
+        self.assertEqual(updated.model_dump(mode="json"), original)
+
+    def test_empty_patch_without_story_state_returns_none(self):
+        self.assertIsNone(apply_story_state_patch(None, {}))
+
+    def test_non_empty_patch_without_story_state_fails(self):
+        patch = {
+            "characters": {
+                "maya": {"current_emotional_state": "Happy"}
+            }
+        }
+        with self.assertRaises(StoryStatePatchApplicationError):
+            apply_story_state_patch(None, patch)
+
+    def test_existing_character_update_preserves_unchanged_fields(self):
+        patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Willing to listen",
+                    "important_knowledge": {
+                        "add": ["John has explained what happened"],
+                        "remove": ["Maya knows about the secret"],
+                    },
+                }
+            }
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+        maya = updated.characters["maya"]
+
+        self.assertEqual(maya.current_emotional_state, "Willing to listen")
+        self.assertEqual(maya.current_physical_state, "Healthy")
+        self.assertEqual(maya.current_goal, "Understand John's actions")
+        self.assertEqual(maya.current_location, "University")
+        self.assertEqual(
+            maya.important_knowledge,
+            ["John has explained what happened"],
+        )
+
+    def test_new_character_can_be_referenced_by_other_sections(self):
+        patch = {
+            "characters": {
+                "new_character": {
+                    "name": "Alex",
+                    "role": "Maya's university friend",
+                    "current_emotional_state": "Curious",
+                    "current_physical_state": "",
+                    "current_goal": "Understand the situation",
+                    "current_location": "University",
+                    "important_knowledge": [],
+                }
+            },
+            "relationships": [
+                {
+                    "op": "add",
+                    "value": {
+                        "characters": ["maya", "new_character"],
+                        "relationship": "Close friends",
+                        "current_dynamic": "Trusting",
+                    },
+                }
+            ],
+            "plot_threads": [
+                {
+                    "op": "add",
+                    "value": {
+                        "id": "new_thread",
+                        "description": "Alex discovers the truth",
+                        "status": "active",
+                        "involved_characters": ["maya", "new_character"],
+                    },
+                }
+            ],
+            "current_scene": {
+                "participants": {"add": ["new_character"], "remove": []}
+            },
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(updated.characters["new_character"].name, "Alex")
+        self.assertTrue(
+            any(
+                set(item.characters) == {"maya", "new_character"}
+                for item in updated.relationships
+            )
+        )
+        self.assertTrue(
+            any(item.id == "new_thread" for item in updated.plot_threads)
+        )
+        self.assertIn("new_character", updated.current_scene.participants)
+
+    def test_relationship_update_preserves_other_fields_and_pair_order(self):
+        patch = {
+            "relationships": [
+                {
+                    "op": "update",
+                    "characters": ["user", "maya"],
+                    "changes": {"current_dynamic": "Growing mutual trust"},
+                }
+            ]
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(len(updated.relationships), 1)
+        self.assertEqual(updated.relationships[0].relationship, "Friends")
+        self.assertEqual(
+            updated.relationships[0].current_dynamic,
+            "Growing mutual trust",
+        )
+
+    def test_relationship_addition(self):
+        patch = {
+            "relationships": [
+                {
+                    "op": "add",
+                    "value": {
+                        "characters": ["maya", "alex"],
+                        "relationship": "Close friends",
+                        "current_dynamic": "Supportive",
+                    },
+                }
+            ]
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(len(updated.relationships), 2)
+        self.assertEqual(updated.relationships[-1].relationship, "Close friends")
+
+    def test_relationship_removal(self):
+        patch = {
+            "relationships": [
+                {"op": "remove", "characters": ["user", "maya"]}
+            ]
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+        self.assertEqual(updated.relationships, [])
+
+    def test_plot_thread_update(self):
+        patch = {
+            "plot_threads": [
+                {
+                    "op": "update",
+                    "id": "thread_1",
+                    "changes": {
+                        "status": "resolved",
+                        "description": "The secret has been revealed",
+                    },
+                }
+            ]
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(len(updated.plot_threads), 1)
+        self.assertEqual(updated.plot_threads[0].status, "resolved")
+        self.assertEqual(
+            updated.plot_threads[0].description,
+            "The secret has been revealed",
+        )
+
+    def test_plot_thread_addition(self):
+        patch = {
+            "plot_threads": [
+                {
+                    "op": "add",
+                    "value": {
+                        "id": "thread_2",
+                        "description": "An unknown person is contacting Maya",
+                        "status": "active",
+                        "involved_characters": ["maya"],
+                    },
+                }
+            ]
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(len(updated.plot_threads), 2)
+        self.assertEqual(updated.plot_threads[-1].id, "thread_2")
+
+    def test_plot_thread_removal(self):
+        patch = {
+            "plot_threads": [
+                {"op": "remove", "id": "thread_1"}
+            ]
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+        self.assertEqual(updated.plot_threads, [])
+
+    def test_scene_changes_preserve_unmodified_fields_and_summary(self):
+        patch = {
+            "current_scene": {
+                "location": "University cafeteria",
+                "situation": "Maya is explaining herself",
+                "participants": {"add": ["alex"], "remove": []},
+                "continuity_details": {
+                    "add": ["Alex has entered the cafeteria"],
+                    "remove": [],
+                },
+            },
+            "story_summary": "Maya and John are resolving their misunderstanding.",
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(updated.current_scene.location, "University cafeteria")
+        self.assertEqual(updated.current_scene.time, "Evening")
+        self.assertEqual(updated.current_scene.atmosphere, "Tense")
+        self.assertIn("alex", updated.current_scene.participants)
+        self.assertIn(
+            "Maya's phone is on the table",
+            updated.current_scene.continuity_details,
+        )
+        self.assertIn(
+            "Alex has entered the cafeteria",
+            updated.current_scene.continuity_details,
+        )
+        self.assertEqual(
+            updated.story_summary,
+            "Maya and John are resolving their misunderstanding.",
+        )
+
+    def test_scene_array_removal_preserves_other_entries(self):
+        state_data = self.state.model_dump(mode="python")
+        state_data["current_scene"]["continuity_details"].append(
+            "A notebook is lying beside Maya's phone"
+        )
+        state = StoryState.model_validate(state_data)
+
+        patch = {
+            "current_scene": {
+                "continuity_details": {
+                    "add": [],
+                    "remove": ["Maya's phone is on the table"],
+                }
+            }
+        }
+
+        updated = apply_story_state_patch(state, patch)
+
+        self.assertEqual(
+            updated.current_scene.continuity_details,
+            ["A notebook is lying beside Maya's phone"],
+        )
+
+    def test_story_summary_can_be_updated_independently(self):
+        updated = apply_story_state_patch(
+            self.state,
+            {"story_summary": "Maya and John have reconciled."},
+        )
+        self.assertEqual(
+            updated.story_summary,
+            "Maya and John have reconciled.",
+        )
+
+    def test_writer_patch_scope_is_checked_before_application(self):
+        planner_patch = {
+            "characters": {
+                "maya": {"current_emotional_state": "Softening"}
+            }
+        }
+        writer_patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Still hurt",
+                    "current_goal": "Leave the university",
+                }
+            }
+        }
+
+        with self.assertRaises(StoryStatePatchApplicationError):
+            apply_story_state_patch(
+                self.state,
+                writer_patch,
+                planner_patch=planner_patch,
+            )
+
+    def test_original_story_state_is_not_mutated(self):
+        original = self.state.model_dump(mode="json")
+        patch = {
+            "characters": {
+                "maya": {"current_emotional_state": "Willing to listen"}
+            }
+        }
+
+        updated = apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(self.state.model_dump(mode="json"), original)
+        self.assertEqual(
+            updated.characters["maya"].current_emotional_state,
+            "Willing to listen",
+        )
+        self.assertEqual(
+            self.state.characters["maya"].current_emotional_state,
+            "Hurt",
+        )
+
+    def test_invalid_patch_does_not_mutate_original_state(self):
+        original = self.state.model_dump(mode="json")
+        patch = {
+            "characters": {
+                "maya": {"current_emotional_state": "Happy"}
+            },
+            "relationships": [
+                {
+                    "op": "add",
+                    "value": {
+                        "characters": ["maya", "ghost"],
+                        "relationship": "Friends",
+                        "current_dynamic": "Unknown",
+                    },
+                }
+            ],
+        }
+
+        with self.assertRaises(StoryStatePatchApplicationError):
+            apply_story_state_patch(self.state, patch)
+
+        self.assertEqual(self.state.model_dump(mode="json"), original)
+
+
+class StoryStatePatchPipelineTests(TestCase):
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_generator_returns_applied_story_state(
+        self,
+        mock_retrieve,
+        mock_store,
+        mock_post,
+    ):
+        mock_retrieve.return_value = ""
+        story_state = make_patch_test_story_state()
+        original_state = story_state.model_dump(mode="json")
+
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="Why are you upset?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=story_state,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertIsInstance(result["updated_story_state"], StoryState)
+        self.assertEqual(
+            result["updated_story_state"]
+            .characters["maya"]
+            .current_emotional_state,
+            "Guarded but gradually softening",
+        )
+        self.assertEqual(result["state_patch"], VALID_WRITER_OUTPUT["state_patch"])
+        self.assertEqual(story_state.model_dump(mode="json"), original_state)
+        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_store.call_count, 2)
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.apply_story_state_patch")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_application_failure_does_not_store_completed_exchange(
+        self,
+        mock_retrieve,
+        mock_store,
+        mock_apply,
+        mock_post,
+    ):
+        mock_retrieve.return_value = ""
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+        mock_apply.side_effect = StoryStatePatchApplicationError(
+            "Simulated application failure"
+        )
+
+        result = generate_companion_reply(
+            message="Why are you upset?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=make_patch_test_story_state(),
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(
+            result["error"]["code"],
+            "STORY_STATE_PATCH_APPLICATION_FAILED",
+        )
+        self.assertEqual(result["error"]["stage"], "state_application")
+        mock_apply.assert_called_once()
+        mock_store.assert_called_once()
+        self.assertEqual(mock_post.call_count, 2)
