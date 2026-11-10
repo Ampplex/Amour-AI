@@ -73,7 +73,7 @@ flowchart TD
     ReeveSvc -->|Smart Ingest & Combined Query| ReeveGraph
     ReeveGraph -.->|Knowledge Graph Extraction| Bedrock
     RespGen -->|Story Director + Response Generator| Bedrock
-    ReeveSvc -->|KV-Cache Stable Prefixes| Bedrock
+    RespGen -->|KV-Cache Stable Prefixes| Bedrock
 ```
 
 ---
@@ -436,7 +436,7 @@ Consecutive messages sent within any 30-minute conversation window share the exa
 
 ### 4.3 Smart Ingestion Filter (Cost & Latency Optimization)
 
-In companion roleplay, users frequently send short affirmations or greetings (`"ok"`, `"hi"`, `"good night"`, `"yeah"`). Running heavy entity extraction via AWS Bedrock (Mistral Large) on these messages wastes compute, inflates costs, and adds 2-4 seconds of graph extraction latency.
+In companion roleplay, users frequently send short affirmations or greetings (`"ok"`, `"hi"`, `"good night"`, `"yeah"`). Running heavy entity extraction via AWS Bedrock (Mistral Large 3) on these messages wastes compute, inflates costs, and adds 2-4 seconds of graph extraction latency.
 
 `should_ingest_into_reeve(text)` acts as a semantic gate:
 
