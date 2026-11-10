@@ -65,6 +65,28 @@ def _require_object(value: Any, path: str) -> dict:
     return value
 
 
+def normalize_story_state_patch(patch: dict) -> dict:
+    """
+    Remove top-level sections that explicitly represent no changes.
+
+    Malformed operations, unknown identifiers, invalid values and
+    unauthorized changes are still rejected by deterministic validation.
+    """
+    normalized = deepcopy(_require_object(patch, "state_patch"))
+    empty_sections = {
+        "characters": {},
+        "relationships": [],
+        "plot_threads": [],
+        "current_scene": {},
+    }
+
+    for section, empty_value in empty_sections.items():
+        if section in normalized and normalized[section] == empty_value:
+            normalized.pop(section)
+
+    return normalized
+
+
 def _require_keys(
     value: dict,
     path: str,
@@ -779,7 +801,7 @@ def validate_story_state_patch(
     Returns a deep copy of the validated patch, or raises
     PatchValidationError with deterministic diagnostics.
     """
-    patch = _require_object(patch, "state_patch")
+    patch = normalize_story_state_patch(patch)
 
     if not patch:
         return {}
