@@ -2,10 +2,11 @@ import json
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase as DjangoTestCase
+from django.test import TestCase as DjangoTestCase, override_settings
 
 from pydantic import ValidationError
 
+from response_generator.generator import _get_llm_configuration
 from response_generator import (
     GLOBAL_COMPANION_DIRECTIVES,
     generate_companion_reply,
@@ -18,6 +19,7 @@ from response_generator import (
 from memory.models import CompanionStoryState
 from response_generator.state_patch_validator import (
     PatchValidationError,
+    normalize_story_state_patch,
     validate_story_state_patch,
     validate_patch_scope,
 )
@@ -33,6 +35,57 @@ from response_generator.story_director import (
     STORY_DIRECTOR_PROMPT,
     StoryDirectorOutput,
 )
+
+
+TEST_LLM_SETTINGS = {
+    "LLM_PROVIDER": "groq",
+    "GROQ_API_KEY": "offline-test-key",
+    "LLM_BASE_URL": "https://api.groq.com/openai/v1",
+    "LLM_MODEL": "offline-primary-model",
+    "LLM_FALLBACK_MODELS": (
+        "offline-fallback-model-1",
+        "offline-fallback-model-2",
+    ),
+}
+
+
+class LLMProviderConfigurationTests(TestCase):
+
+    @override_settings(
+        LLM_PROVIDER="bedrock",
+        AWS_REGION="us-west-2",
+        LLM_MODEL="mistral.mistral-large-2402-v1:0",
+        LLM_FALLBACK_MODELS=(),
+    )
+    def test_bedrock_provider_uses_bedrock_key_endpoint_and_model_id(self):
+        api_key, base_url, models = _get_llm_configuration()
+
+        self.assertEqual(api_key, "")
+        self.assertEqual(
+            base_url,
+            "https://bedrock-runtime.us-west-2.amazonaws.com",
+        )
+        self.assertEqual(
+            models,
+            ["mistral.mistral-large-2402-v1:0"],
+        )
+
+    @override_settings(
+        LLM_PROVIDER="groq",
+        GROQ_API_KEY="groq-test-key",
+        LLM_BASE_URL="https://api.groq.com/openai/v1",
+        LLM_MODEL="qwen/test-model",
+        LLM_FALLBACK_MODELS=("openai/test-fallback",),
+    )
+    def test_groq_provider_remains_available(self):
+        api_key, base_url, models = _get_llm_configuration()
+
+        self.assertEqual(api_key, "groq-test-key")
+        self.assertEqual(base_url, "https://api.groq.com/openai/v1")
+        self.assertEqual(
+            models,
+            ["qwen/test-model", "openai/test-fallback"],
+        )
 
 
 VALID_STORY_PLAN = {
@@ -152,6 +205,7 @@ def make_patch_test_story_state():
     })
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class ResponseGeneratorUnitTests(TestCase):
     def test_strip_emojis(self):
         sample = "Hello! ❤️ 😊 Have a great day! 🔥"
@@ -556,6 +610,7 @@ VALID_INITIAL_STORY_STATE = {
 }
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class StoryStateInitializationTests(DjangoTestCase):
     def setUp(self):
         self.namespace = f"usr_test-user_persona_{TEST_PERSONA_ID}"
@@ -866,6 +921,26 @@ class StoryStatePatchValidationTests(TestCase):
         result = validate_story_state_patch({}, self.state)
         self.assertEqual(result, {})
 
+    def test_empty_top_level_sections_are_normalized(self):
+        patch = {
+            "characters": {},
+            "relationships": [],
+            "plot_threads": [],
+            "current_scene": {},
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, {})
+
+    def test_normalization_does_not_hide_invalid_character_targets(self):
+        patch = {
+            "plot_threads": [],
+            "characters": {
+                "ghost": {"current_emotional_state": "Angry"}
+            },
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
     def test_valid_existing_character_update(self):
         patch = {
             "characters": {
@@ -1170,10 +1245,25 @@ class StoryStatePatchValidationTests(TestCase):
         )
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class StoryStatePatchRepairTests(TestCase):
 
     def setUp(self):
         self.story_state = make_patch_test_story_state()
+
+    def test_compact_repair_context_only_includes_targeted_state(self):
+        from response_generator.generator import _build_story_state_repair_context
+
+        context = _build_story_state_repair_context(
+            self.story_state,
+            {"characters": {"maya": {"current_emotional_state": "Relieved"}}},
+        )
+
+        self.assertIn("maya", context["target_characters"])
+        self.assertIn("known_character_ids", context)
+        self.assertNotIn("existing_relationships", context)
+        self.assertNotIn("target_plot_threads", context)
+        self.assertNotIn("current_scene", context)
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1211,11 +1301,14 @@ class StoryStatePatchRepairTests(TestCase):
             mock_post.call_args_list[1]
             .kwargs["json"]["messages"]
         )
-        self.assertIn(
-            "VALIDATION ERRORS",
+        self.assertEqual(len(repair_messages), 2)
+        repair_payload = json.loads(repair_messages[-1]["content"])
+        self.assertIn("validation_errors", repair_payload)
+        self.assertIn("ghost", repair_messages[-1]["content"])
+        self.assertNotIn(
+            "UNIVERSAL COMPANION DIRECTIVES",
             repair_messages[-1]["content"],
         )
-        self.assertIn("ghost", repair_messages[-1]["content"])
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1257,8 +1350,15 @@ class StoryStatePatchRepairTests(TestCase):
             mock_post.call_args_list[2]
             .kwargs["json"]["messages"]
         )
-        self.assertIn("planner-approved scope", repair_messages[-1]["content"])
-        self.assertIn("AUTHORITATIVE CURRENT CANONICAL STORYSTATE", repair_messages[-1]["content"])
+        self.assertEqual(len(repair_messages), 2)
+        repair_payload = json.loads(repair_messages[-1]["content"])
+        self.assertIn("planner-approved scope", repair_payload["repair_instructions"])
+        self.assertIn("canonical_story_state", repair_payload["relevant_context"])
+        self.assertIn("validated_story_director_plan", repair_payload["relevant_context"])
+        self.assertNotIn(
+            "UNIVERSAL COMPANION DIRECTIVES",
+            repair_messages[-1]["content"],
+        )
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1671,6 +1771,7 @@ class StoryStatePatchApplicationTests(TestCase):
         self.assertEqual(self.state.model_dump(mode="json"), original)
 
 
+@override_settings(**TEST_LLM_SETTINGS)
 class StoryStatePatchPipelineTests(TestCase):
 
     @patch("response_generator.generator.requests.post")

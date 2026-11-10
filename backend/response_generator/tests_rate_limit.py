@@ -40,10 +40,164 @@ class LLMRateLimitReliabilityTests(TestCase):
             messages=[{"role": "user", "content": "test"}],
             output_model=StructuredProbeOutput,
             stage_name="rate_limit_test",
-            groq_api_key="test-key",
+            llm_api_key="test-key",
             llm_base_url="https://api.example.test/v1",
             models_to_try=models,
         )
+
+    @patch("response_generator.generator.boto3.client")
+    def test_bedrock_uses_converse_api_and_exact_mistral_large_v1_model(
+        self,
+        mock_boto_client,
+    ):
+        mock_client = mock_boto_client.return_value
+        mock_client.converse.return_value = {
+            "output": {
+                "message": {
+                    "content": [{"text": json.dumps({"ok": True})}],
+                }
+            },
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 5,
+            },
+        }
+
+        output, model = generator._call_structured_llm(
+                messages=[
+                    {"role": "system", "content": "Return JSON."},
+                    {"role": "user", "content": "test"},
+                ],
+                output_model=StructuredProbeOutput,
+                stage_name="bedrock_test",
+                llm_api_key="",
+                llm_base_url=(
+                    "https://bedrock-runtime.us-west-2.amazonaws.com"
+                ),
+                models_to_try=["mistral.mistral-large-2402-v1:0"],
+            )
+
+        self.assertEqual(output, {"ok": True})
+        self.assertEqual(model, "mistral.mistral-large-2402-v1:0")
+        mock_boto_client.assert_called_once_with(
+            "bedrock-runtime",
+            region_name="us-west-2",
+        )
+        converse_request = mock_client.converse.call_args.kwargs
+        self.assertEqual(
+            converse_request["modelId"],
+            "mistral.mistral-large-2402-v1:0",
+        )
+        self.assertEqual(
+            converse_request["system"][0]["text"],
+            "Return JSON.",
+        )
+        self.assertEqual(
+            converse_request["messages"],
+            [{"role": "user", "content": [{"text": "test"}]}],
+        )
+        self.assertEqual(
+            converse_request["inferenceConfig"]["maxTokens"],
+            500,
+        )
+        self.assertNotIn("frequency_penalty", converse_request)
+        self.assertNotIn("response_format", converse_request)
+
+
+    @patch("response_generator.generator.boto3.client")
+    def test_bedrock_throttling_cools_down_model_and_tries_fallback(
+        self,
+        mock_boto_client,
+    ):
+        from botocore.exceptions import ClientError
+
+        mock_client = mock_boto_client.return_value
+        mock_client.converse.side_effect = [
+            ClientError(
+                {
+                    "Error": {
+                        "Code": "ThrottlingException",
+                        "Message": "Too many requests",
+                    },
+                    "ResponseMetadata": {
+                        "HTTPStatusCode": 429,
+                        "HTTPHeaders": {"retry-after": "20"},
+                        "RequestId": "bedrock-throttle-test",
+                    },
+                },
+                "Converse",
+            ),
+            {
+                "output": {
+                    "message": {
+                        "content": [{"text": json.dumps({"ok": True})}],
+                    }
+                },
+                "usage": {"inputTokens": 10, "outputTokens": 5},
+            },
+        ]
+
+        output, model = generator._call_structured_llm(
+            messages=[{"role": "user", "content": "test"}],
+            output_model=StructuredProbeOutput,
+            stage_name="bedrock_throttle_test",
+            llm_api_key="bedrock-test-key",
+            llm_base_url="https://bedrock-runtime.us-west-2.amazonaws.com",
+            models_to_try=[
+                "mistral.mistral-large-2402-v1:0",
+                "mistral.mistral-large-2407-v1:0",
+            ],
+        )
+
+        self.assertEqual(output, {"ok": True})
+        self.assertEqual(model, "mistral.mistral-large-2407-v1:0")
+        self.assertEqual(mock_client.converse.call_count, 2)
+        self.assertGreater(
+            generator._get_model_rate_limit_cooldown(
+                "https://bedrock-runtime.us-west-2.amazonaws.com",
+                "mistral.mistral-large-2402-v1:0",
+            ),
+            0,
+        )
+
+    @patch("response_generator.generator.boto3.client")
+    def test_bedrock_413_does_not_repeat_oversized_request(
+        self,
+        mock_boto_client,
+    ):
+        from botocore.exceptions import ClientError
+
+        mock_client = mock_boto_client.return_value
+        mock_client.converse.side_effect = ClientError(
+            {
+                "Error": {
+                    "Code": "RequestTooLargeException",
+                    "Message": "Request body too large",
+                },
+                "ResponseMetadata": {
+                    "HTTPStatusCode": 413,
+                    "RequestId": "bedrock-413-test",
+                },
+            },
+            "Converse",
+        )
+
+        output, model = generator._call_structured_llm(
+            messages=[{"role": "user", "content": "test"}],
+            output_model=StructuredProbeOutput,
+            stage_name="bedrock_413_test",
+            llm_api_key="bedrock-test-key",
+            llm_base_url="https://bedrock-runtime.us-west-2.amazonaws.com",
+            models_to_try=[
+                "mistral.mistral-large-2402-v1:0",
+                "mistral.mistral-large-2407-v1:0",
+            ],
+        )
+
+        self.assertIsNone(output)
+        self.assertIsNone(model)
+        self.assertEqual(mock_client.converse.call_count, 1)
+
 
     @patch("response_generator.generator.requests.post")
     def test_429_does_not_retry_same_model_before_trying_fallback(self, mock_post):
@@ -67,6 +221,23 @@ class LLMRateLimitReliabilityTests(TestCase):
                 for call in mock_post.call_args_list
             ],
             ["primary-model", "fallback-model"],
+        )
+
+    @patch("response_generator.generator.requests.post")
+    def test_413_does_not_resend_identical_payload_to_fallback(self, mock_post):
+        mock_post.return_value = make_response(
+            413,
+            text="request too large",
+        )
+
+        output, model = self._call(["primary-model", "fallback-model"])
+
+        self.assertIsNone(output)
+        self.assertIsNone(model)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"]["model"],
+            "primary-model",
         )
 
     @patch("response_generator.generator.requests.post")

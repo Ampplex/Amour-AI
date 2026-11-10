@@ -18,6 +18,9 @@ from datetime import datetime, timezone as datetime_timezone
 from email.utils import parsedate_to_datetime
 from typing import Callable
 import requests
+import boto3
+from botocore.exceptions import ClientError
+from urllib.parse import urlparse
 from django.conf import settings
 from django.utils import timezone
 from pydantic import BaseModel, ValidationError
@@ -45,6 +48,86 @@ from .state_patch_applier import (
 )
 
 logger = logging.getLogger("amour.response_generator")
+
+def _get_llm_configuration() -> tuple[str, str, list[str]]:
+    """
+    Resolve the API key, endpoint and model chain for the selected provider.
+
+    Amazon Bedrock Runtime is the default chat inference provider. Its
+    Converse API lets both generation stages
+    share the existing request/response parsing code.
+    """
+    provider = (
+        getattr(settings, "LLM_PROVIDER", "")
+        or os.environ.get("LLM_PROVIDER", "bedrock")
+    ).strip().lower()
+
+    if provider == "bedrock":
+        # Reuse the AWS credentials already configured for this application.
+        # Boto3 resolves environment credentials, profiles, or attached roles.
+        # No separate Bedrock API key or IAM permission changes are introduced.
+        api_key = ""
+        region = (
+            getattr(settings, "AWS_REGION", "")
+            or os.environ.get("AWS_REGION")
+            or os.environ.get("AWS_DEFAULT_REGION")
+            or "us-west-2"
+        )
+        base_url = f"https://bedrock-runtime.{region}.amazonaws.com"
+        primary_model = (
+            getattr(settings, "LLM_MODEL", "")
+            or os.environ.get(
+                "BEDROCK_MODEL_ID",
+                "mistral.mistral-large-2402-v1:0",
+            )
+        )
+        fallback_models = getattr(settings, "LLM_FALLBACK_MODELS", ())
+        if not fallback_models:
+            fallback_models = tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "BEDROCK_FALLBACK_MODEL_IDS",
+                    "",
+                ).split(",")
+                if item.strip()
+            )
+    elif provider == "groq":
+        api_key = (
+            getattr(settings, "GROQ_API_KEY", "")
+            or os.environ.get("GROQ_API_KEY", "")
+        )
+        base_url = (
+            getattr(settings, "LLM_BASE_URL", "")
+            or os.environ.get(
+                "GROQ_BASE_URL",
+                "https://api.groq.com/openai/v1",
+            )
+        ).rstrip("/")
+        primary_model = (
+            getattr(settings, "LLM_MODEL", "")
+            or os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
+        )
+        fallback_models = getattr(settings, "LLM_FALLBACK_MODELS", ())
+        if not fallback_models:
+            fallback_models = tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "GROQ_FALLBACK_MODELS",
+                    "openai/gpt-oss-120b,openai/gpt-oss-20b",
+                ).split(",")
+                if item.strip()
+            )
+    else:
+        logger.error("Unsupported LLM_PROVIDER: %s", provider)
+        return "", "", []
+
+    models = []
+    for model in [primary_model, *fallback_models]:
+        if model and model not in models:
+            models.append(model)
+
+    return api_key, base_url, models
+
 
 # Rate limits are model-scoped by default because a provider may still allow
 # another model while one model's request/token quota is exhausted. Cooldowns
@@ -104,17 +187,21 @@ def _rate_limit_cooldown_seconds(headers) -> float:
     """
     Read the longest available provider reset hint.
 
-    Groq exposes Retry-After and model request/token reset headers. Taking
-    the longest reset avoids retrying while either quota remains exhausted.
+    Providers may expose Retry-After and request/token reset headers. Taking
+    the longest reset avoids retrying while a quota remains exhausted.
     """
+    normalized_headers = {
+        str(key).casefold(): value
+        for key, value in (headers or {}).items()
+    }
     candidates = []
     for header in (
-        "Retry-After",
+        "retry-after",
         "retry-after-ms",
         "x-ratelimit-reset-requests",
         "x-ratelimit-reset-tokens",
     ):
-        value = headers.get(header) if headers is not None else None
+        value = normalized_headers.get(header)
         delay = _parse_rate_limit_delay(
             value,
             milliseconds=(header == "retry-after-ms"),
@@ -229,11 +316,163 @@ def get_bucketed_time_str(client_time: str = None, client_timezone: str = None) 
         return client_time or "Present day"
 
 
+def _prepare_bedrock_converse_input(
+    messages: list,
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float = 0.7,
+) -> dict:
+    """
+    Convert the existing OpenAI-style internal message list into the
+    Amazon Bedrock Converse request shape.
+
+    System instructions are kept in the dedicated system field. Consecutive
+    messages with the same role are merged, and a leading assistant message
+    is discarded because Bedrock conversations must begin with a user turn.
+    """
+    system_blocks = []
+    conversation = []
+
+    for item in messages:
+        role = item.get("role")
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+
+        if role == "system":
+            system_blocks.append({"text": content})
+            continue
+
+        if role not in {"user", "assistant"}:
+            continue
+
+        if conversation and conversation[-1]["role"] == role:
+            conversation[-1]["content"].append({"text": content})
+        else:
+            conversation.append({
+                "role": role,
+                "content": [{"text": content}],
+            })
+
+    while conversation and conversation[0]["role"] == "assistant":
+        conversation.pop(0)
+
+    if not conversation or conversation[-1]["role"] != "user":
+        raise ValueError(
+            "Bedrock Converse requires a conversation ending with a user turn."
+        )
+
+    system_blocks.append({
+        "text": (
+            "Return exactly one syntactically valid JSON object matching "
+            "the requested structured output. Do not include Markdown fences "
+            "or explanatory text outside the JSON object."
+        )
+    })
+
+    request = {
+        "modelId": model,
+        "system": system_blocks,
+        "messages": conversation,
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.9,
+        },
+    }
+    return request
+
+
+def _invoke_bedrock_converse(
+    *,
+    messages: list,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    llm_base_url: str,
+) -> tuple[dict, float, int]:
+    """
+    Invoke Mistral Large v1 through the Bedrock Converse API.
+
+    Mistral Large v1 supports Invoke and Converse on bedrock-runtime but
+    does not support Bedrock Chat Completions. Boto3 >= 1.39.0 reads the
+    existing AWS IAM credentials through Boto3's default credential chain.
+    """
+    parsed_url = urlparse(llm_base_url)
+    hostname = parsed_url.hostname or ""
+    match = re.fullmatch(
+        r"bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com",
+        hostname,
+    )
+    if not match:
+        raise ValueError(
+            "Bedrock Converse requires a regional bedrock-runtime endpoint."
+        )
+
+    region = match.group(1)
+    request = _prepare_bedrock_converse_input(
+        messages,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    request_bytes = len(
+        json.dumps(
+            request,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=region,
+    )
+    start_time = time.time()
+    try:
+        response = client.converse(
+            modelId=request["modelId"],
+            system=request["system"],
+            messages=request["messages"],
+            inferenceConfig=request["inferenceConfig"],
+        )
+    except ClientError as exc:
+        # Preserve the exact serialized input size for provider diagnostics.
+        exc.amour_request_bytes = request_bytes
+        raise
+    duration = time.time() - start_time
+
+    content_blocks = (
+        response.get("output", {})
+        .get("message", {})
+        .get("content", [])
+    )
+    raw_content = "".join(
+        block.get("text", "")
+        for block in content_blocks
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ).strip()
+
+    usage = response.get("usage", {})
+    normalized = {
+        "choices": [{"message": {"content": raw_content}}],
+        "usage": {
+            "prompt_tokens": usage.get("inputTokens", 0),
+            "completion_tokens": usage.get("outputTokens", 0),
+            "prompt_tokens_details": {
+                "cached_tokens": usage.get("cacheReadInputTokens", 0),
+            },
+        },
+    }
+    return normalized, duration, request_bytes
+
+
 def _call_structured_llm(
     messages: list,
     output_model: type[BaseModel],
     stage_name: str,
-    groq_api_key: str,
+    llm_api_key: str,
     llm_base_url: str,
     models_to_try: list[str],
 ):
@@ -243,12 +482,22 @@ def _call_structured_llm(
     Returns (validated_output, successful_model), or (None, None)
     when every configured model fails.
     """
-    if not groq_api_key:
-        logger.error("%s: GROQ_API_KEY is not configured.", stage_name)
+    is_bedrock_endpoint = (
+        (urlparse(llm_base_url).hostname or "").startswith(
+            "bedrock-runtime."
+        )
+    )
+    # Bedrock can authenticate through AWS IAM credentials/default profiles
+    # with no bearer API key. Other OpenAI-compatible providers need an API key.
+    if not llm_api_key and not is_bedrock_endpoint:
+        logger.error(
+            "%s: API key is not configured for the selected LLM provider.",
+            stage_name,
+        )
         return None, None
 
     headers = {
-        "Authorization": f"Bearer {groq_api_key}",
+        "Authorization": f"Bearer {llm_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -278,28 +527,60 @@ def _call_structured_llm(
             if "gpt-oss" in current_model:
                 token_budget *= 2
 
-            payload = {
-                "model": current_model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": token_budget,
-                "frequency_penalty": 0.6,
-                "presence_penalty": 0.4,
-                "response_format": {"type": "json_object"},
-            }
-
-            url = f"{llm_base_url}/chat/completions"
-            start_time = time.time()
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=20,
+            is_bedrock = (
+                (urlparse(llm_base_url).hostname or "").startswith(
+                    "bedrock-runtime."
+                )
             )
 
-            duration = time.time() - start_time
+            if is_bedrock:
+                try:
+                    data, duration, request_bytes = _invoke_bedrock_converse(
+                        messages=messages,
+                        model=current_model,
+                        max_tokens=token_budget,
+                        temperature=0.7,
+                        llm_api_key=llm_api_key,
+                        llm_base_url=llm_base_url,
+                    )
+                except ClientError:
+                    # Preserve the provider exception for the dedicated
+                    # ClientError handler below.
+                    raise
+                response = None
+            else:
+                payload = {
+                    "model": current_model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": token_budget,
+                    "frequency_penalty": 0.6,
+                    "presence_penalty": 0.4,
+                    "response_format": {"type": "json_object"},
+                }
+                request_bytes = len(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                )
+                message_character_counts = [
+                    len(str(item.get("content", "")))
+                    for item in messages
+                ]
 
-            if response.status_code == 429:
+                url = f"{llm_base_url}/chat/completions"
+                start_time = time.time()
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=20,
+                )
+                duration = time.time() - start_time
+
+            if response is not None and response.status_code == 429:
                 cooldown = _record_model_rate_limit(
                     llm_base_url,
                     current_model,
@@ -315,17 +596,70 @@ def _call_structured_llm(
                 )
                 continue
 
-            if response.status_code != 200:
+            if response is not None and response.status_code == 413:
+                response_headers = getattr(response, "headers", {})
+                provider_request_id = (
+                    response_headers.get("x-request-id")
+                    or response_headers.get("request-id")
+                    or response_headers.get("x-amzn-requestid")
+                    or response_headers.get("x-amzn-request-id")
+                    or response_headers.get("x-mistral-request-id")
+                )
+                logger.error(
+                    (
+                        "%s: HTTP 413 request too large. model=%s "
+                        "request_bytes=%s message_count=%s "
+                        "largest_message_chars=%s provider_request_id=%s "
+                        "provider_error=%s"
+                    ),
+                    stage_name,
+                    current_model,
+                    request_bytes,
+                    len(messages),
+                    max(message_character_counts, default=0),
+                    provider_request_id,
+                    getattr(response, "text", "")[:500],
+                )
+                # A payload-size rejection applies to the request, not just
+                # sampling quality. Do not resend the same body to a fallback.
+                return None, None
+
+            if response is not None and response.status_code in {400, 401, 403, 422}:
+                logger.error(
+                    "%s: Non-retryable HTTP %s from %s: %s",
+                    stage_name,
+                    response.status_code,
+                    current_model,
+                    getattr(response, "text", "")[:500],
+                )
+                return None, None
+
+            if response is not None and response.status_code != 200:
+                response_headers = getattr(response, "headers", {})
+                provider_request_id = (
+                    response_headers.get("x-request-id")
+                    or response_headers.get("request-id")
+                    or response_headers.get("x-amzn-requestid")
+                    or response_headers.get("x-amzn-request-id")
+                    or response_headers.get("x-mistral-request-id")
+                )
                 logger.warning(
-                    "%s: Model %s returned %s: %s. Trying fallback.",
+                    (
+                        "%s: Model %s returned HTTP %s. request_bytes=%s "
+                        "provider_request_id=%s provider_error=%s. Trying fallback."
+                    ),
                     stage_name,
                     current_model,
                     response.status_code,
-                    getattr(response, "text", "")[:120],
+                    request_bytes,
+                    provider_request_id,
+                    getattr(response, "text", "")[:500],
                 )
                 continue
 
-            data = response.json()
+            if response is not None:
+                data = response.json()
+
             raw_content = (
                 data.get("choices", [{}])[0]
                 .get("message", {})
@@ -364,6 +698,78 @@ def _call_structured_llm(
             )
             return validated_output, current_model
 
+        except ClientError as exc:
+            error_response = getattr(exc, "response", {}) or {}
+            error_data = error_response.get("Error", {})
+            metadata = error_response.get("ResponseMetadata", {})
+            error_code = error_data.get("Code", "Unknown")
+            error_message = error_data.get("Message", str(exc))
+            status_code = metadata.get("HTTPStatusCode", 0)
+            error_headers = metadata.get("HTTPHeaders", {}) or {}
+
+            throttling_codes = {
+                "ThrottlingException",
+                "TooManyRequestsException",
+                "ServiceQuotaExceededException",
+                "RequestLimitExceeded",
+            }
+            if status_code == 429 or error_code in throttling_codes:
+                cooldown = _record_model_rate_limit(
+                    llm_base_url,
+                    current_model,
+                    error_headers,
+                )
+                logger.warning(
+                    "%s: Bedrock model %s returned %s (%s). "
+                    "Cooling it down for %.1fs and trying another configured model.",
+                    stage_name,
+                    current_model,
+                    status_code,
+                    error_code,
+                    cooldown,
+                )
+                continue
+
+            if status_code == 413 or error_code in {
+                "RequestTooLargeException",
+                "PayloadTooLargeException",
+            }:
+                logger.error(
+                    "%s: Bedrock request too large. model=%s request_bytes=%s "
+                    "provider_request_id=%s error=%s",
+                    stage_name,
+                    current_model,
+                    getattr(exc, "amour_request_bytes", 0),
+                    metadata.get("RequestId"),
+                    error_message[:500],
+                )
+                return None, None
+
+            if status_code in {400, 401, 403, 404, 422}:
+                logger.error(
+                    "%s: Bedrock rejected request. model=%s status=%s "
+                    "code=%s request_id=%s error=%s",
+                    stage_name,
+                    current_model,
+                    status_code,
+                    error_code,
+                    metadata.get("RequestId"),
+                    error_message[:500],
+                )
+                return None, None
+
+            logger.warning(
+                "%s: Bedrock request failed. model=%s status=%s code=%s "
+                "request_id=%s error=%s. Trying configured fallback.",
+                stage_name,
+                current_model,
+                status_code,
+                error_code,
+                metadata.get("RequestId"),
+                error_message[:500],
+            )
+            continue
+
         except (json.JSONDecodeError, ValidationError) as exc:
             logger.warning(
                 "%s: Invalid structured output from %s: %s. Trying fallback.",
@@ -389,93 +795,173 @@ def _call_structured_llm(
 MAX_PATCH_REPAIR_ATTEMPTS = 2
 
 
+def _build_story_state_repair_context(
+    story_state: StoryState | None,
+    candidate_patch: dict,
+) -> dict:
+    """Project only canonical state relevant to the proposed patch."""
+    if story_state is None:
+        return {}
+
+    candidate_patch = candidate_patch if isinstance(candidate_patch, dict) else {}
+    context = {
+        "known_character_ids": sorted(story_state.characters.keys()),
+    }
+
+    if "characters" in candidate_patch:
+        targets = candidate_patch.get("characters", {})
+        if isinstance(targets, dict):
+            context["target_characters"] = {
+                character_id: story_state.characters[character_id].model_dump(
+                    mode="json"
+                )
+                for character_id in targets
+                if character_id in story_state.characters
+            }
+
+    if "relationships" in candidate_patch:
+        context["existing_relationships"] = [
+            relationship.model_dump(mode="json")
+            for relationship in story_state.relationships
+        ]
+
+    if "plot_threads" in candidate_patch:
+        context["known_plot_thread_ids"] = [
+            thread.id for thread in story_state.plot_threads
+        ]
+        requested_ids = set()
+        operations = candidate_patch.get("plot_threads", [])
+        if isinstance(operations, list):
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    continue
+                thread_id = operation.get("id")
+                value = operation.get("value")
+                if not thread_id and isinstance(value, dict):
+                    thread_id = value.get("id")
+                if isinstance(thread_id, str):
+                    requested_ids.add(thread_id)
+        context["target_plot_threads"] = [
+            thread.model_dump(mode="json")
+            for thread in story_state.plot_threads
+            if thread.id in requested_ids
+        ]
+
+    if "current_scene" in candidate_patch:
+        context["current_scene"] = story_state.current_scene.model_dump(
+            mode="json"
+        )
+
+    if "story_summary" in candidate_patch:
+        context["current_story_summary"] = story_state.story_summary
+
+    return context
+
+
+def _build_compact_repair_messages(
+    *,
+    candidate: dict,
+    errors: list[str],
+    output_model: type[BaseModel],
+    repair_instructions: str,
+    repair_context: dict,
+    attempt: int,
+) -> list:
+    """Build a minimal correction request without the original chat history."""
+    repair_payload = {
+        "attempt": attempt,
+        "required_output_schema": output_model.model_json_schema(),
+        "previous_output": candidate,
+        "validation_errors": errors,
+        "relevant_context": repair_context or {},
+        "repair_instructions": repair_instructions,
+    }
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a structured-output correction component. Correct "
+                "the previous JSON output using the validation errors and "
+                "supplied context. Preserve valid fields and narrative intent. "
+                "Do not invent identifiers or changes. Return the complete "
+                "corrected JSON object only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                repair_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+    ]
+
+
 def _repair_structured_output(
     *,
     initial_output: dict,
     initial_errors: list[str],
-    base_messages: list,
     output_model: type[BaseModel],
     stage_name: str,
     validator: Callable[[dict], dict],
     repair_instructions: str,
-    groq_api_key: str,
+    llm_api_key: str,
     llm_base_url: str,
     models_to_try: list[str],
-    repair_context: str = "",
+    repair_context: dict | None = None,
 ) -> tuple[dict | None, list[str]]:
     """
-    Correct a schema-valid output whose state patch failed deterministic
-    validation. Each correction reuses the original stage context, includes
-    the previous candidate and diagnostics, and is revalidated in Python.
+    Repair schema-valid output with a compact request.
 
-    _call_structured_llm retains its existing model failover behavior.
+    A failed API/model request is not repeated with an identical payload.
+    Another semantic repair is allowed only after the model returns a
+    schema-valid candidate that still fails deterministic patch validation.
     """
     candidate = deepcopy(initial_output)
     errors = list(initial_errors)
 
     for attempt in range(1, MAX_PATCH_REPAIR_ATTEMPTS + 1):
-        repair_messages = deepcopy(base_messages)
-
-        repair_messages.append({
-            "role": "assistant",
-            "content": json.dumps(
-                candidate,
-                ensure_ascii=False,
-                indent=2,
-            ),
-        })
-
-        repair_prompt = (
-            "Your previous structured output failed deterministic "
-            "StoryState patch validation.\n\n"
-            f"REPAIR ATTEMPT: {attempt} OF "
-            f"{MAX_PATCH_REPAIR_ATTEMPTS}\n\n"
-            "VALIDATION ERRORS:\n"
-            + json.dumps(errors, ensure_ascii=False, indent=2)
-            + "\n\n"
-            + (repair_context + "\n\n" if repair_context else "")
-            + repair_instructions
-            + "\n\nReturn the complete corrected structured output "
-            "as JSON only. Do not use Markdown fences or explanations."
+        repair_messages = _build_compact_repair_messages(
+            candidate=candidate,
+            errors=errors,
+            output_model=output_model,
+            repair_instructions=repair_instructions,
+            repair_context=repair_context or {},
+            attempt=attempt,
         )
-
-        repair_messages.append({
-            "role": "user",
-            "content": repair_prompt,
-        })
 
         repaired_output, repaired_model = _call_structured_llm(
             messages=repair_messages,
             output_model=output_model,
             stage_name=stage_name,
-            groq_api_key=groq_api_key,
+            llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             models_to_try=models_to_try,
         )
 
         if repaired_output is None:
             errors = [
-                "Correction attempt did not produce output matching "
-                "the required structured schema."
+                "Compact repair request did not produce schema-valid output."
             ]
             logger.warning(
-                "%s: Repair attempt %s did not produce schema-valid output.",
+                "%s: Repair attempt %s failed across configured models; "
+                "not repeating an identical repair request.",
                 stage_name,
                 attempt,
             )
-            continue
+            break
 
         try:
             validated_output = validator(repaired_output)
             logger.info(
-                "%s: Patch validation succeeded on repair attempt %s "
-                "using model %s.",
+                "%s: Patch validation succeeded on repair attempt %s using %s.",
                 stage_name,
                 attempt,
                 repaired_model,
             )
             return validated_output, []
-
         except PatchValidationError as exc:
             candidate = repaired_output
             errors = exc.errors
@@ -486,11 +972,7 @@ def _repair_structured_output(
                 errors,
             )
 
-    logger.error(
-        "%s: Exhausted %s patch repair attempts.",
-        stage_name,
-        MAX_PATCH_REPAIR_ATTEMPTS,
-    )
+    logger.error("%s: Exhausted compact repair attempts.", stage_name)
     return None, errors
 
 
@@ -686,33 +1168,14 @@ def initialize_story_state(
         },
     ]
 
-    # Reuse the existing response pipeline's credentials and model failover.
-    groq_api_key = (
-        getattr(settings, "GROQ_API_KEY", "")
-        or os.environ.get("GROQ_API_KEY", "")
-    )
-    llm_base_url = (
-        getattr(settings, "LLM_BASE_URL", "")
-        or os.environ.get(
-            "LLM_BASE_URL",
-            "https://api.groq.com/openai/v1",
-        )
-    ).rstrip("/")
-    primary_model = (
-        getattr(settings, "LLM_MODEL", "")
-        or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
-    )
-
-    models_to_try = [primary_model]
-    for fallback in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
+    # Reuse provider-selected credentials and model failover.
+    llm_api_key, llm_base_url, models_to_try = _get_llm_configuration()
 
     initialized_data, initialization_model = _call_structured_llm(
         messages=messages,
         output_model=StoryState,
         stage_name="story_state_initialization",
-        groq_api_key=groq_api_key,
+        llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         models_to_try=models_to_try,
     )
@@ -902,7 +1365,7 @@ def generate_companion_reply(
     story_state: StoryState | None = None,
 ) -> dict:
     """
-    Companion roleplay chat powered by Reeve memory graph and Groq LLM.
+    Companion roleplay chat powered by Reeve memory graph and Amazon Bedrock Mistral Large v1.
 
     Architecture:
     1. Ingest User message into Reeve memory graph with personalized speaker tag.
@@ -917,7 +1380,7 @@ def generate_companion_reply(
        - Access to Date and Time for natural LLM temporal reasoning
        - Reeve LTM Memory Context block
     4. Assemble full conversation history for local dialogue continuity + pure Reeve LTM memory context.
-    5. Call LLM (Groq qwen/qwen3.8-27b with failovers).
+    5. Call Amazon Bedrock Runtime (Mistral Large v1 by default; optional configured Bedrock model failovers).
     6. Anti-echo guard: Store Assistant reply into Reeve memory graph.
     7. Return reply, context, and namespace.
     """
@@ -1016,27 +1479,8 @@ def generate_companion_reply(
 
     shared_system_prompt = "\n\n".join(prompt_sections)
 
-    # 7. LLM configuration shared by both stages.
-    groq_api_key = (
-        getattr(settings, "GROQ_API_KEY", "")
-        or os.environ.get("GROQ_API_KEY", "")
-    )
-    llm_base_url = (
-        getattr(settings, "LLM_BASE_URL", "")
-        or os.environ.get(
-            "LLM_BASE_URL",
-            "https://api.groq.com/openai/v1",
-        )
-    ).rstrip("/")
-    primary_model = (
-        getattr(settings, "LLM_MODEL", "")
-        or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
-    )
-
-    models_to_try = [primary_model]
-    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
+    # 7. Provider configuration shared by both stages.
+    llm_api_key, llm_base_url, models_to_try = _get_llm_configuration()
 
     # 8. STORY DIRECTOR: PREPARE AND EXECUTE THE FIRST LLM REQUEST.
     # This step only assembles the messages; it does not call the LLM.
@@ -1055,7 +1499,7 @@ def generate_companion_reply(
         messages=planner_messages,
         output_model=StoryDirectorOutput,
         stage_name="story_director",
-        groq_api_key=groq_api_key,
+        llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         models_to_try=models_to_try,
     )
@@ -1090,10 +1534,13 @@ def generate_companion_reply(
         story_plan, repair_errors = _repair_structured_output(
             initial_output=story_plan,
             initial_errors=exc.errors,
-            base_messages=planner_messages,
             output_model=StoryDirectorOutput,
             stage_name="story_director_patch_repair",
             validator=validate_planner_candidate,
+            repair_context=_build_story_state_repair_context(
+                story_state,
+                story_plan.get("state_patch", {}),
+            ),
             repair_instructions=(
                 "You are correcting your own Story Director output.\n"
                 "Preserve the original narrative decision, focus, next beat "
@@ -1107,7 +1554,7 @@ def generate_companion_reply(
                 "safely, return an empty state_patch object.\n"
                 "Return all five StoryDirectorOutput fields."
             ),
-            groq_api_key=groq_api_key,
+            llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             models_to_try=models_to_try,
         )
@@ -1153,7 +1600,7 @@ def generate_companion_reply(
         messages=writer_messages,
         output_model=CompanionReplyOutput,
         stage_name="response_generator",
-        groq_api_key=groq_api_key,
+        llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         models_to_try=models_to_try,
     )
@@ -1188,30 +1635,35 @@ def generate_companion_reply(
             exc.errors,
         )
 
-        repair_context = ""
-        if story_state is not None:
-            repair_context = (
-                "AUTHORITATIVE CURRENT CANONICAL STORYSTATE (read-only):\n"
-                + json.dumps(
-                    story_state.model_dump(mode="json"),
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
+        repair_context = {
+            "current_user_message": message,
+            "validated_story_director_plan": {
+                "decision": story_plan["decision"],
+                "focus": story_plan["focus"],
+                "next_beat": story_plan["next_beat"],
+                "scene_direction": story_plan["scene_direction"],
+                "state_patch": story_plan["state_patch"],
+            },
+            "canonical_story_state": _build_story_state_repair_context(
+                story_state,
+                writer_output.get("state_patch", {}),
+            ),
+        }
 
         writer_output, repair_errors = _repair_structured_output(
             initial_output=writer_output,
             initial_errors=exc.errors,
-            base_messages=writer_messages,
             output_model=CompanionReplyOutput,
             stage_name="response_generator_patch_repair",
             validator=validate_writer_candidate,
             repair_instructions=(
                 "You are correcting your previous Response Generator output.\n"
-                "Regenerate BOTH the final user-facing reply and state_patch.\n"
+                "Preserve the original reply unless it conflicts with the "
+                "validated plan or corrected patch. Correct the state_patch.\n"
                 "The reply and final state_patch must describe the same "
                 "fictional development.\n"
-                "Follow the validated Story Director plan included in the "
+                "Remain within planner-approved scope. Follow the validated "
+                "Story Director plan included in the "
                 "original request.\n"
                 "Do not introduce new characters, relationship operations, "
                 "plot threads, scene fields or state changes outside the "
@@ -1224,7 +1676,7 @@ def generate_companion_reply(
                 "state_patch object.\n"
                 "Return all three CompanionReplyOutput fields."
             ),
-            groq_api_key=groq_api_key,
+            llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             models_to_try=models_to_try,
             repair_context=repair_context,
