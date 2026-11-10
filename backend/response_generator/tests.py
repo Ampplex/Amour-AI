@@ -170,6 +170,144 @@ class ResponseGeneratorUnitTests(TestCase):
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
+    def test_story_state_is_injected_into_story_director(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = "Past user memory"
+
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        story_state = StoryState.model_validate({
+            "schema_version": 1,
+            "story_summary": "Maya and the user had an argument yesterday.",
+            "characters": {
+                "maya": {
+                    "name": "Maya",
+                    "current_emotional_state": "Hurt and disappointed",
+                    "current_goal": "Understand why the user lied",
+                    "current_location": "University",
+                }
+            },
+            "relationships": [],
+            "plot_threads": [],
+            "current_scene": {
+                "location": "University",
+                "time": "Evening",
+                "participants": ["maya", "user"],
+                "situation": "Maya is avoiding the user",
+                "atmosphere": "Tense",
+                "continuity_details": [],
+            },
+        })
+
+        result = generate_companion_reply(
+            message="Why are you upset with me?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            user_name="John",
+            story_state=story_state,
+        )
+
+        self.assertEqual(
+            result["reply"],
+            VALID_WRITER_OUTPUT["reply"],
+        )
+        self.assertEqual(mock_post.call_count, 2)
+
+        # Inspect the first LLM call: Story Director.
+        planner_messages = (
+            mock_post.call_args_list[0]
+            .kwargs["json"]["messages"]
+        )
+        planner_system_prompt = "\n".join(
+            item["content"]
+            for item in planner_messages
+            if item["role"] == "system"
+        )
+
+        self.assertIn(
+            "CURRENT CANONICAL STORY STATE",
+            planner_system_prompt,
+        )
+        self.assertIn(
+            "Maya and the user had an argument yesterday.",
+            planner_system_prompt,
+        )
+        self.assertIn(
+            "Hurt and disappointed",
+            planner_system_prompt,
+        )
+        self.assertIn(
+            "Maya is avoiding the user",
+            planner_system_prompt,
+        )
+
+        # Inspect the second LLM call: Response Generator.
+        writer_messages = (
+            mock_post.call_args_list[1]
+            .kwargs["json"]["messages"]
+        )
+        writer_system_prompt = "\n".join(
+            item["content"]
+            for item in writer_messages
+            if item["role"] == "system"
+        )
+
+        # The writer gets the validated plan, not the complete
+        # canonical StoryState directly.
+        self.assertNotIn(
+            "CURRENT CANONICAL STORY STATE",
+            writer_system_prompt,
+        )
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_story_director_handles_missing_story_state(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="Hey",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=None,
+        )
+
+        self.assertEqual(
+            result["reply"],
+            VALID_WRITER_OUTPUT["reply"],
+        )
+
+        planner_messages = (
+            mock_post.call_args_list[0]
+            .kwargs["json"]["messages"]
+        )
+        planner_system_prompt = "\n".join(
+            item["content"]
+            for item in planner_messages
+            if item["role"] == "system"
+        )
+
+        self.assertIn(
+            "No initialized StoryState was provided.",
+            planner_system_prompt,
+        )
+        self.assertEqual(mock_post.call_count, 2)
+
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
     def test_planner_validation_failover_then_writer(
         self, mock_retrieve, mock_store, mock_post
     ):

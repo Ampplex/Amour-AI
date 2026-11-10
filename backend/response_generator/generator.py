@@ -594,6 +594,7 @@ def generate_companion_reply(
     conversation_history: list = None,
     current_conflict_stage: int = 0,
     user_key: str = None,
+    story_state: StoryState | None = None,
 ) -> dict:
     """
     Companion roleplay chat powered by Reeve memory graph and Groq LLM.
@@ -736,7 +737,9 @@ def generate_companion_reply(
     # This step only assembles the messages; it does not call the LLM.
     planner_messages = _build_llm_messages(
         shared_system_prompt=shared_system_prompt,
-        stage_prompt=build_story_director_prompt(),
+        stage_prompt=build_story_director_prompt(
+            story_state=story_state,
+        ),
         conversation_history=conversation_history,
         message=message,
     )

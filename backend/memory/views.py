@@ -395,6 +395,8 @@ class ChatMemoryView(APIView):
                 conversation_history=conversation_history,
                 current_conflict_stage=current_conflict_stage,
                 user_key=user_key,
+                # FEATURE 4: Pass the retrieved canonical world to the planner.
+                story_state=story_state,
             )
             reply_text = result.get("reply", "").strip()
             new_conflict_stage = result.get("conflict_stage", current_conflict_stage)
