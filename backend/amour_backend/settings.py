@@ -171,11 +171,11 @@ if LLM_PROVIDER == "bedrock":
     LLM_API_KEY = AWS_BEARER_TOKEN_BEDROCK
     LLM_BASE_URL = os.environ.get(
         "BEDROCK_BASE_URL",
-        f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com/openai/v1",
+        f"https://bedrock-runtime.{AWS_REGION}.amazonaws.com",
     )
     LLM_MODEL = os.environ.get(
         "BEDROCK_MODEL_ID",
-        "mistral.mistral-large-3-675b-instruct",
+        "mistral.mistral-large-2402-v1:0",
     )
     fallback_models_value = os.environ.get("BEDROCK_FALLBACK_MODEL_IDS", "")
 elif LLM_PROVIDER == "groq":
