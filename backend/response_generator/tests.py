@@ -38,31 +38,42 @@ from response_generator.story_director import (
 
 
 TEST_LLM_SETTINGS = {
-    "LLM_PROVIDER": "mistral",
-    "MISTRAL_API_KEY": "test-mistral-api-key",
-    "LLM_BASE_URL": "https://api.mistral.ai/v1",
-    "LLM_MODEL": "mistral-large-4",
-    "LLM_FALLBACK_MODELS": ("mistral-small-2603",),
+    "LLM_PROVIDER": "bedrock",
+    "AWS_BEARER_TOKEN_BEDROCK": "test-bedrock-api-key",
+    "BEDROCK_API_KEY": "",
+    "AWS_REGION": "us-west-2",
+    "LLM_BASE_URL": (
+        "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+    ),
+    "LLM_MODEL": "mistral.mistral-large-3-675b-instruct",
+    "LLM_FALLBACK_MODELS": (),
 }
 
 
 class LLMProviderConfigurationTests(TestCase):
 
     @override_settings(
-        LLM_PROVIDER="mistral",
-        MISTRAL_API_KEY="mistral-test-key",
-        LLM_BASE_URL="https://api.mistral.ai/v1",
-        LLM_MODEL="mistral-large-4",
-        LLM_FALLBACK_MODELS=("mistral-small-2603",),
+        LLM_PROVIDER="bedrock",
+        AWS_BEARER_TOKEN_BEDROCK="bedrock-test-key",
+        BEDROCK_API_KEY="",
+        AWS_REGION="us-west-2",
+        LLM_BASE_URL=(
+            "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+        ),
+        LLM_MODEL="mistral.mistral-large-3-675b-instruct",
+        LLM_FALLBACK_MODELS=(),
     )
-    def test_mistral_provider_uses_mistral_credentials_and_models(self):
+    def test_bedrock_provider_uses_bedrock_key_endpoint_and_model_id(self):
         api_key, base_url, models = _get_llm_configuration()
 
-        self.assertEqual(api_key, "mistral-test-key")
-        self.assertEqual(base_url, "https://api.mistral.ai/v1")
+        self.assertEqual(api_key, "bedrock-test-key")
+        self.assertEqual(
+            base_url,
+            "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1",
+        )
         self.assertEqual(
             models,
-            ["mistral-large-4", "mistral-small-2603"],
+            ["mistral.mistral-large-3-675b-instruct"],
         )
 
     @override_settings(
