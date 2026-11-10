@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 
+from response_generator import generator as response_generator_module
 from response_generator.generator import generate_companion_reply
 from response_generator.state_patch_validator import validate_story_state_patch
 from response_generator.story_director import StoryState
@@ -138,6 +139,32 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.story_state = make_live_llm_story_state()
 
+    def _all_configured_models_are_rate_limited(self) -> bool:
+        """Distinguish provider throttling from an application regression."""
+        llm_base_url = (
+            getattr(settings, "LLM_BASE_URL", "")
+            or os.environ.get(
+                "LLM_BASE_URL",
+                "https://api.groq.com/openai/v1",
+            )
+        ).rstrip("/")
+        primary_model = (
+            getattr(settings, "LLM_MODEL", "")
+            or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+        )
+        models = [primary_model]
+        for fallback in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
+            if fallback not in models:
+                models.append(fallback)
+
+        return all(
+            response_generator_module._get_model_rate_limit_cooldown(
+                llm_base_url,
+                model,
+            ) > 0
+            for model in models
+        )
+
     def _run_live_turn(self, message: str) -> dict:
         """
         Execute the real two-stage LLM pipeline.
@@ -182,6 +209,15 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
             f"Planner patch: {result.get('planner_state_patch')!r}\n"
             f"Final patch: {result.get('state_patch')!r}"
         )
+
+        if (
+            not result.get("success")
+            and self._all_configured_models_are_rate_limited()
+        ):
+            raise unittest.SkipTest(
+                "All configured models are in rate-limit cooldown; "
+                "this live scenario is inconclusive, not an application failure."
+            )
 
         self.assertTrue(
             result.get("success"),
