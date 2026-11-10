@@ -2,10 +2,11 @@ import json
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase as DjangoTestCase
+from django.test import TestCase as DjangoTestCase, override_settings
 
 from pydantic import ValidationError
 
+from response_generator.generator import _get_llm_configuration
 from response_generator import (
     GLOBAL_COMPANION_DIRECTIVES,
     generate_companion_reply,
@@ -34,6 +35,43 @@ from response_generator.story_director import (
     STORY_DIRECTOR_PROMPT,
     StoryDirectorOutput,
 )
+
+
+class LLMProviderConfigurationTests(TestCase):
+
+    @override_settings(
+        LLM_PROVIDER="mistral",
+        MISTRAL_API_KEY="mistral-test-key",
+        LLM_BASE_URL="https://api.mistral.ai/v1",
+        LLM_MODEL="mistral-large-4",
+        LLM_FALLBACK_MODELS=("mistral-small-2603",),
+    )
+    def test_mistral_provider_uses_mistral_credentials_and_models(self):
+        api_key, base_url, models = _get_llm_configuration()
+
+        self.assertEqual(api_key, "mistral-test-key")
+        self.assertEqual(base_url, "https://api.mistral.ai/v1")
+        self.assertEqual(
+            models,
+            ["mistral-large-4", "mistral-small-2603"],
+        )
+
+    @override_settings(
+        LLM_PROVIDER="groq",
+        GROQ_API_KEY="groq-test-key",
+        LLM_BASE_URL="https://api.groq.com/openai/v1",
+        LLM_MODEL="qwen/test-model",
+        LLM_FALLBACK_MODELS=("openai/test-fallback",),
+    )
+    def test_groq_provider_remains_available(self):
+        api_key, base_url, models = _get_llm_configuration()
+
+        self.assertEqual(api_key, "groq-test-key")
+        self.assertEqual(base_url, "https://api.groq.com/openai/v1")
+        self.assertEqual(
+            models,
+            ["qwen/test-model", "openai/test-fallback"],
+        )
 
 
 VALID_STORY_PLAN = {
