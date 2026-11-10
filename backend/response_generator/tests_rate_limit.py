@@ -40,7 +40,7 @@ class LLMRateLimitReliabilityTests(TestCase):
             messages=[{"role": "user", "content": "test"}],
             output_model=StructuredProbeOutput,
             stage_name="rate_limit_test",
-            groq_api_key="test-key",
+            llm_api_key="test-key",
             llm_base_url="https://api.example.test/v1",
             models_to_try=models,
         )
