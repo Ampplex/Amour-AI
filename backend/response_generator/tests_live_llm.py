@@ -130,9 +130,9 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
     def setUpClass(cls):
         super().setUpClass()
 
-        if not getattr(settings, "GROQ_API_KEY", ""):
+        if not getattr(settings, "LLM_API_KEY", ""):
             raise unittest.SkipTest(
-                "GROQ_API_KEY is not configured in Django settings/backend .env."
+                "The API key for the selected LLM_PROVIDER is not configured."
             )
 
 
@@ -141,21 +141,9 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
 
     def _all_configured_models_are_rate_limited(self) -> bool:
         """Distinguish provider throttling from an application regression."""
-        llm_base_url = (
-            getattr(settings, "LLM_BASE_URL", "")
-            or os.environ.get(
-                "LLM_BASE_URL",
-                "https://api.groq.com/openai/v1",
-            )
-        ).rstrip("/")
-        primary_model = (
-            getattr(settings, "LLM_MODEL", "")
-            or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+        _, llm_base_url, models = (
+            response_generator_module._get_llm_configuration()
         )
-        models = [primary_model]
-        for fallback in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
-            if fallback not in models:
-                models.append(fallback)
 
         return all(
             response_generator_module._get_model_rate_limit_cooldown(
