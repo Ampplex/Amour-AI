@@ -12,8 +12,10 @@ import re
 import time
 import json
 import logging
+import threading
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone as datetime_timezone
+from email.utils import parsedate_to_datetime
 from typing import Callable
 import requests
 from django.conf import settings
@@ -43,6 +45,125 @@ from .state_patch_applier import (
 )
 
 logger = logging.getLogger("amour.response_generator")
+
+# Rate limits are model-scoped by default because a provider may still allow
+# another model while one model's request/token quota is exhausted. Cooldowns
+# live for the lifetime of this process and prevent repeated requests from
+# hammering a model that has just returned HTTP 429.
+DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 30.0
+MAX_RATE_LIMIT_COOLDOWN_SECONDS = 900.0
+_RATE_LIMIT_COOLDOWNS: dict[tuple[str, str], float] = {}
+_RATE_LIMIT_COOLDOWN_LOCK = threading.Lock()
+
+
+def _parse_rate_limit_delay(value, *, milliseconds: bool = False) -> float | None:
+    """Parse numeric or duration-style provider reset headers into seconds."""
+    if value is None:
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    try:
+        delay = float(raw)
+        return delay / 1000.0 if milliseconds else delay
+    except ValueError:
+        pass
+
+    match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|seconds?|m|minutes?|h|hours?)?",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        amount = float(match.group(1))
+        unit = (match.group(2) or "s").lower()
+        if unit.startswith("ms"):
+            return amount / 1000.0
+        if unit.startswith("m"):
+            return amount * 60.0
+        if unit.startswith("h"):
+            return amount * 3600.0
+        return amount
+
+    # Retry-After is also allowed to be an HTTP date.
+    try:
+        reset_at = parsedate_to_datetime(raw)
+        if reset_at.tzinfo is None:
+            reset_at = reset_at.replace(tzinfo=datetime_timezone.utc)
+        return max(
+            0.0,
+            (reset_at - datetime.now(datetime_timezone.utc)).total_seconds(),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _rate_limit_cooldown_seconds(headers) -> float:
+    """
+    Read the longest available provider reset hint.
+
+    Groq exposes Retry-After and model request/token reset headers. Taking
+    the longest reset avoids retrying while either quota remains exhausted.
+    """
+    candidates = []
+    for header in (
+        "Retry-After",
+        "retry-after-ms",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+    ):
+        value = headers.get(header) if headers is not None else None
+        delay = _parse_rate_limit_delay(
+            value,
+            milliseconds=(header == "retry-after-ms"),
+        )
+        if delay is not None:
+            candidates.append(delay)
+
+    if not candidates:
+        return DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+
+    return min(
+        MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+        max(1.0, max(candidates)),
+    )
+
+
+def _rate_limit_cooldown_key(llm_base_url: str, model: str) -> tuple[str, str]:
+    return (str(llm_base_url).rstrip("/").casefold(), str(model).casefold())
+
+
+def _get_model_rate_limit_cooldown(
+    llm_base_url: str,
+    model: str,
+) -> float:
+    """Return remaining cooldown seconds, clearing expired entries."""
+    key = _rate_limit_cooldown_key(llm_base_url, model)
+    now = time.monotonic()
+    with _RATE_LIMIT_COOLDOWN_LOCK:
+        reset_at = _RATE_LIMIT_COOLDOWNS.get(key)
+        if reset_at is None:
+            return 0.0
+        remaining = reset_at - now
+        if remaining <= 0:
+            _RATE_LIMIT_COOLDOWNS.pop(key, None)
+            return 0.0
+        return remaining
+
+
+def _record_model_rate_limit(
+    llm_base_url: str,
+    model: str,
+    headers,
+) -> float:
+    """Record a model cooldown using provider reset headers when available."""
+    delay = _rate_limit_cooldown_seconds(headers)
+    key = _rate_limit_cooldown_key(llm_base_url, model)
+    with _RATE_LIMIT_COOLDOWN_LOCK:
+        _RATE_LIMIT_COOLDOWNS[key] = time.monotonic() + delay
+    return delay
 
 
 def strip_emojis(text: str) -> str:
@@ -132,6 +253,19 @@ def _call_structured_llm(
     }
 
     for current_model in models_to_try:
+        remaining_cooldown = _get_model_rate_limit_cooldown(
+            llm_base_url,
+            current_model,
+        )
+        if remaining_cooldown > 0:
+            logger.info(
+                "%s: Skipping %s; model rate-limit cooldown has %.1fs remaining.",
+                stage_name,
+                current_model,
+                remaining_cooldown,
+            )
+            continue
+
         try:
             token_budgets = {
                 "story_director": 900,
@@ -163,21 +297,23 @@ def _call_structured_llm(
                 timeout=20,
             )
 
+            duration = time.time() - start_time
+
             if response.status_code == 429:
-                logger.info(
-                    "%s: %s returned 429. Retrying after 1.6 seconds.",
+                cooldown = _record_model_rate_limit(
+                    llm_base_url,
+                    current_model,
+                    getattr(response, "headers", {}),
+                )
+                logger.warning(
+                    "%s: Model %s returned HTTP 429. "
+                    "Skipping same-model retry and cooling it down for %.1fs. "
+                    "Trying another model if available.",
                     stage_name,
                     current_model,
+                    cooldown,
                 )
-                time.sleep(1.6)
-                response = requests.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=20,
-                )
-
-            duration = time.time() - start_time
+                continue
 
             if response.status_code != 200:
                 logger.warning(
@@ -297,8 +433,7 @@ def _repair_structured_output(
             "VALIDATION ERRORS:\n"
             + json.dumps(errors, ensure_ascii=False, indent=2)
             + "\n\n"
-            + (repair_context + "\n\n" if repair_context else "")
-            + repair_instructions
+            + (repair_context + "\n\n" if repair_context else "")            + repair_instructions
             + "\n\nReturn the complete corrected structured output "
             "as JSON only. Do not use Markdown fences or explanations."
         )
@@ -597,8 +732,7 @@ def initialize_story_state(
             raise ValueError("User is missing from StoryState.")
     except Exception:
         logger.exception(
-            "Generated StoryState failed semantic validation for %s.",
-            namespace,
+            "Generated StoryState failed semantic validation for %s.",            namespace,
         )
         return None
 
@@ -897,8 +1031,7 @@ def generate_companion_reply(
         or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
     )
 
-    models_to_try = [primary_model]
-    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+    models_to_try = [primary_model]    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
         if fallback not in models_to_try:
             models_to_try.append(fallback)
 
