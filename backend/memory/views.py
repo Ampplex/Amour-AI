@@ -19,6 +19,7 @@ from .reeve_service import (
 from response_generator import (
     generate_companion_reply,
     initialize_story_state,
+    retrieve_story_state,
     strip_emojis,
 )
 
@@ -346,6 +347,36 @@ class ChatMemoryView(APIView):
         except Exception:
             logger.exception(
                 "Unexpected StoryState initialization error for namespace %s.",
+                namespace,
+            )
+
+        # ============================================================
+        # FEATURE 3: STORYSTATE RETRIEVAL
+        # ============================================================
+
+        # Retrieve the canonical world after ensuring initialization.
+        # This operation is read-only and does not invoke an LLM.
+        story_state = None
+
+        try:
+            story_state = retrieve_story_state(
+                namespace=namespace,
+            )
+
+            if story_state is None:
+                logger.warning(
+                    "No valid StoryState available for namespace %s.",
+                    namespace,
+                )
+            else:
+                logger.info(
+                    "StoryState retrieved successfully for namespace %s.",
+                    namespace,
+                )
+
+        except Exception:
+            logger.exception(
+                "Unexpected StoryState retrieval error for namespace %s.",
                 namespace,
             )
 

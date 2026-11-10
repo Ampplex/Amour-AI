@@ -11,6 +11,7 @@ from response_generator import (
     generate_companion_reply,
     get_bucketed_time_str,
     initialize_story_state,
+    retrieve_story_state,
     sanitize_companion_reply,
     strip_emojis,
 )
@@ -510,3 +511,122 @@ class StoryStateInitializationTests(DjangoTestCase):
 
         with self.assertRaises(ValidationError):
             StoryState.model_validate(invalid_state)
+
+
+class StoryStateRetrievalTests(DjangoTestCase):
+
+    def setUp(self):
+        self.namespace = f"usr_test-user_persona_{TEST_PERSONA_ID}"
+
+    def test_retrieves_valid_initialized_state(self):
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=VALID_INITIAL_STORY_STATE,
+            schema_version=1,
+            revision=1,
+        )
+
+        result = retrieve_story_state(self.namespace)
+
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, StoryState)
+        self.assertEqual(
+            result.characters[TEST_PERSONA_CHARACTER_ID].name,
+            "Maya",
+        )
+        self.assertEqual(result.schema_version, 1)
+
+    def test_missing_namespace_returns_none(self):
+        result = retrieve_story_state(self.namespace)
+        self.assertIsNone(result)
+
+    def test_uninitialized_record_returns_none(self):
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=None,
+            schema_version=1,
+            revision=0,
+        )
+
+        result = retrieve_story_state(self.namespace)
+
+        self.assertIsNone(result)
+
+    def test_invalid_stored_json_structure_returns_none(self):
+        invalid_state = {
+            "schema_version": 1,
+            "story_summary": "Invalid world",
+            "characters": {
+                "maya": {
+                    "name": "Maya",
+                    "unexpected_field": "invalid",
+                }
+            },
+            "relationships": [],
+            "plot_threads": [],
+            "current_scene": {
+                "location": "University",
+            },
+        }
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=invalid_state,
+            schema_version=1,
+            revision=1,
+        )
+
+        result = retrieve_story_state(self.namespace)
+
+        self.assertIsNone(result)
+
+    def test_database_schema_version_mismatch_returns_none(self):
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=VALID_INITIAL_STORY_STATE,
+            schema_version=2,
+            revision=1,
+        )
+
+        result = retrieve_story_state(self.namespace)
+
+        self.assertIsNone(result)
+
+    def test_json_document_version_mismatch_returns_none(self):
+        invalid_version_state = {
+            **VALID_INITIAL_STORY_STATE,
+            "schema_version": 2,
+        }
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=invalid_version_state,
+            schema_version=1,
+            revision=1,
+        )
+
+        result = retrieve_story_state(self.namespace)
+
+        self.assertIsNone(result)
+
+    def test_retrieval_does_not_modify_database_record(self):
+        record = CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=VALID_INITIAL_STORY_STATE,
+            schema_version=1,
+            revision=1,
+        )
+        original_state = record.state
+        original_revision = record.revision
+        original_updated_at = record.updated_at
+
+        result = retrieve_story_state(self.namespace)
+        record.refresh_from_db()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(record.state, original_state)
+        self.assertEqual(record.revision, original_revision)
+        self.assertEqual(record.updated_at, original_updated_at)
+
+    def test_empty_namespace_returns_none(self):
+        result = retrieve_story_state("")
+        self.assertIsNone(result)
+

@@ -474,6 +474,90 @@ def initialize_story_state(
         return None
 
 
+def retrieve_story_state(namespace: str) -> StoryState | None:
+    """
+    Retrieve and validate the current canonical StoryState
+    for a user-persona namespace.
+
+    This function is strictly read-only.
+
+    Returns:
+        StoryState: Validated canonical world.
+        None: If the namespace is missing, the state is not
+              initialized, or stored data is invalid.
+    """
+    from memory.models import CompanionStoryState
+
+    if not namespace:
+        logger.error(
+            "StoryState retrieval requires a namespace."
+        )
+        return None
+
+    # 1. Retrieve the namespace-specific database record.
+    try:
+        record = CompanionStoryState.objects.filter(
+            namespace=namespace
+        ).first()
+    except Exception:
+        logger.exception(
+            "Database error while retrieving StoryState for %s.",
+            namespace,
+        )
+        return None
+
+    # 2. No record means initialization has not happened.
+    if record is None:
+        logger.info(
+            "No StoryState record exists for namespace %s.",
+            namespace,
+        )
+        return None
+
+    # 3. A record with NULL state is not initialized.
+    if record.state is None:
+        logger.info(
+            "StoryState exists but is not initialized for %s.",
+            namespace,
+        )
+        return None
+
+    # 4. Verify the database schema version.
+    if record.schema_version != 1:
+        logger.error(
+            "Unsupported StoryState database schema version %s "
+            "for namespace %s.",
+            record.schema_version,
+            namespace,
+        )
+        return None
+
+    # 5. Validate the stored JSONB using the canonical Pydantic model.
+    try:
+        story_state = StoryState.model_validate(record.state)
+
+        if story_state.schema_version != record.schema_version:
+            raise ValueError(
+                "Stored StoryState document version does not match "
+                "the database schema_version."
+            )
+
+        logger.info(
+            "Successfully retrieved StoryState for namespace %s "
+            "(revision=%s).",
+            namespace,
+            record.revision,
+        )
+        return story_state
+
+    except Exception:
+        logger.exception(
+            "Stored StoryState failed validation for namespace %s.",
+            namespace,
+        )
+        return None
+
+
 def _build_llm_messages(
     shared_system_prompt: str,
     stage_prompt: str,
