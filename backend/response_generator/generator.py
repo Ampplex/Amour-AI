@@ -75,7 +75,7 @@ def _get_llm_configuration() -> tuple[str, str, list[str]]:
         )
         base_url = f"https://bedrock-runtime.{region}.amazonaws.com"
         primary_model = (
-            getattr(settings, "LLM_MODEL", "")
+            getattr(settings, "BEDROCK_MODEL_ID", "")
             or os.environ.get(
                 "BEDROCK_MODEL_ID",
                 "mistral.mistral-large-2402-v1:0",
@@ -540,7 +540,6 @@ def _call_structured_llm(
                         model=current_model,
                         max_tokens=token_budget,
                         temperature=0.7,
-                        llm_api_key=llm_api_key,
                         llm_base_url=llm_base_url,
                     )
                 except ClientError:
@@ -687,7 +686,21 @@ def _call_structured_llm(
                 completion_tokens,
             )
 
-            parsed = json.loads(raw_content)
+            clean_content = raw_content.strip()
+            if clean_content.startswith("```"):
+                clean_content = re.sub(
+                    r"^```(?:json)?\s*", "", clean_content, flags=re.IGNORECASE
+                )
+                clean_content = re.sub(r"\s*```$", "", clean_content).strip()
+            try:
+                parsed = json.loads(clean_content)
+            except json.JSONDecodeError:
+                start_idx = clean_content.find("{")
+                end_idx = clean_content.rfind("}")
+                if start_idx != -1 and end_idx > start_idx:
+                    parsed = json.loads(clean_content[start_idx : end_idx + 1])
+                else:
+                    raise
             structured_output = output_model.model_validate(parsed)
             validated_output = structured_output.model_dump(mode="json")
 

@@ -1,8 +1,12 @@
 import json
-from unittest import TestCase
+from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase as DjangoTestCase, override_settings
+from django.test import (
+    SimpleTestCase,
+    TestCase as DjangoTestCase,
+    override_settings,
+)
 
 from pydantic import ValidationError
 
@@ -49,12 +53,12 @@ TEST_LLM_SETTINGS = {
 }
 
 
-class LLMProviderConfigurationTests(TestCase):
+class LLMProviderConfigurationTests(SimpleTestCase):
 
     @override_settings(
         LLM_PROVIDER="bedrock",
         AWS_REGION="us-west-2",
-        LLM_MODEL="mistral.mistral-large-2402-v1:0",
+        BEDROCK_MODEL_ID="mistral.mistral-large-2402-v1:0",
         LLM_FALLBACK_MODELS=(),
     )
     def test_bedrock_provider_uses_bedrock_key_endpoint_and_model_id(self):
@@ -206,7 +210,7 @@ def make_patch_test_story_state():
 
 
 @override_settings(**TEST_LLM_SETTINGS)
-class ResponseGeneratorUnitTests(TestCase):
+class ResponseGeneratorUnitTests(SimpleTestCase):
     def test_strip_emojis(self):
         sample = "Hello! ❤️ 😊 Have a great day! 🔥"
         cleaned = strip_emojis(sample)
@@ -516,7 +520,7 @@ class ResponseGeneratorUnitTests(TestCase):
         self.assertEqual(mock_post.call_count, 4)
 
 
-class StructuredOutputTests(TestCase):
+class StructuredOutputTests(SimpleTestCase):
     def setUp(self):
         self.valid_plan = dict(VALID_STORY_PLAN)
         self.valid_writer = dict(VALID_WRITER_OUTPUT)
@@ -912,7 +916,7 @@ class StoryStateRetrievalTests(DjangoTestCase):
 
 
 
-class StoryStatePatchValidationTests(TestCase):
+class StoryStatePatchValidationTests(SimpleTestCase):
 
     def setUp(self):
         self.state = make_patch_test_story_state()
@@ -1246,7 +1250,7 @@ class StoryStatePatchValidationTests(TestCase):
 
 
 @override_settings(**TEST_LLM_SETTINGS)
-class StoryStatePatchRepairTests(TestCase):
+class StoryStatePatchRepairTests(SimpleTestCase):
 
     def setUp(self):
         self.story_state = make_patch_test_story_state()
@@ -1434,7 +1438,7 @@ class StoryStatePatchRepairTests(TestCase):
         mock_store.assert_called_once()
 
 
-class StoryStatePatchApplicationTests(TestCase):
+class StoryStatePatchApplicationTests(SimpleTestCase):
 
     def setUp(self):
         self.state = make_patch_test_story_state()
@@ -1772,7 +1776,7 @@ class StoryStatePatchApplicationTests(TestCase):
 
 
 @override_settings(**TEST_LLM_SETTINGS)
-class StoryStatePatchPipelineTests(TestCase):
+class StoryStatePatchPipelineTests(SimpleTestCase):
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1848,3 +1852,128 @@ class StoryStatePatchPipelineTests(TestCase):
         mock_apply.assert_called_once()
         mock_store.assert_called_once()
         self.assertEqual(mock_post.call_count, 2)
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_empty_patch_sections_pipeline_treats_as_noop_without_repair(
+        self,
+        mock_retrieve,
+        mock_store,
+        mock_post,
+    ):
+        mock_retrieve.return_value = ""
+        story_state = make_patch_test_story_state()
+        original_state = story_state.model_dump(mode="json")
+
+        plan_with_empty_sections = deepcopy(VALID_STORY_PLAN)
+        plan_with_empty_sections["state_patch"] = {
+            "characters": {},
+            "relationships": [],
+            "plot_threads": [],
+            "current_scene": {},
+        }
+
+        writer_with_empty_sections = deepcopy(VALID_WRITER_OUTPUT)
+        writer_with_empty_sections["state_patch"] = {
+            "plot_threads": [],
+            "characters": {},
+        }
+
+        mock_post.side_effect = [
+            make_mock_response(plan_with_empty_sections),
+            make_mock_response(writer_with_empty_sections),
+        ]
+
+        result = generate_companion_reply(
+            message="Nice weather today.",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=story_state,
+        )
+
+        self.assertTrue(result["success"])
+        # Exactly 2 calls: planner + writer. Zero repair calls triggered.
+        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(result["planner_state_patch"], {})
+        self.assertEqual(result["state_patch"], {})
+        self.assertEqual(
+            result["updated_story_state"].model_dump(mode="json"),
+            original_state,
+        )
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_compact_repair_in_pipeline_does_not_leak_chat_history_or_unrelated_state(
+        self,
+        mock_retrieve,
+        mock_store,
+        mock_post,
+    ):
+        mock_retrieve.return_value = ""
+        story_state = make_patch_test_story_state()
+
+        invalid_plan = deepcopy(VALID_STORY_PLAN)
+        invalid_plan["state_patch"] = {
+            "characters": {
+                "maya": {"current_emotional_state": "Relieved"},
+                "unknown_character": {"current_emotional_state": "Angry"},
+            }
+        }
+
+        repaired_plan = deepcopy(VALID_STORY_PLAN)
+        repaired_plan["state_patch"] = {
+            "characters": {
+                "maya": {"current_emotional_state": "Relieved"}
+            }
+        }
+
+        mock_post.side_effect = [
+            make_mock_response(invalid_plan),
+            make_mock_response(repaired_plan),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="How are you feeling?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=story_state,
+            conversation_history=[
+                {"role": "user", "content": "Sensitive secret info 1"},
+                {"role": "assistant", "content": "Sensitive secret info 2"},
+            ],
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(mock_post.call_count, 3)
+
+        # Inspect the exact repair request payload sent to the LLM
+        repair_messages = (
+            mock_post.call_args_list[1]
+            .kwargs["json"]["messages"]
+        )
+        self.assertEqual(len(repair_messages), 2)
+        repair_system = repair_messages[0]["content"]
+        repair_body = json.loads(repair_messages[1]["content"])
+
+        # 1. Structural assertions on compact repair payload
+        self.assertIn("You are a structured-output correction component", repair_system)
+        self.assertEqual(repair_body["attempt"], 1)
+        self.assertIn("validation_errors", repair_body)
+        self.assertIn("relevant_context", repair_body)
+        self.assertIn("repair_instructions", repair_body)
+
+        # 2. Assert NO chat history leakage into the repair prompt
+        self.assertNotIn("Sensitive secret info 1", repair_messages[1]["content"])
+        self.assertNotIn("Sensitive secret info 2", repair_messages[1]["content"])
+        self.assertNotIn("UNIVERSAL COMPANION DIRECTIVES", repair_messages[1]["content"])
+
+        # 3. Assert relevant_context projects ONLY targeted characters, not entire world
+        rel_context = repair_body["relevant_context"]
+        self.assertIn("target_characters", rel_context)
+        self.assertIn("maya", rel_context["target_characters"])
+        self.assertNotIn("existing_relationships", rel_context)
+        self.assertNotIn("target_plot_threads", rel_context)
+        self.assertNotIn("current_scene", rel_context)
