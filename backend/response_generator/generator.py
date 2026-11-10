@@ -1109,7 +1109,7 @@ def generate_companion_reply(
     story_state: StoryState | None = None,
 ) -> dict:
     """
-    Companion roleplay chat powered by Reeve memory graph and Groq LLM.
+    Companion roleplay chat powered by Reeve memory graph and Amazon Bedrock.
 
     Architecture:
     1. Ingest User message into Reeve memory graph with personalized speaker tag.
@@ -1124,7 +1124,7 @@ def generate_companion_reply(
        - Access to Date and Time for natural LLM temporal reasoning
        - Reeve LTM Memory Context block
     4. Assemble full conversation history for local dialogue continuity + pure Reeve LTM memory context.
-    5. Call LLM (Groq qwen/qwen3.8-27b with failovers).
+    5. Call Amazon Bedrock Runtime (Mistral Large 3 by default; optional configured Bedrock model failovers).
     6. Anti-echo guard: Store Assistant reply into Reeve memory graph.
     7. Return reply, context, and namespace.
     """
