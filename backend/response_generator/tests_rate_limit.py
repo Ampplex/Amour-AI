@@ -70,6 +70,23 @@ class LLMRateLimitReliabilityTests(TestCase):
         )
 
     @patch("response_generator.generator.requests.post")
+    def test_413_does_not_resend_identical_payload_to_fallback(self, mock_post):
+        mock_post.return_value = make_response(
+            413,
+            text="request too large",
+        )
+
+        output, model = self._call(["primary-model", "fallback-model"])
+
+        self.assertIsNone(output)
+        self.assertIsNone(model)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"]["model"],
+            "primary-model",
+        )
+
+    @patch("response_generator.generator.requests.post")
     def test_rate_limited_model_is_skipped_during_later_pipeline_stage(
         self,
         mock_post,
