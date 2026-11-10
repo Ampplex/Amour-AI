@@ -18,6 +18,9 @@ from datetime import datetime, timezone as datetime_timezone
 from email.utils import parsedate_to_datetime
 from typing import Callable
 import requests
+import boto3
+from botocore.exceptions import ClientError
+from urllib.parse import urlparse
 from django.conf import settings
 from django.utils import timezone
 from pydantic import BaseModel, ValidationError
@@ -74,14 +77,14 @@ def _get_llm_configuration() -> tuple[str, str, list[str]]:
             getattr(settings, "LLM_BASE_URL", "")
             or os.environ.get(
                 "BEDROCK_BASE_URL",
-                f"https://bedrock-runtime.{region}.amazonaws.com/openai/v1",
+                f"https://bedrock-runtime.{region}.amazonaws.com",
             )
         ).rstrip("/")
         primary_model = (
             getattr(settings, "LLM_MODEL", "")
             or os.environ.get(
                 "BEDROCK_MODEL_ID",
-                "mistral.mistral-large-3-675b-instruct",
+                "mistral.mistral-large-2402-v1:0",
             )
         )
         fallback_models = getattr(settings, "LLM_FALLBACK_MODELS", ())
@@ -315,6 +318,159 @@ def get_bucketed_time_str(client_time: str = None, client_timezone: str = None) 
         return client_time or "Present day"
 
 
+def _prepare_bedrock_converse_input(
+    messages: list,
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float = 0.7,
+) -> dict:
+    """
+    Convert the existing OpenAI-style internal message list into the
+    Amazon Bedrock Converse request shape.
+
+    System instructions are kept in the dedicated system field. Consecutive
+    messages with the same role are merged, and a leading assistant message
+    is discarded because Bedrock conversations must begin with a user turn.
+    """
+    system_blocks = []
+    conversation = []
+
+    for item in messages:
+        role = item.get("role")
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+
+        if role == "system":
+            system_blocks.append({"text": content})
+            continue
+
+        if role not in {"user", "assistant"}:
+            continue
+
+        if conversation and conversation[-1]["role"] == role:
+            conversation[-1]["content"].append({"text": content})
+        else:
+            conversation.append({
+                "role": role,
+                "content": [{"text": content}],
+            })
+
+    while conversation and conversation[0]["role"] == "assistant":
+        conversation.pop(0)
+
+    if not conversation or conversation[-1]["role"] != "user":
+        raise ValueError(
+            "Bedrock Converse requires a conversation ending with a user turn."
+        )
+
+    system_blocks.append({
+        "text": (
+            "Return exactly one syntactically valid JSON object matching "
+            "the requested structured output. Do not include Markdown fences "
+            "or explanatory text outside the JSON object."
+        )
+    })
+
+    request = {
+        "modelId": model,
+        "system": system_blocks,
+        "messages": conversation,
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.9,
+        },
+    }
+    return request
+
+
+def _invoke_bedrock_converse(
+    *,
+    messages: list,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    llm_api_key: str,
+    llm_base_url: str,
+) -> tuple[dict, float, int]:
+    """
+    Invoke Mistral Large v1 through the Bedrock Converse API.
+
+    Mistral Large v1 supports Invoke and Converse on bedrock-runtime but
+    does not support Bedrock Chat Completions. Boto3 >= 1.39.0 reads the
+    AWS_BEARER_TOKEN_BEDROCK API-key environment variable.
+    """
+    parsed_url = urlparse(llm_base_url)
+    hostname = parsed_url.hostname or ""
+    match = re.fullmatch(
+        r"bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com",
+        hostname,
+    )
+    if not match:
+        raise ValueError(
+            "Bedrock Converse requires a regional bedrock-runtime endpoint."
+        )
+
+    region = match.group(1)
+    # Settings supports BEDROCK_API_KEY as a backward-compatible alias.
+    # Populate the SDK-standard variable when that alias supplied the key.
+    if llm_api_key and not os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = llm_api_key
+
+    request = _prepare_bedrock_converse_input(
+        messages,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    request_bytes = len(
+        json.dumps(
+            request,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=region,
+    )
+    start_time = time.time()
+    response = client.converse(
+        modelId=request["modelId"],
+        system=request["system"],
+        messages=request["messages"],
+        inferenceConfig=request["inferenceConfig"],
+    )
+    duration = time.time() - start_time
+
+    content_blocks = (
+        response.get("output", {})
+        .get("message", {})
+        .get("content", [])
+    )
+    raw_content = "".join(
+        block.get("text", "")
+        for block in content_blocks
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ).strip()
+
+    usage = response.get("usage", {})
+    normalized = {
+        "choices": [{"message": {"content": raw_content}}],
+        "usage": {
+            "prompt_tokens": usage.get("inputTokens", 0),
+            "completion_tokens": usage.get("outputTokens", 0),
+            "prompt_tokens_details": {
+                "cached_tokens": usage.get("cacheReadInputTokens", 0),
+            },
+        },
+    }
+    return normalized, duration, request_bytes
+
+
 def _call_structured_llm(
     messages: list,
     output_model: type[BaseModel],
@@ -364,41 +520,60 @@ def _call_structured_llm(
             if "gpt-oss" in current_model:
                 token_budget *= 2
 
-            payload = {
-                "model": current_model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": token_budget,
-                "frequency_penalty": 0.6,
-                "presence_penalty": 0.4,
-                # Keep JSON mode until dynamic state_patch structures are
-                # formalized into a provider-compatible strict JSON Schema.
-                "response_format": {"type": "json_object"},
-            }
-            request_bytes = len(
-                json.dumps(
-                    payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            )
-            message_character_counts = [
-                len(str(item.get("content", "")))
-                for item in messages
-            ]
-
-            url = f"{llm_base_url}/chat/completions"
-            start_time = time.time()
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=20,
+            is_bedrock = (
+                (urlparse(llm_base_url).hostname or "").startswith(
+                    "bedrock-runtime."
+                )
             )
 
-            duration = time.time() - start_time
+            if is_bedrock:
+                try:
+                    data, duration, request_bytes = _invoke_bedrock_converse(
+                        messages=messages,
+                        model=current_model,
+                        max_tokens=token_budget,
+                        temperature=0.7,
+                        llm_api_key=llm_api_key,
+                        llm_base_url=llm_base_url,
+                    )
+                except ClientError:
+                    # Preserve the provider exception for the dedicated
+                    # ClientError handler below.
+                    raise
+                response = None
+            else:
+                payload = {
+                    "model": current_model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": token_budget,
+                    "frequency_penalty": 0.6,
+                    "presence_penalty": 0.4,
+                    "response_format": {"type": "json_object"},
+                }
+                request_bytes = len(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                )
+                message_character_counts = [
+                    len(str(item.get("content", "")))
+                    for item in messages
+                ]
 
-            if response.status_code == 429:
+                url = f"{llm_base_url}/chat/completions"
+                start_time = time.time()
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=20,
+                )
+                duration = time.time() - start_time
+
+            if response is not None and response.status_code == 429:
                 cooldown = _record_model_rate_limit(
                     llm_base_url,
                     current_model,
@@ -414,7 +589,7 @@ def _call_structured_llm(
                 )
                 continue
 
-            if response.status_code == 413:
+            if response is not None and response.status_code == 413:
                 response_headers = getattr(response, "headers", {})
                 provider_request_id = (
                     response_headers.get("x-request-id")
@@ -442,7 +617,7 @@ def _call_structured_llm(
                 # sampling quality. Do not resend the same body to a fallback.
                 return None, None
 
-            if response.status_code in {400, 401, 403, 422}:
+            if response is not None and response.status_code in {400, 401, 403, 422}:
                 logger.error(
                     "%s: Non-retryable HTTP %s from %s: %s",
                     stage_name,
@@ -452,7 +627,7 @@ def _call_structured_llm(
                 )
                 return None, None
 
-            if response.status_code != 200:
+            if response is not None and response.status_code != 200:
                 response_headers = getattr(response, "headers", {})
                 provider_request_id = (
                     response_headers.get("x-request-id")
@@ -475,7 +650,9 @@ def _call_structured_llm(
                 )
                 continue
 
-            data = response.json()
+            if response is not None:
+                data = response.json()
+
             raw_content = (
                 data.get("choices", [{}])[0]
                 .get("message", {})
@@ -513,6 +690,78 @@ def _call_structured_llm(
                 current_model,
             )
             return validated_output, current_model
+
+        except ClientError as exc:
+            error_response = getattr(exc, "response", {}) or {}
+            error_data = error_response.get("Error", {})
+            metadata = error_response.get("ResponseMetadata", {})
+            error_code = error_data.get("Code", "Unknown")
+            error_message = error_data.get("Message", str(exc))
+            status_code = metadata.get("HTTPStatusCode", 0)
+            error_headers = metadata.get("HTTPHeaders", {}) or {}
+
+            throttling_codes = {
+                "ThrottlingException",
+                "TooManyRequestsException",
+                "ServiceQuotaExceededException",
+                "RequestLimitExceeded",
+            }
+            if status_code == 429 or error_code in throttling_codes:
+                cooldown = _record_model_rate_limit(
+                    llm_base_url,
+                    current_model,
+                    error_headers,
+                )
+                logger.warning(
+                    "%s: Bedrock model %s returned %s (%s). "
+                    "Cooling it down for %.1fs and trying another configured model.",
+                    stage_name,
+                    current_model,
+                    status_code,
+                    error_code,
+                    cooldown,
+                )
+                continue
+
+            if status_code == 413 or error_code in {
+                "RequestTooLargeException",
+                "PayloadTooLargeException",
+            }:
+                logger.error(
+                    "%s: Bedrock request too large. model=%s request_bytes=%s "
+                    "provider_request_id=%s error=%s",
+                    stage_name,
+                    current_model,
+                    request_bytes if "request_bytes" in locals() else 0,
+                    metadata.get("RequestId"),
+                    error_message[:500],
+                )
+                return None, None
+
+            if status_code in {400, 401, 403, 404, 422}:
+                logger.error(
+                    "%s: Bedrock rejected request. model=%s status=%s "
+                    "code=%s request_id=%s error=%s",
+                    stage_name,
+                    current_model,
+                    status_code,
+                    error_code,
+                    metadata.get("RequestId"),
+                    error_message[:500],
+                )
+                return None, None
+
+            logger.warning(
+                "%s: Bedrock request failed. model=%s status=%s code=%s "
+                "request_id=%s error=%s. Trying configured fallback.",
+                stage_name,
+                current_model,
+                status_code,
+                error_code,
+                metadata.get("RequestId"),
+                error_message[:500],
+            )
+            continue
 
         except (json.JSONDecodeError, ValidationError) as exc:
             logger.warning(
@@ -1109,7 +1358,7 @@ def generate_companion_reply(
     story_state: StoryState | None = None,
 ) -> dict:
     """
-    Companion roleplay chat powered by Reeve memory graph and Amazon Bedrock.
+    Companion roleplay chat powered by Reeve memory graph and Amazon Bedrock Mistral Large v1.
 
     Architecture:
     1. Ingest User message into Reeve memory graph with personalized speaker tag.
@@ -1124,7 +1373,7 @@ def generate_companion_reply(
        - Access to Date and Time for natural LLM temporal reasoning
        - Reeve LTM Memory Context block
     4. Assemble full conversation history for local dialogue continuity + pure Reeve LTM memory context.
-    5. Call Amazon Bedrock Runtime (Mistral Large 3 by default; optional configured Bedrock model failovers).
+    5. Call Amazon Bedrock Runtime (Mistral Large v1 by default; optional configured Bedrock model failovers).
     6. Anti-echo guard: Store Assistant reply into Reeve memory graph.
     7. Return reply, context, and namespace.
     """
