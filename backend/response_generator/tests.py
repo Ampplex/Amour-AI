@@ -43,9 +43,9 @@ TEST_LLM_SETTINGS = {
     "BEDROCK_API_KEY": "",
     "AWS_REGION": "us-west-2",
     "LLM_BASE_URL": (
-        "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+        "https://bedrock-runtime.us-west-2.amazonaws.com"
     ),
-    "LLM_MODEL": "mistral.mistral-large-3-675b-instruct",
+    "LLM_MODEL": "mistral.mistral-large-2402-v1:0",
     "LLM_FALLBACK_MODELS": (),
 }
 
@@ -58,9 +58,9 @@ class LLMProviderConfigurationTests(TestCase):
         BEDROCK_API_KEY="",
         AWS_REGION="us-west-2",
         LLM_BASE_URL=(
-            "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+            "https://bedrock-runtime.us-west-2.amazonaws.com"
         ),
-        LLM_MODEL="mistral.mistral-large-3-675b-instruct",
+        LLM_MODEL="mistral.mistral-large-2402-v1:0",
         LLM_FALLBACK_MODELS=(),
     )
     def test_bedrock_provider_uses_bedrock_key_endpoint_and_model_id(self):
@@ -69,11 +69,11 @@ class LLMProviderConfigurationTests(TestCase):
         self.assertEqual(api_key, "bedrock-test-key")
         self.assertEqual(
             base_url,
-            "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1",
+            "https://bedrock-runtime.us-west-2.amazonaws.com",
         )
         self.assertEqual(
             models,
-            ["mistral.mistral-large-3-675b-instruct"],
+            ["mistral.mistral-large-2402-v1:0"],
         )
 
     @override_settings(
