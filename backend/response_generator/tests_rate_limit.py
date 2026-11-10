@@ -115,6 +115,45 @@ class LLMRateLimitReliabilityTests(TestCase):
 
 
     @patch("response_generator.generator.boto3.client")
+    def test_bedrock_uses_default_aws_credentials_without_bearer_key(
+        self,
+        mock_boto_client,
+    ):
+        mock_client = mock_boto_client.return_value
+        mock_client.converse.return_value = {
+            "output": {
+                "message": {
+                    "content": [{"text": json.dumps({"ok": True})}],
+                }
+            },
+            "usage": {"inputTokens": 10, "outputTokens": 5},
+        }
+
+        with patch.dict(
+            "os.environ",
+            {"AWS_BEARER_TOKEN_BEDROCK": ""},
+            clear=False,
+        ):
+            output, model = generator._call_structured_llm(
+                messages=[{"role": "user", "content": "test"}],
+                output_model=StructuredProbeOutput,
+                stage_name="bedrock_iam_test",
+                llm_api_key="",
+                llm_base_url=(
+                    "https://bedrock-runtime.us-west-2.amazonaws.com"
+                ),
+                models_to_try=["mistral.mistral-large-2402-v1:0"],
+            )
+
+        self.assertEqual(output, {"ok": True})
+        self.assertEqual(model, "mistral.mistral-large-2402-v1:0")
+        mock_boto_client.assert_called_once_with(
+            "bedrock-runtime",
+            region_name="us-west-2",
+        )
+        mock_client.converse.assert_called_once()
+
+    @patch("response_generator.generator.boto3.client")
     def test_bedrock_throttling_cools_down_model_and_tries_fallback(
         self,
         mock_boto_client,
