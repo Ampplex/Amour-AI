@@ -21,7 +21,7 @@ import json
 
 from typing import Any, Literal, Mapping, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, AliasChoices
 
 
 # ============================================================
@@ -59,9 +59,11 @@ class CharacterState(BaseModel):
 
 
 class RelationshipState(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    characters: list[str]
+    characters: list[str] = Field(
+        validation_alias=AliasChoices("characters", "character_ids"),
+    )
     relationship: str
     current_dynamic: str = ""
 
@@ -159,10 +161,13 @@ CONSTRUCT THE COMPLETE STORYSTATE:
   identities or actions.
 
 2. RELATIONSHIPS
-- Include only relationships established by the premise.
-- Use the supplied character IDs.
-- Do not assume a relationship that is not established.
-- Use an empty list when no relationship is established.
+- Establish the baseline relationship between the persona and the user
+  from the memory prompt, tagline, and opening premise (e.g. "University friends",
+  "Close friends", "Colleagues", "Romantic partners", "Acquaintances").
+- Use the exact supplied character IDs (the persona's character_id and user's character_id).
+- Provide an appropriate "relationship" and "current_dynamic" based on their backstory.
+- Include additional relationships between other characters only when established by the premise.
+- Use an empty list only if the persona and user are complete strangers with no prior connection.
 
 3. PLOT THREADS
 - Include only established unresolved conflicts, mysteries,
@@ -218,7 +223,13 @@ StoryState schema exactly:
       "important_knowledge": []
     }
   },
-  "relationships": [],
+  "relationships": [
+    {
+      "characters": ["EXACT_PERSONA_CHARACTER_ID_FROM_CONTEXT", "user"],
+      "relationship": "",
+      "current_dynamic": ""
+    }
+  ],
   "plot_threads": [],
   "current_scene": {
     "location": "Unspecified",
@@ -376,84 +387,46 @@ Choose exactly ONE primary narrative decision:
 
 1. CONTINUE
 
-Continue the existing interaction naturally without
-introducing a meaningful change to the broader story.
-
-Examples:
-- Natural conversation.
-- Playful exchanges.
-- Responding to the user's questions.
-- Reacting to the user's actions.
-- Continuing an ongoing interaction.
+Continue the existing interaction naturally without introducing a
+meaningful change to the broader story.
+Select this ONLY when the interaction is routine conversation, casual
+pleasantries, or banter where no new characters, plot threads, or
+major relationship shifts occur.
+state_patch: {} (empty object).
 
 2. CHARACTER_DEVELOPMENT
 
-Develop a character's:
-- Emotional state.
-- Motivations.
-- Knowledge.
-- Intentions.
-- Behaviour.
-- Personal decisions.
-
-Examples:
-- A normally confident character becomes hesitant.
-- A character gradually becomes comfortable expressing
-  their feelings.
-- A character makes an independent decision.
+Select when:
+- A new named character is introduced or revealed in the dialogue.
+- An existing character undergoes an emotional shift, learns significant
+  new information, changes intentions, or makes a personal decision.
+state_patch: Propose additions or updates under "characters".
 
 3. RELATIONSHIP_DEVELOPMENT
 
-Develop or change the emotional dynamics between characters
-through meaningful interactions.
-
-Examples:
-- Growing affection.
-- Developing trust.
-- Increasing tension.
-- Emotional distance.
-- Reconciliation.
-- Developing attraction.
-
-Relationship changes must be supported by actual interactions.
-
-Do not arbitrarily modify relationship dynamics.
+Select when:
+- The emotional dynamic between the user and companion evolves
+  (deepening trust, tension, distance, affection, reconciliation).
+- A new relationship between characters is established or revealed.
+- An existing relationship changes its nature or dynamic.
+state_patch: Propose additions, updates, or removals under "relationships".
 
 4. PLOT_DEVELOPMENT
 
-Advance an existing plot thread, introduce a relevant
-revelation, create a consequential event or resolve
-an ongoing conflict.
-
-Examples:
-- A character acknowledges a hidden secret.
-- An existing mystery develops.
-- A previous event produces consequences.
-- A character discovers important information.
-- An ongoing conflict reaches a new stage.
-
-Prefer developing existing plot threads over introducing
-unrelated complications.
+Select when:
+- A new conflict, mystery, secret, goal, or unresolved story thread
+  is brought up or introduced.
+- An existing plot thread advances, reveals new developments, or
+  reaches resolution.
+state_patch: Propose additions, updates, or removals under "plot_threads".
 
 5. SCENE_TRANSITION
 
-Change the current location, time, setting or situation
-when naturally justified.
-
-Examples:
-- Characters leave a restaurant.
-- Characters arrive at a new location.
-- Time passes naturally.
-- An ongoing event moves to another setting.
-
-Do not force scene transitions.
-
-You may combine multiple types of developments in the
-actual narrative when appropriate, but select only ONE
-primary decision.
-
-Select CONTINUE when no meaningful development is
-appropriate.
+Select when:
+- The physical location, setting, or time shifts.
+- Characters arrive at or leave a scene.
+- Scene atmosphere or persistent continuity props change significantly.
+state_patch: Propose updates under "current_scene".
 
 ------------------------------------------------------------
 D. NARRATIVE RULES
@@ -732,6 +705,22 @@ PATCH PRINCIPLE:
   elements need to be added, modified or removed.
 - Use explicit operations for array modifications.
 
+STATE PATCH TRIGGER & DETECTION MATRIX:
+
+Examine the latest dialogue and context to identify all persistent developments:
+1. NEW CHARACTERS: When an external character is introduced with an established
+   name and role/connection, add them under "characters" with all 7 fields populated.
+2. RELATIONSHIPS: When a connection or interpersonal dynamic between any two characters
+   is revealed, established, or shifted, add or update it under "relationships".
+3. PLOT THREADS: When an unresolved conflict, mystery, secret, dispute, or objective
+   is brought up, add a new active thread under "plot_threads" (or update an existing one).
+4. EMOTION & KNOWLEDGE: When an event triggers an emotional shift, update the character's
+   "current_emotional_state". When a key fact is learned, add it to "important_knowledge".
+5. SCENE & ATMOSPHERE: When setting, mood, situation, or physical continuity objects
+   change, update "current_scene".
+6. STORY SUMMARY: When the overarching premise changes, update "story_summary".
+7. ROUTINE DIALOGUE: When none of the above occur, return an empty state_patch {}.
+
 PATCH SECTION ROUTING AND TARGET IDENTIFICATION (REQUIRED):
 
 The state_patch MUST be a JSON object. Its TOP-LEVEL KEYS identify
@@ -772,105 +761,136 @@ Use only these exact top-level keys:
    - Update "participants" and "continuity_details" using explicit
      "add" and "remove" arrays.
 
-The following examples show the COMPLETE required wrapper structure.
+The following examples show the COMPLETE required wrapper structure for each operation.
 Do not output bare operations outside their enclosing top-level key.
 
-STORY SUMMARY:
+1. STORY SUMMARY:
 {
-    "story_summary": "Maya and the user have reconciled after their disagreement."
+    "story_summary": "<Updated overall story narrative summary>"
 }
 
-CHARACTER:
+2. CHARACTER UPDATE (updating scalar and/or knowledge list for an existing character):
 {
     "characters": {
-        "maya": {
-            "current_emotional_state": "Anxious but willing to listen"
+        "<existing_character_id>": {
+            "current_emotional_state": "<Updated emotional state>",
+            "important_knowledge": {
+                "add": ["<New fact learned>"],
+                "remove": []
+            }
         }
     }
 }
 
-RELATIONSHIP UPDATE:
+3. NEW CHARACTER ADD (introducing a newly mentioned character - all 7 fields required):
+{
+    "characters": {
+        "<new_character_id>": {
+            "name": "<Character Full Name>",
+            "role": "<Role or connection to existing characters>",
+            "current_emotional_state": "<Initial emotional state>",
+            "current_physical_state": "",
+            "current_goal": "<Their current objective>",
+            "current_location": "<Their location or Unspecified>",
+            "important_knowledge": [
+                "<Important background fact or premise>"
+            ]
+        }
+    }
+}
+
+4. RELATIONSHIP UPDATE (updating dynamic or type between two existing characters):
 {
     "relationships": [
         {
             "op": "update",
-            "characters": ["maya", "user"],
+            "characters": ["<char_id_1>", "<char_id_2>"],
             "changes": {
-                "current_dynamic": "Growing mutual trust"
+                "current_dynamic": "<Updated emotional dynamic>"
             }
         }
     ]
 }
 
-RELATIONSHIP ADD:
+5. RELATIONSHIP ADD (establishing a new relationship between characters):
 {
     "relationships": [
         {
             "op": "add",
             "value": {
-                "characters": ["maya", "alex"],
-                "relationship": "Close friends",
-                "current_dynamic": "Growing mutual trust"
+                "characters": ["<char_id_1>", "<char_id_2>"],
+                "relationship": "<Type of relationship e.g. Mentor / Rivals / Estranged>",
+                "current_dynamic": "<Current interpersonal dynamic>"
             }
         }
     ]
 }
 
-RELATIONSHIP REMOVE:
+6. RELATIONSHIP REMOVE:
 {
     "relationships": [
         {
             "op": "remove",
-            "characters": ["maya", "alex"]
+            "characters": ["<char_id_1>", "<char_id_2>"]
         }
     ]
 }
 
-PLOT THREAD UPDATE:
-{
-    "plot_threads": [
-        {
-            "op": "update",
-            "id": "thread_1",
-            "changes": {
-                "description": "Maya has partially revealed her secret."
-            }
-        }
-    ]
-}
-
-PLOT THREAD ADD:
+7. PLOT THREAD ADD (introducing a new conflict, secret, or ongoing mystery):
 {
     "plot_threads": [
         {
             "op": "add",
             "value": {
-                "id": "thread_2",
-                "description": "An unknown person is contacting Maya.",
+                "id": "<stable_thread_identifier>",
+                "description": "<Description of the conflict, mystery, or goal>",
                 "status": "active",
-                "involved_characters": ["maya"]
+                "involved_characters": ["<char_id_1>", "<char_id_2>"]
             }
         }
     ]
 }
 
-PLOT THREAD REMOVE:
+8. PLOT THREAD UPDATE (advancing an existing plot thread):
 {
     "plot_threads": [
         {
-            "op": "remove",
-            "id": "thread_1"
+            "op": "update",
+            "id": "<existing_thread_id>",
+            "changes": {
+                "description": "<Updated description reflecting new developments>",
+                "status": "active"
+            }
         }
     ]
 }
 
-CURRENT SCENE:
+9. PLOT THREAD REMOVE (or mark resolved):
+{
+    "plot_threads": [
+        {
+            "op": "update",
+            "id": "<existing_thread_id>",
+            "changes": {
+                "status": "resolved"
+            }
+        }
+    ]
+}
+
+10. CURRENT SCENE (updating scene scalars, participants, or continuity props):
 {
     "current_scene": {
-        "situation": "Maya has acknowledged hiding something.",
+        "location": "<New location if changed>",
+        "atmosphere": "<Updated atmosphere>",
+        "situation": "<Updated situation>",
+        "participants": {
+            "add": ["<character_id_entering>"],
+            "remove": ["<character_id_leaving>"]
+        },
         "continuity_details": {
-            "add": ["Maya's phone has received a message"],
-            "remove": []
+            "add": ["<New prop or detail introduced>"],
+            "remove": ["<Prop or detail removed>"]
         }
     }
 }
@@ -1187,15 +1207,35 @@ or a direct user action that makes a planned beat inappropriate.
 C. CHARACTER RESPONSE GENERATION
 ------------------------------------------------------------
 
-Generate the actual user-facing response.
+Generate the actual user-facing response inside the "reply" field.
 
-The response must:
+The response is an immersive character reply that naturally weaves
+together three elements into a single coherent text:
+1. Spoken dialogue: What the character actually says.
+2. Body language & gestures: Facial expressions, eye contact, posture,
+   movements, and physical actions.
+3. Atmosphere & surroundings: Environmental sounds, lighting, setting
+   details, or physical objects when relevant.
+
+Immersion and formatting requirements:
+- Combine dialogue, physical gestures, and scene narration smoothly
+  inside "reply" (e.g. She looks away for a moment, then glances back.
+  "I was hoping you'd come.").
+- Preserve the companion directives for concise, conversational messaging
+  (1 to 3 short sentences total).
+- Calibrate narration to the context:
+  * In normal conversation: focus on dialogue with subtle gestures; do
+    not force unneeded descriptions of weather or background lighting.
+  * In emotional or tense interactions: emphasize facial expressions,
+    body language, and eye contact.
+  * In scene transitions: weave in surroundings, movement, and physical
+    details naturally.
+  * In dramatic or romantic moments: use richer sensory details while
+    maintaining brevity.
 - Preserve the persona's established identity and personality.
 - Respond directly to the user's message.
-- Execute the supplied narrative plan.
-- Include natural character dialogue and appropriate narration.
-- Integrate environmental and scene details naturally.
-- Maintain continuity with previous interactions.
+- Execute the supplied narrative plan (next_beat and scene_direction).
+- Maintain continuity with previous interactions and physical props.
 - Respect user agency.
 - Avoid exposing internal narrative planning.
 
@@ -1231,13 +1271,17 @@ The final state_patch MUST use the exact top-level StoryState section keys:
 
 For character changes, the path is:
 "characters" -> exact_character_id -> changed_property.
+For a newly introduced character, provide the complete CharacterState object with all 7 fields (name, role, current_emotional_state, current_physical_state, current_goal, current_location, important_knowledge).
 
 For relationship changes, always return the complete enclosing
-"relationships" list. Target an existing relationship by its
-"characters" IDs. Never return a bare operation object.
+"relationships" list.
+- To update: {"op": "update", "characters": [id1, id2], "changes": {...}}
+- To add: {"op": "add", "value": {"characters": [id1, id2], "relationship": "...", "current_dynamic": "..."}}
+- To remove: {"op": "remove", "characters": [id1, id2]}
+Never return a bare operation object.
 
 For plot-thread changes, always return the complete enclosing
-"plot_threads" list. Target an existing thread by its stable "id".
+"plot_threads" list. Target an existing thread by its stable "id", or use "op": "add" with full thread value.
 Never return a bare operation object.
 
 For scene changes, always use the "current_scene" wrapper.

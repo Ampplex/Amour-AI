@@ -6,13 +6,12 @@ log = logging.getLogger("amour.reeve")
 
 def _get_reeve_tools():
     try:
-        from reeve.tools import (
+        from threelane_memory.tools import (
             store_memory,
             query_memory,
             retrieve_memory_context,
             clear_memory,
             memory_config,
-            reset_client_cache,
         )
         return {
             "store_memory": store_memory,
@@ -20,10 +19,10 @@ def _get_reeve_tools():
             "retrieve_memory_context": retrieve_memory_context,
             "clear_memory": clear_memory,
             "memory_config": memory_config,
-            "reset_client_cache": reset_client_cache,
+            "reset_client_cache": lambda: None,
         }
     except Exception as e:
-        log.error("Failed to import reeve.tools: %s", e)
+        log.error("Failed to import threelane_memory.tools: %s", e)
         return None
 
 def check_reeve_neo4j_status() -> dict[str, Any]:

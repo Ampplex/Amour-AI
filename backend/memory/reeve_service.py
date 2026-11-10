@@ -63,19 +63,12 @@ except ImportError:
 
 def _get_memory_tools():
     """
-    Returns the memory operations tools module.
-    Prioritizes embedded in-process threelane_memory when NEO4J_URI is configured
-    (eliminating all external EC2/MCP network dependencies),
-    otherwise falls back to remote client reeve.tools.
+    Returns the local in-process memory operations tools module.
+    Exclusively uses local in-process threelane_memory against Neo4j Cloud.
+    External SSE and remote Reeve MCP network connections are completely disabled.
     """
-    if os.getenv("NEO4J_URI"):
-        try:
-            import threelane_memory.tools as tools
-            return tools, False
-        except ImportError:
-            pass
-    import reeve.tools as tools
-    return tools, True
+    import threelane_memory.tools as tools
+    return tools, False
 
 
 def get_reeve_status():
@@ -120,7 +113,7 @@ def store_memory_for_user(text: str, namespace: str, user_key: str = None):
     """
     tools, is_remote = _get_memory_tools()
     kwargs = {"speaker": namespace}
-    if user_key:
+    if user_key and is_remote:
         kwargs["user_key"] = user_key
 
     try:
@@ -139,7 +132,7 @@ def query_memory_for_user(question: str, namespace: str, user_key: str = None):
     """
     tools, is_remote = _get_memory_tools()
     kwargs = {"speaker": namespace}
-    if user_key:
+    if user_key and is_remote:
         kwargs["user_key"] = user_key
 
     try:
@@ -159,7 +152,7 @@ def retrieve_context_for_user(question: str, namespace: str, user_key: str = Non
     """
     tools, is_remote = _get_memory_tools()
     kwargs = {"speaker": namespace}
-    if user_key:
+    if user_key and is_remote:
         kwargs["user_key"] = user_key
 
     try:

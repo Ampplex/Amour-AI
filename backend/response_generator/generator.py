@@ -785,10 +785,11 @@ def _call_structured_llm(
 
         except (json.JSONDecodeError, ValidationError) as exc:
             logger.warning(
-                "%s: Invalid structured output from %s: %s. Trying fallback.",
+                "%s: Invalid structured output from %s: %s. Raw content: %s. Trying fallback.",
                 stage_name,
                 current_model,
                 exc,
+                raw_content if 'raw_content' in locals() else 'None',
             )
         except Exception as exc:
             logger.exception(
