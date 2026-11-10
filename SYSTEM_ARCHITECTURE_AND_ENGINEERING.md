@@ -1,6 +1,6 @@
 # Amour AI — Comprehensive System Architecture & Deep Engineering Specification
 
-Amour AI is a production-grade, multimodal AI companion and roleplay application built for iOS and Android. It integrates an **Expo React Native** frontend with a high-performance **Django REST Framework** backend, utilizing **Neon Lakebase PostgreSQL** as the persistent relational source of truth, **AWS S3** for media asset storage, **Reeve / Neo4j** for graph-based episodic memory, and **Groq LPUs** with automated multi-model cascading failover for sub-second, KV-cache-optimized natural language generation.
+Amour AI is a production-grade, multimodal AI companion and roleplay application built for iOS and Android. It integrates an **Expo React Native** frontend with a high-performance **Django REST Framework** backend, utilizing **Neon Lakebase PostgreSQL** as the persistent relational source of truth, **AWS S3** for media asset storage, **Reeve / Neo4j** for graph-based episodic memory, and **Amazon Bedrock Runtime (Mistral Large 3)** for the Story Director and Response Generator, with optional provider-level Groq compatibility.
 
 ---
 
@@ -62,8 +62,8 @@ flowchart TD
         NeonPG[("Neon Lakebase PostgreSQL")]
         S3Bucket[("AWS S3: reeve-devpilot-downloads")]
         ReeveGraph[("Reeve / Neo4j Episodic Graph")]
-        Bedrock["AWS Bedrock (Mistral Large Extraction)"]
-        Groq["Groq LPU (Qwen 27B -> GPT-OSS 120B -> GPT-OSS 20B)"]
+        Bedrock["AWS Bedrock Runtime (Mistral Large 3 chat inference + memory extraction)"]
+        Groq["Groq (optional legacy provider)"]
     end
 
     Client -->|REST API over ADB / LAN| Backend
@@ -72,7 +72,8 @@ flowchart TD
     MemApp -->|Relational Queries| NeonPG
     ReeveSvc -->|Smart Ingest & Combined Query| ReeveGraph
     ReeveGraph -.->|Knowledge Graph Extraction| Bedrock
-    ReeveSvc -->|KV-Cache Stable Prefixes| Groq
+    RespGen -->|Story Director + Response Generator| Bedrock
+    ReeveSvc -->|KV-Cache Stable Prefixes| Bedrock
 ```
 
 ---
@@ -367,7 +368,7 @@ erDiagram
 
 ## 4. Inference Engine, Prompt Caching & KV Cache Architecture
 
-Roleplay conversational generation is orchestrated by `backend/response_generator/generator.py` (decoupled from the Reeve memory retrieval service `backend/memory/reeve_service.py`), engineered for minimum latency, zero prompt degradation, and maximum **KV Cache Reuse** on modern LLM inference engines (Groq LPUs, Anthropic, vLLM).
+Roleplay conversational generation is orchestrated by `backend/response_generator/generator.py` (decoupled from the Reeve memory retrieval service `backend/memory/reeve_service.py`), engineered for minimum latency, zero prompt degradation, and maximum **KV Cache Reuse** on modern LLM inference engines, including Amazon Bedrock Runtime.
 
 ### 4.1 Prefix Stability & KV Cache Maximization
 
@@ -467,19 +468,22 @@ This retrieves personal facts, shared memories, and emotional conflict status in
 
 ---
 
-### 4.5 Automated Multi-Model Cascading Failover
+### 4.5 Amazon Bedrock Runtime Chat Inference
 
-To guarantee 99.99% uptime against Groq Free Tier Tokens-Per-Day (TPD) rate limits (HTTP 429), the LLM caller implements an automatic cascading failover:
+The Story Director and Response Generator use Amazon Bedrock Runtime's OpenAI-compatible Chat Completions endpoint. Mistral Large 3 is the default model:
 
-```python
-models_to_try = [
-    primary_model,           # 1. qwen/qwen3.8-27b (Default: High empathy, ultra-fast)
-    "openai/gpt-oss-120b",   # 2. First Fallback: Deep contextual roleplay
-    "openai/gpt-oss-20b",    # 3. Second Fallback: High throughput, guaranteed availability
-]
+```env
+LLM_PROVIDER=bedrock
+AWS_REGION=us-west-2
+AWS_BEARER_TOKEN_BEDROCK=<Amazon Bedrock API key>
+BEDROCK_MODEL_ID=mistral.mistral-large-3-675b-instruct
 ```
 
-If the primary model returns a 429 or non-200 code, the engine immediately retries with the next candidate in memory without user-facing errors.
+The runtime base URL is `https://bedrock-runtime.{region}.amazonaws.com/openai/v1`. The provider uses the Bedrock API key as a Bearer token. The region must have the selected model enabled. Bedrock's model card lists Mistral Large 3 in `us-west-2` and `ap-south-1`, among other regions.
+
+Optional failover models must be configured explicitly through `BEDROCK_FALLBACK_MODEL_IDS` and must be available in the same selected region. The application does not silently send Bedrock model IDs to Groq or Mistral's direct API.
+
+Groq remains available only when `LLM_PROVIDER=groq` is explicitly selected.
 
 ---
 
@@ -532,7 +536,7 @@ Standard AI chatbots suffer from "breakup amnesia" and fold on the first simple 
 | `backend/memory/models.py` | Persona, Chat, Like, Follow schemas | Neon PostgreSQL UUID keys, client idempotency keys |
 | `backend/memory/views.py` | Feed, Chat, & Persona endpoints | Paginated history, idempotency check, seed ingestion |
 | `backend/memory/reeve_service.py` | Memory & retrieval service | Reeve LTM Neo4j integration, client-managed zero-knowledge encryption |
-| `backend/response_generator/` | Main response generator | Prompt caching, KV cache stability, 30m time bucket, Groq failover |
+| `backend/response_generator/` | Main response generator | Bedrock Runtime Mistral Large 3, compact repair, patch validation, prompt caching, 30m time bucket |
 
 ---
 
