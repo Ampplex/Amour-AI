@@ -7,6 +7,7 @@ output sanitization, and LLM inference outside the memory/Reeve service director
 
 from .generator import (
     generate_companion_reply,
+    initialize_story_state,
     sanitize_companion_reply,
     strip_emojis,
     GLOBAL_COMPANION_DIRECTIVES,
@@ -15,6 +16,7 @@ from .generator import (
 
 __all__ = [
     "generate_companion_reply",
+    "initialize_story_state",
     "sanitize_companion_reply",
     "strip_emojis",
     "GLOBAL_COMPANION_DIRECTIVES",

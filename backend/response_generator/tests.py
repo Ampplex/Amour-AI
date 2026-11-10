@@ -2,16 +2,21 @@ import json
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
+from django.test import TestCase as DjangoTestCase
+
 from pydantic import ValidationError
 
 from response_generator import (
     GLOBAL_COMPANION_DIRECTIVES,
     generate_companion_reply,
     get_bucketed_time_str,
+    initialize_story_state,
     sanitize_companion_reply,
     strip_emojis,
 )
+from memory.models import CompanionStoryState
 from response_generator.story_director import (
+    StoryState,
     CompanionReplyOutput,
     NARRATIVE_DECISIONS,
     RESPONSE_GENERATOR_PROMPT,
@@ -277,3 +282,231 @@ class StructuredOutputTests(TestCase):
         for payload in cases:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
                 CompanionReplyOutput.model_validate(payload)
+
+
+
+TEST_PERSONA_ID = "123e4567-e89b-12d3-a456-426614174000"
+TEST_PERSONA_CHARACTER_ID = "persona_123e4567_e89b_12d3_a456_426614174000"
+
+VALID_INITIAL_STORY_STATE = {
+    "schema_version": 1,
+    "story_summary": "Maya and the user have just begun their story.",
+    "characters": {
+        TEST_PERSONA_CHARACTER_ID: {
+            "name": "Maya",
+            "role": "Main character",
+            "current_emotional_state": "Friendly and curious",
+            "current_physical_state": "",
+            "current_goal": "Get to know the user",
+            "current_location": "University",
+            "important_knowledge": [],
+        },
+        "user": {
+            "name": "Test User",
+            "role": "User",
+            "current_emotional_state": "",
+            "current_physical_state": "",
+            "current_goal": "",
+            "current_location": "",
+            "important_knowledge": [],
+        },
+    },
+    "relationships": [
+        {
+            "characters": [TEST_PERSONA_CHARACTER_ID, "user"],
+            "relationship": "Potential romantic connection",
+            "current_dynamic": "Getting to know each other",
+        }
+    ],
+    "plot_threads": [],
+    "current_scene": {
+        "location": "University",
+        "time": "Evening",
+        "participants": [TEST_PERSONA_CHARACTER_ID, "user"],
+        "situation": "Beginning their first interaction",
+        "atmosphere": "Relaxed and welcoming",
+        "continuity_details": [],
+    },
+}
+
+
+class StoryStateInitializationTests(DjangoTestCase):
+    def setUp(self):
+        self.namespace = f"usr_test-user_persona_{TEST_PERSONA_ID}"
+        self.initialization_args = {
+            "namespace": self.namespace,
+            "persona_id": TEST_PERSONA_ID,
+            "persona_name": "Maya",
+            "persona_age": 23,
+            "persona_tagline": "A friendly university companion",
+            "greeting": "Maya notices you entering the library.",
+            "memory_prompt": "Maya is friendly, curious and independent.",
+            "user_name": "Test User",
+            "client_time": "",
+            "client_timezone": "Asia/Kolkata",
+        }
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_initializes_and_persists_state(self, mock_llm):
+        mock_llm.return_value = (VALID_INITIAL_STORY_STATE, "test-model")
+
+        result = initialize_story_state(**self.initialization_args)
+
+        self.assertIsNotNone(result)
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(record.state, result.model_dump(mode="json"))
+        self.assertEqual(record.schema_version, 1)
+        self.assertEqual(record.revision, 1)
+        mock_llm.assert_called_once()
+
+        call_kwargs = mock_llm.call_args.kwargs
+        self.assertIs(call_kwargs["output_model"], StoryState)
+        self.assertEqual(call_kwargs["stage_name"], "story_state_initialization")
+        serialized_context = call_kwargs["messages"][1]["content"]
+        self.assertIn(TEST_PERSONA_CHARACTER_ID, serialized_context)
+        self.assertIn('"character_id": "user"', serialized_context)
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_existing_state_is_reused_without_llm_call(self, mock_llm):
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=VALID_INITIAL_STORY_STATE,
+            schema_version=1,
+            revision=1,
+        )
+
+        result = initialize_story_state(**self.initialization_args)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.characters[TEST_PERSONA_CHARACTER_ID].name, "Maya")
+        mock_llm.assert_not_called()
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_existing_state_is_returned_even_without_premise(self, mock_llm):
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=VALID_INITIAL_STORY_STATE,
+            schema_version=1,
+            revision=1,
+        )
+
+        result = initialize_story_state(
+            namespace=self.namespace,
+            persona_id=TEST_PERSONA_ID,
+            persona_name="Maya",
+        )
+
+        self.assertIsNotNone(result)
+        mock_llm.assert_not_called()
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_llm_failure_does_not_persist_state(self, mock_llm):
+        mock_llm.return_value = (None, None)
+
+        result = initialize_story_state(**self.initialization_args)
+
+        self.assertIsNone(result)
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertIsNone(record.state)
+        self.assertEqual(record.revision, 0)
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_missing_premise_skips_without_creating_row(self, mock_llm):
+        result = initialize_story_state(
+            namespace=self.namespace,
+            persona_id=TEST_PERSONA_ID,
+            persona_name="Maya",
+        )
+
+        self.assertIsNone(result)
+        self.assertFalse(
+            CompanionStoryState.objects.filter(
+                namespace=self.namespace
+            ).exists()
+        )
+        mock_llm.assert_not_called()
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_missing_main_persona_is_rejected(self, mock_llm):
+        invalid_state = {
+            **VALID_INITIAL_STORY_STATE,
+            "characters": {
+                "user": VALID_INITIAL_STORY_STATE["characters"]["user"],
+            },
+        }
+        mock_llm.return_value = (invalid_state, "test-model")
+
+        result = initialize_story_state(**self.initialization_args)
+
+        self.assertIsNone(result)
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertIsNone(record.state)
+        self.assertEqual(record.revision, 0)
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_missing_user_is_rejected(self, mock_llm):
+        invalid_state = {
+            **VALID_INITIAL_STORY_STATE,
+            "characters": {
+                TEST_PERSONA_CHARACTER_ID: (
+                    VALID_INITIAL_STORY_STATE["characters"][TEST_PERSONA_CHARACTER_ID]
+                ),
+            },
+        }
+        mock_llm.return_value = (invalid_state, "test-model")
+
+        result = initialize_story_state(**self.initialization_args)
+
+        self.assertIsNone(result)
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertIsNone(record.state)
+        self.assertEqual(record.revision, 0)
+
+    @patch("response_generator.generator._call_structured_llm")
+    def test_concurrent_initializer_does_not_overwrite_winning_state(
+        self, mock_llm
+    ):
+        winning_state = {
+            **VALID_INITIAL_STORY_STATE,
+            "story_summary": "The competing request initialized this world.",
+        }
+
+        def simulate_other_request_wins(**kwargs):
+            CompanionStoryState.objects.filter(
+                namespace=self.namespace
+            ).update(
+                state=winning_state,
+                schema_version=1,
+                revision=1,
+            )
+            return VALID_INITIAL_STORY_STATE, "test-model"
+
+        mock_llm.side_effect = simulate_other_request_wins
+
+        result = initialize_story_state(**self.initialization_args)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.story_summary,
+            "The competing request initialized this world.",
+        )
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(record.state, winning_state)
+        self.assertEqual(record.revision, 1)
+
+    def test_story_state_rejects_unknown_nested_fields(self):
+        invalid_state = {
+            **VALID_INITIAL_STORY_STATE,
+            "characters": {
+                TEST_PERSONA_CHARACTER_ID: {
+                    **VALID_INITIAL_STORY_STATE["characters"][
+                        TEST_PERSONA_CHARACTER_ID
+                    ],
+                    "unexpected_field": "must be rejected",
+                },
+                "user": VALID_INITIAL_STORY_STATE["characters"]["user"],
+            },
+        }
+
+        with self.assertRaises(ValidationError):
+            StoryState.model_validate(invalid_state)

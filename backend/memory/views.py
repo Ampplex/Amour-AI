@@ -16,7 +16,11 @@ from .reeve_service import (
     retrieve_context_for_user,
     clear_user_memories,
 )
-from response_generator import generate_companion_reply, strip_emojis
+from response_generator import (
+    generate_companion_reply,
+    initialize_story_state,
+    strip_emojis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +184,7 @@ class ChatMemoryView(APIView):
         persona_name = request.data.get("persona_name", "")
         greeting = request.data.get("greeting", "")
         memory_prompt = request.data.get("memory_prompt", "")
+        persona_tagline = (request.data.get("persona_tagline") or "").strip()
         client_time = request.data.get("client_time", "")
         client_timezone = request.data.get("client_timezone", "")
         user_name = request.data.get("user_name", "").strip()
@@ -251,6 +256,8 @@ class ChatMemoryView(APIView):
                         greeting = persona_obj.greeting
                     if not memory_prompt:
                         memory_prompt = persona_obj.memory_prompt
+                    if not persona_tagline:
+                        persona_tagline = persona_obj.tagline
                     # Increment chat count
                     Persona.objects.filter(id=persona_id).update(chats_count=F("chats_count") + 1)
             except Exception:
@@ -315,6 +322,32 @@ class ChatMemoryView(APIView):
             )
         except Exception as e:
             logger.warning(f"Could not persist user message to DB: {e}")
+
+        # Initialize the canonical fictional world once per user-persona namespace.
+        # This reuses existing state and never blocks normal chat on failure.
+        try:
+            initialized_story_state = initialize_story_state(
+                namespace=namespace,
+                persona_id=str(persona_id),
+                persona_name=persona_name or "Companion",
+                persona_age=persona_age,
+                persona_tagline=persona_tagline,
+                greeting=greeting,
+                memory_prompt=memory_prompt,
+                user_name=user_name,
+                client_time=client_time,
+                client_timezone=client_timezone,
+            )
+            if initialized_story_state is None:
+                logger.warning(
+                    "StoryState remains uninitialized for namespace %s.",
+                    namespace,
+                )
+        except Exception:
+            logger.exception(
+                "Unexpected StoryState initialization error for namespace %s.",
+                namespace,
+            )
 
         # 2. Generate companion reply (Reeve memory graph storage, recall, dialogue context, and Groq LLM)
         try:

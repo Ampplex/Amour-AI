@@ -15,6 +15,7 @@ import logging
 from datetime import datetime
 import requests
 from django.conf import settings
+from django.utils import timezone
 from pydantic import BaseModel, ValidationError
 
 from memory.reeve_service import (
@@ -27,6 +28,8 @@ from .story_director import (
     RESPONSE_GENERATOR_PROMPT,
     StoryDirectorOutput,
     CompanionReplyOutput,
+    StoryState,
+    STORY_STATE_INITIALIZATION_PROMPT,
 )
 
 logger = logging.getLogger("amour.response_generator")
@@ -120,7 +123,12 @@ def _call_structured_llm(
 
     for current_model in models_to_try:
         try:
-            token_budget = 900 if stage_name == "story_director" else 500
+            token_budgets = {
+                "story_director": 900,
+                "response_generator": 500,
+                "story_state_initialization": 1400,
+            }
+            token_budget = token_budgets.get(stage_name, 500)
             if "gpt-oss" in current_model:
                 token_budget *= 2
 
@@ -225,6 +233,245 @@ def _call_structured_llm(
 
     logger.error("%s: All configured models failed.", stage_name)
     return None, None
+
+
+
+def initialize_story_state(
+    namespace: str,
+    persona_id: str,
+    persona_name: str,
+    persona_age: int | None = None,
+    persona_tagline: str = "",
+    greeting: str = "",
+    memory_prompt: str = "",
+    user_name: str = "",
+    client_time: str | None = None,
+    client_timezone: str | None = None,
+) -> StoryState | None:
+    """
+    Initialize the canonical StoryState once per user-persona
+    namespace. Existing initialized state is always authoritative.
+
+    Check for existing state before requiring premise fields so a
+    temporary omission in a later request cannot hide an existing world.
+    """
+    from memory.models import CompanionStoryState
+
+    if not namespace or not persona_id:
+        logger.error(
+            "StoryState initialization requires namespace and persona_id."
+        )
+        return None
+
+    # Existing state is checked first. No premise is needed to reuse it.
+    try:
+        record = CompanionStoryState.objects.filter(
+            namespace=namespace
+        ).first()
+    except Exception:
+        logger.exception(
+            "Could not look up StoryState record for %s.",
+            namespace,
+        )
+        return None
+
+    if record is not None and record.state is not None:
+        try:
+            existing_state = StoryState.model_validate(record.state)
+            if existing_state.schema_version != record.schema_version:
+                raise ValueError("Stored StoryState schema version mismatch.")
+            return existing_state
+        except Exception:
+            logger.exception(
+                "Stored StoryState is invalid for %s. Refusing to overwrite it.",
+                namespace,
+            )
+            return None
+
+    # Avoid creating an empty row or fictional world without source material.
+    has_premise = any(
+        value.strip()
+        for value in (persona_tagline, greeting, memory_prompt)
+        if isinstance(value, str)
+    )
+    if not has_premise:
+        logger.info(
+            "Skipping StoryState initialization for %s: no persona premise.",
+            namespace,
+        )
+        return None
+
+    try:
+        if record is None:
+            record, _ = CompanionStoryState.objects.get_or_create(
+                namespace=namespace,
+            )
+
+        # A concurrent request may have initialized the row after the first read.
+        record.refresh_from_db()
+        if record.state is not None:
+            existing_state = StoryState.model_validate(record.state)
+            if existing_state.schema_version != record.schema_version:
+                raise ValueError("Stored StoryState schema version mismatch.")
+            return existing_state
+
+        # A nonzero revision without a state is inconsistent; do not reset it.
+        if record.revision != 0:
+            logger.error(
+                "StoryState has no state but revision=%s for %s.",
+                record.revision,
+                namespace,
+            )
+            return None
+    except Exception:
+        logger.exception(
+            "Could not prepare StoryState record for %s.",
+            namespace,
+        )
+        return None
+
+    # The Persona primary key is stable; its display name may change.
+    safe_persona_id = re.sub(
+        r"[^a-z0-9_]+",
+        "_",
+        str(persona_id).lower(),
+    ).strip("_")
+    if not safe_persona_id:
+        logger.error("Invalid persona ID for StoryState namespace %s.", namespace)
+        return None
+
+    persona_character_id = f"persona_{safe_persona_id}"
+    user_character_id = "user"
+
+    initialization_context = {
+        "persona": {
+            "character_id": persona_character_id,
+            "name": persona_name or "Companion",
+            "age": persona_age,
+            "tagline": persona_tagline,
+            "memory_prompt": memory_prompt,
+            "opening_greeting": greeting,
+        },
+        "user": {
+            "character_id": user_character_id,
+            "display_name": user_name or "User",
+        },
+        "temporal_context": get_bucketed_time_str(
+            client_time,
+            client_timezone,
+        ),
+    }
+
+    messages = [
+        {
+            "role": "system",
+            "content": STORY_STATE_INITIALIZATION_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": (
+                "Initialize the canonical fictional world from the following "
+                "source information. Use the exact character IDs supplied.\n\n"
+                + json.dumps(
+                    initialization_context,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            ),
+        },
+    ]
+
+    # Reuse the existing response pipeline's credentials and model failover.
+    groq_api_key = (
+        getattr(settings, "GROQ_API_KEY", "")
+        or os.environ.get("GROQ_API_KEY", "")
+    )
+    llm_base_url = (
+        getattr(settings, "LLM_BASE_URL", "")
+        or os.environ.get(
+            "LLM_BASE_URL",
+            "https://api.groq.com/openai/v1",
+        )
+    ).rstrip("/")
+    primary_model = (
+        getattr(settings, "LLM_MODEL", "")
+        or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+    )
+
+    models_to_try = [primary_model]
+    for fallback in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
+
+    initialized_data, initialization_model = _call_structured_llm(
+        messages=messages,
+        output_model=StoryState,
+        stage_name="story_state_initialization",
+        groq_api_key=groq_api_key,
+        llm_base_url=llm_base_url,
+        models_to_try=models_to_try,
+    )
+
+    if initialized_data is None:
+        logger.error("StoryState initialization failed for %s.", namespace)
+        return None
+
+    # The Pydantic schema validates structure; these checks enforce the
+    # application's requirement that both primary participants exist.
+    try:
+        initialized_state = StoryState.model_validate(initialized_data)
+        if initialized_state.schema_version != 1:
+            raise ValueError("Unsupported StoryState schema version.")
+        if persona_character_id not in initialized_state.characters:
+            raise ValueError("Main persona is missing from StoryState.")
+        if user_character_id not in initialized_state.characters:
+            raise ValueError("User is missing from StoryState.")
+    except Exception:
+        logger.exception(
+            "Generated StoryState failed semantic validation for %s.",
+            namespace,
+        )
+        return None
+
+    state_data = initialized_state.model_dump(mode="json")
+
+    # Compare-and-set: only one concurrent initializer can save revision 1.
+    try:
+        updated = CompanionStoryState.objects.filter(
+            pk=record.pk,
+            state__isnull=True,
+            revision=0,
+        ).update(
+            state=state_data,
+            schema_version=initialized_state.schema_version,
+            revision=1,
+            updated_at=timezone.now(),
+        )
+
+        if updated == 1:
+            logger.info(
+                "Initialized StoryState for %s using model %s.",
+                namespace,
+                initialization_model,
+            )
+            return initialized_state
+
+        # Another request won the race. Reuse its canonical state.
+        record.refresh_from_db()
+        if record.state is not None:
+            return StoryState.model_validate(record.state)
+
+        logger.error(
+            "StoryState conditional save failed and no stored state exists for %s.",
+            namespace,
+        )
+        return None
+    except Exception:
+        logger.exception(
+            "Could not persist initialized StoryState for %s.",
+            namespace,
+        )
+        return None
 
 
 def _build_llm_messages(
