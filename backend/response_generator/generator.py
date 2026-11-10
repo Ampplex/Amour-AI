@@ -54,7 +54,7 @@ def _get_llm_configuration() -> tuple[str, str, list[str]]:
     Resolve the API key, endpoint and model chain for the selected provider.
 
     Amazon Bedrock Runtime is the default chat inference provider. Its
-    OpenAI-compatible Chat Completions endpoint lets both generation stages
+    Converse API lets both generation stages
     share the existing request/response parsing code.
     """
     provider = (
@@ -196,14 +196,18 @@ def _rate_limit_cooldown_seconds(headers) -> float:
     Providers may expose Retry-After and request/token reset headers. Taking
     the longest reset avoids retrying while a quota remains exhausted.
     """
+    normalized_headers = {
+        str(key).casefold(): value
+        for key, value in (headers or {}).items()
+    }
     candidates = []
     for header in (
-        "Retry-After",
+        "retry-after",
         "retry-after-ms",
         "x-ratelimit-reset-requests",
         "x-ratelimit-reset-tokens",
     ):
-        value = headers.get(header) if headers is not None else None
+        value = normalized_headers.get(header)
         delay = _parse_rate_limit_delay(
             value,
             milliseconds=(header == "retry-after-ms"),
@@ -438,12 +442,17 @@ def _invoke_bedrock_converse(
         region_name=region,
     )
     start_time = time.time()
-    response = client.converse(
-        modelId=request["modelId"],
-        system=request["system"],
-        messages=request["messages"],
-        inferenceConfig=request["inferenceConfig"],
-    )
+    try:
+        response = client.converse(
+            modelId=request["modelId"],
+            system=request["system"],
+            messages=request["messages"],
+            inferenceConfig=request["inferenceConfig"],
+        )
+    except ClientError as exc:
+        # Preserve the exact serialized input size for provider diagnostics.
+        exc.amour_request_bytes = request_bytes
+        raise
     duration = time.time() - start_time
 
     content_blocks = (
@@ -732,7 +741,7 @@ def _call_structured_llm(
                     "provider_request_id=%s error=%s",
                     stage_name,
                     current_model,
-                    request_bytes if "request_bytes" in locals() else 0,
+                    getattr(exc, "amour_request_bytes", 0),
                     metadata.get("RequestId"),
                     error_message[:500],
                 )
