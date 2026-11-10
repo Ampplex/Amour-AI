@@ -48,33 +48,49 @@ logger = logging.getLogger("amour.response_generator")
 
 def _get_llm_configuration() -> tuple[str, str, list[str]]:
     """
-    Resolve an API key, endpoint and model chain for one selected provider.
-    Provider-specific defaults prevent sending model IDs to the wrong API.
+    Resolve the API key, endpoint and model chain for the selected provider.
+
+    Amazon Bedrock Runtime is the default chat inference provider. Its
+    OpenAI-compatible Chat Completions endpoint lets both generation stages
+    share the existing request/response parsing code.
     """
     provider = (
         getattr(settings, "LLM_PROVIDER", "")
-        or os.environ.get("LLM_PROVIDER", "mistral")
+        or os.environ.get("LLM_PROVIDER", "bedrock")
     ).strip().lower()
 
-    if provider == "mistral":
+    if provider == "bedrock":
         api_key = (
-            getattr(settings, "MISTRAL_API_KEY", "")
-            or os.environ.get("MISTRAL_API_KEY", "")
+            getattr(settings, "AWS_BEARER_TOKEN_BEDROCK", "")
+            or os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
+            or getattr(settings, "BEDROCK_API_KEY", "")
+            or os.environ.get("BEDROCK_API_KEY", "")
+        )
+        region = (
+            getattr(settings, "AWS_REGION", "")
+            or os.environ.get("AWS_REGION", "us-west-2")
         )
         base_url = (
             getattr(settings, "LLM_BASE_URL", "")
-            or os.environ.get("MISTRAL_BASE_URL", "https://api.mistral.ai/v1")
+            or os.environ.get(
+                "BEDROCK_BASE_URL",
+                f"https://bedrock-runtime.{region}.amazonaws.com/openai/v1",
+            )
         ).rstrip("/")
         primary_model = (
             getattr(settings, "LLM_MODEL", "")
-            or os.environ.get("MISTRAL_MODEL", "mistral-large-4")
+            or os.environ.get(
+                "BEDROCK_MODEL_ID",
+                "mistral.mistral-large-3-675b-instruct",
+            )
         )
         fallback_models = getattr(settings, "LLM_FALLBACK_MODELS", ())
         if not fallback_models:
             fallback_models = tuple(
                 item.strip()
                 for item in os.environ.get(
-                    "MISTRAL_FALLBACK_MODELS", "mistral-small-2603"
+                    "BEDROCK_FALLBACK_MODEL_IDS",
+                    "",
                 ).split(",")
                 if item.strip()
             )
@@ -87,7 +103,7 @@ def _get_llm_configuration() -> tuple[str, str, list[str]]:
             getattr(settings, "LLM_BASE_URL", "")
             or os.environ.get(
                 "GROQ_BASE_URL",
-                os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1"),
+                "https://api.groq.com/openai/v1",
             )
         ).rstrip("/")
         primary_model = (
@@ -174,8 +190,8 @@ def _rate_limit_cooldown_seconds(headers) -> float:
     """
     Read the longest available provider reset hint.
 
-    Groq exposes Retry-After and model request/token reset headers. Taking
-    the longest reset avoids retrying while either quota remains exhausted.
+    Providers may expose Retry-After and request/token reset headers. Taking
+    the longest reset avoids retrying while a quota remains exhausted.
     """
     candidates = []
     for header in (
@@ -403,6 +419,8 @@ def _call_structured_llm(
                 provider_request_id = (
                     response_headers.get("x-request-id")
                     or response_headers.get("request-id")
+                    or response_headers.get("x-amzn-requestid")
+                    or response_headers.get("x-amzn-request-id")
                     or response_headers.get("x-mistral-request-id")
                 )
                 logger.error(
@@ -439,6 +457,8 @@ def _call_structured_llm(
                 provider_request_id = (
                     response_headers.get("x-request-id")
                     or response_headers.get("request-id")
+                    or response_headers.get("x-amzn-requestid")
+                    or response_headers.get("x-amzn-request-id")
                     or response_headers.get("x-mistral-request-id")
                 )
                 logger.warning(
