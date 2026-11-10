@@ -433,7 +433,8 @@ def _repair_structured_output(
             "VALIDATION ERRORS:\n"
             + json.dumps(errors, ensure_ascii=False, indent=2)
             + "\n\n"
-            + (repair_context + "\n\n" if repair_context else "")            + repair_instructions
+            + (repair_context + "\n\n" if repair_context else "")
+            + repair_instructions
             + "\n\nReturn the complete corrected structured output "
             "as JSON only. Do not use Markdown fences or explanations."
         )
@@ -732,7 +733,8 @@ def initialize_story_state(
             raise ValueError("User is missing from StoryState.")
     except Exception:
         logger.exception(
-            "Generated StoryState failed semantic validation for %s.",            namespace,
+            "Generated StoryState failed semantic validation for %s.",
+            namespace,
         )
         return None
 
@@ -1031,7 +1033,8 @@ def generate_companion_reply(
         or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
     )
 
-    models_to_try = [primary_model]    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+    models_to_try = [primary_model]
+    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
         if fallback not in models_to_try:
             models_to_try.append(fallback)
 
