@@ -470,7 +470,7 @@ This retrieves personal facts, shared memories, and emotional conflict status in
 
 ### 4.5 Amazon Bedrock Runtime Chat Inference
 
-The Story Director and Response Generator use Amazon Bedrock Runtime's OpenAI-compatible Chat Completions endpoint. Mistral Large v1 is the default model:
+The Story Director and Response Generator use the native Amazon Bedrock Runtime Converse API through Boto3. Mistral Large v1 is the default model:
 
 ```env
 LLM_PROVIDER=bedrock
@@ -479,7 +479,7 @@ AWS_BEARER_TOKEN_BEDROCK=<Amazon Bedrock API key>
 BEDROCK_MODEL_ID=mistral.mistral-large-2402-v1:0
 ```
 
-The runtime base URL is `https://bedrock-runtime.{region}.amazonaws.com`. The provider uses the Bedrock API key as a Bearer token. The region must have the selected model enabled. Mistral Large v1 supports Converse and Invoke, not Chat Completions; the implementation therefore uses `bedrock-runtime` `Converse`. Bedrock's model card lists Mistral Large v1 in `us-west-2` and `ap-south-1`, among other regions.
+The runtime base URL is `https://bedrock-runtime.{region}.amazonaws.com`. Boto3 1.39.0 or later reads `AWS_BEARER_TOKEN_BEDROCK` for Bedrock API-key authentication. The region must have the selected model enabled. Mistral Large v1 uses model ID `mistral.mistral-large-2402-v1:0`; it supports Converse and Invoke, not Chat Completions. AWS lists a 32K context window, 4K max output and in-region availability including `us-west-2` and `ap-south-1`.
 
 Optional failover models must be configured explicitly through `BEDROCK_FALLBACK_MODEL_IDS` and must be available in the same selected region. The application does not silently send Bedrock model IDs to Groq or Mistral's direct API.
 
