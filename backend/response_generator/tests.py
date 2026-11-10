@@ -18,6 +18,7 @@ from response_generator import (
 from memory.models import CompanionStoryState
 from response_generator.state_patch_validator import (
     PatchValidationError,
+    normalize_story_state_patch,
     validate_story_state_patch,
     validate_patch_scope,
 )
@@ -432,7 +433,7 @@ class ResponseGeneratorUnitTests(TestCase):
         )
 
         self.assertEqual(result["reply"], "")
-        self.assertEqual(mock_post.call_count, 3)
+        self.assertEqual(mock_post.call_count, 2)
         mock_store.assert_called_once()
 
     @patch("response_generator.generator.requests.post")
@@ -459,7 +460,7 @@ class ResponseGeneratorUnitTests(TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["reply"], "")
         self.assertEqual(result["decision"], VALID_STORY_PLAN["decision"])
-        self.assertEqual(mock_post.call_count, 4)
+        self.assertEqual(mock_post.call_count, 3)
 
 
 class StructuredOutputTests(TestCase):
@@ -866,6 +867,26 @@ class StoryStatePatchValidationTests(TestCase):
         result = validate_story_state_patch({}, self.state)
         self.assertEqual(result, {})
 
+    def test_empty_top_level_sections_are_normalized(self):
+        patch = {
+            "characters": {},
+            "relationships": [],
+            "plot_threads": [],
+            "current_scene": {},
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, {})
+
+    def test_normalization_does_not_hide_invalid_character_targets(self):
+        patch = {
+            "plot_threads": [],
+            "characters": {
+                "ghost": {"current_emotional_state": "Angry"}
+            },
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
     def test_valid_existing_character_update(self):
         patch = {
             "characters": {
@@ -1175,6 +1196,20 @@ class StoryStatePatchRepairTests(TestCase):
     def setUp(self):
         self.story_state = make_patch_test_story_state()
 
+    def test_compact_repair_context_only_includes_targeted_state(self):
+        from response_generator.generator import _build_story_state_repair_context
+
+        context = _build_story_state_repair_context(
+            self.story_state,
+            {"characters": {"maya": {"current_emotional_state": "Relieved"}}},
+        )
+
+        self.assertIn("maya", context["target_characters"])
+        self.assertIn("known_character_ids", context)
+        self.assertNotIn("existing_relationships", context)
+        self.assertNotIn("target_plot_threads", context)
+        self.assertNotIn("current_scene", context)
+
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
@@ -1211,11 +1246,14 @@ class StoryStatePatchRepairTests(TestCase):
             mock_post.call_args_list[1]
             .kwargs["json"]["messages"]
         )
-        self.assertIn(
-            "VALIDATION ERRORS",
+        self.assertEqual(len(repair_messages), 2)
+        repair_payload = json.loads(repair_messages[-1]["content"])
+        self.assertIn("validation_errors", repair_payload)
+        self.assertIn("ghost", repair_messages[-1]["content"])
+        self.assertNotIn(
+            "UNIVERSAL COMPANION DIRECTIVES",
             repair_messages[-1]["content"],
         )
-        self.assertIn("ghost", repair_messages[-1]["content"])
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1257,8 +1295,15 @@ class StoryStatePatchRepairTests(TestCase):
             mock_post.call_args_list[2]
             .kwargs["json"]["messages"]
         )
-        self.assertIn("planner-approved scope", repair_messages[-1]["content"])
-        self.assertIn("AUTHORITATIVE CURRENT CANONICAL STORYSTATE", repair_messages[-1]["content"])
+        self.assertEqual(len(repair_messages), 2)
+        repair_payload = json.loads(repair_messages[-1]["content"])
+        self.assertIn("planner-approved scope", repair_payload["repair_instructions"])
+        self.assertIn("canonical_story_state", repair_payload["relevant_context"])
+        self.assertIn("validated_story_director_plan", repair_payload["relevant_context"])
+        self.assertNotIn(
+            "UNIVERSAL COMPANION DIRECTIVES",
+            repair_messages[-1]["content"],
+        )
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
