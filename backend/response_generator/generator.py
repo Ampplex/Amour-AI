@@ -46,6 +46,76 @@ from .state_patch_applier import (
 
 logger = logging.getLogger("amour.response_generator")
 
+def _get_llm_configuration() -> tuple[str, str, list[str]]:
+    """
+    Resolve an API key, endpoint and model chain for one selected provider.
+    Provider-specific defaults prevent sending model IDs to the wrong API.
+    """
+    provider = (
+        getattr(settings, "LLM_PROVIDER", "")
+        or os.environ.get("LLM_PROVIDER", "mistral")
+    ).strip().lower()
+
+    if provider == "mistral":
+        api_key = (
+            getattr(settings, "MISTRAL_API_KEY", "")
+            or os.environ.get("MISTRAL_API_KEY", "")
+        )
+        base_url = (
+            getattr(settings, "LLM_BASE_URL", "")
+            or os.environ.get("MISTRAL_BASE_URL", "https://api.mistral.ai/v1")
+        ).rstrip("/")
+        primary_model = (
+            getattr(settings, "LLM_MODEL", "")
+            or os.environ.get("MISTRAL_MODEL", "mistral-large-4")
+        )
+        fallback_models = getattr(settings, "LLM_FALLBACK_MODELS", ())
+        if not fallback_models:
+            fallback_models = tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "MISTRAL_FALLBACK_MODELS", "mistral-small-2603"
+                ).split(",")
+                if item.strip()
+            )
+    elif provider == "groq":
+        api_key = (
+            getattr(settings, "GROQ_API_KEY", "")
+            or os.environ.get("GROQ_API_KEY", "")
+        )
+        base_url = (
+            getattr(settings, "LLM_BASE_URL", "")
+            or os.environ.get(
+                "GROQ_BASE_URL",
+                os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1"),
+            )
+        ).rstrip("/")
+        primary_model = (
+            getattr(settings, "LLM_MODEL", "")
+            or os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
+        )
+        fallback_models = getattr(settings, "LLM_FALLBACK_MODELS", ())
+        if not fallback_models:
+            fallback_models = tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "GROQ_FALLBACK_MODELS",
+                    "openai/gpt-oss-120b,openai/gpt-oss-20b",
+                ).split(",")
+                if item.strip()
+            )
+    else:
+        logger.error("Unsupported LLM_PROVIDER: %s", provider)
+        return "", "", []
+
+    models = []
+    for model in [primary_model, *fallback_models]:
+        if model and model not in models:
+            models.append(model)
+
+    return api_key, base_url, models
+
+
 # Rate limits are model-scoped by default because a provider may still allow
 # another model while one model's request/token quota is exhausted. Cooldowns
 # live for the lifetime of this process and prevent repeated requests from
@@ -233,7 +303,7 @@ def _call_structured_llm(
     messages: list,
     output_model: type[BaseModel],
     stage_name: str,
-    groq_api_key: str,
+    llm_api_key: str,
     llm_base_url: str,
     models_to_try: list[str],
 ):
@@ -243,12 +313,12 @@ def _call_structured_llm(
     Returns (validated_output, successful_model), or (None, None)
     when every configured model fails.
     """
-    if not groq_api_key:
-        logger.error("%s: GROQ_API_KEY is not configured.", stage_name)
+    if not llm_api_key:
+        logger.error("%s: API key is not configured for the selected LLM provider.", stage_name)
         return None, None
 
     headers = {
-        "Authorization": f"Bearer {groq_api_key}",
+        "Authorization": f"Bearer {llm_api_key}",
         "Content-Type": "application/json",
     }
 
@@ -285,8 +355,21 @@ def _call_structured_llm(
                 "max_tokens": token_budget,
                 "frequency_penalty": 0.6,
                 "presence_penalty": 0.4,
+                # Keep JSON mode until dynamic state_patch structures are
+                # formalized into a provider-compatible strict JSON Schema.
                 "response_format": {"type": "json_object"},
             }
+            request_bytes = len(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            message_character_counts = [
+                len(str(item.get("content", "")))
+                for item in messages
+            ]
 
             url = f"{llm_base_url}/chat/completions"
             start_time = time.time()
@@ -315,13 +398,48 @@ def _call_structured_llm(
                 )
                 continue
 
+            if response.status_code == 413:
+                response_headers = getattr(response, "headers", {})
+                provider_request_id = (
+                    response_headers.get("x-request-id")
+                    or response_headers.get("request-id")
+                    or response_headers.get("x-mistral-request-id")
+                )
+                logger.error(
+                    (
+                        "%s: HTTP 413 request too large. model=%s "
+                        "request_bytes=%s message_count=%s "
+                        "largest_message_chars=%s provider_request_id=%s "
+                        "provider_error=%s"
+                    ),
+                    stage_name,
+                    current_model,
+                    request_bytes,
+                    len(messages),
+                    max(message_character_counts, default=0),
+                    provider_request_id,
+                    getattr(response, "text", "")[:500],
+                )
+                continue
+
             if response.status_code != 200:
+                response_headers = getattr(response, "headers", {})
+                provider_request_id = (
+                    response_headers.get("x-request-id")
+                    or response_headers.get("request-id")
+                    or response_headers.get("x-mistral-request-id")
+                )
                 logger.warning(
-                    "%s: Model %s returned %s: %s. Trying fallback.",
+                    (
+                        "%s: Model %s returned HTTP %s. request_bytes=%s "
+                        "provider_request_id=%s provider_error=%s. Trying fallback."
+                    ),
                     stage_name,
                     current_model,
                     response.status_code,
-                    getattr(response, "text", "")[:120],
+                    request_bytes,
+                    provider_request_id,
+                    getattr(response, "text", "")[:500],
                 )
                 continue
 
@@ -389,93 +507,173 @@ def _call_structured_llm(
 MAX_PATCH_REPAIR_ATTEMPTS = 2
 
 
+def _build_story_state_repair_context(
+    story_state: StoryState | None,
+    candidate_patch: dict,
+) -> dict:
+    """Project only canonical state relevant to the proposed patch."""
+    if story_state is None:
+        return {}
+
+    candidate_patch = candidate_patch if isinstance(candidate_patch, dict) else {}
+    context = {
+        "known_character_ids": sorted(story_state.characters.keys()),
+    }
+
+    if "characters" in candidate_patch:
+        targets = candidate_patch.get("characters", {})
+        if isinstance(targets, dict):
+            context["target_characters"] = {
+                character_id: story_state.characters[character_id].model_dump(
+                    mode="json"
+                )
+                for character_id in targets
+                if character_id in story_state.characters
+            }
+
+    if "relationships" in candidate_patch:
+        context["existing_relationships"] = [
+            relationship.model_dump(mode="json")
+            for relationship in story_state.relationships
+        ]
+
+    if "plot_threads" in candidate_patch:
+        context["known_plot_thread_ids"] = [
+            thread.id for thread in story_state.plot_threads
+        ]
+        requested_ids = set()
+        operations = candidate_patch.get("plot_threads", [])
+        if isinstance(operations, list):
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    continue
+                thread_id = operation.get("id")
+                value = operation.get("value")
+                if not thread_id and isinstance(value, dict):
+                    thread_id = value.get("id")
+                if isinstance(thread_id, str):
+                    requested_ids.add(thread_id)
+        context["target_plot_threads"] = [
+            thread.model_dump(mode="json")
+            for thread in story_state.plot_threads
+            if thread.id in requested_ids
+        ]
+
+    if "current_scene" in candidate_patch:
+        context["current_scene"] = story_state.current_scene.model_dump(
+            mode="json"
+        )
+
+    if "story_summary" in candidate_patch:
+        context["current_story_summary"] = story_state.story_summary
+
+    return context
+
+
+def _build_compact_repair_messages(
+    *,
+    candidate: dict,
+    errors: list[str],
+    output_model: type[BaseModel],
+    repair_instructions: str,
+    repair_context: dict,
+    attempt: int,
+) -> list:
+    """Build a minimal correction request without the original chat history."""
+    repair_payload = {
+        "attempt": attempt,
+        "required_output_schema": output_model.model_json_schema(),
+        "previous_output": candidate,
+        "validation_errors": errors,
+        "relevant_context": repair_context or {},
+        "repair_instructions": repair_instructions,
+    }
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a structured-output correction component. Correct "
+                "the previous JSON output using the validation errors and "
+                "supplied context. Preserve valid fields and narrative intent. "
+                "Do not invent identifiers or changes. Return the complete "
+                "corrected JSON object only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                repair_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+    ]
+
+
 def _repair_structured_output(
     *,
     initial_output: dict,
     initial_errors: list[str],
-    base_messages: list,
     output_model: type[BaseModel],
     stage_name: str,
     validator: Callable[[dict], dict],
     repair_instructions: str,
-    groq_api_key: str,
+    llm_api_key: str,
     llm_base_url: str,
     models_to_try: list[str],
-    repair_context: str = "",
+    repair_context: dict | None = None,
 ) -> tuple[dict | None, list[str]]:
     """
-    Correct a schema-valid output whose state patch failed deterministic
-    validation. Each correction reuses the original stage context, includes
-    the previous candidate and diagnostics, and is revalidated in Python.
+    Repair schema-valid output with a compact request.
 
-    _call_structured_llm retains its existing model failover behavior.
+    A failed API/model request is not repeated with an identical payload.
+    Another semantic repair is allowed only after the model returns a
+    schema-valid candidate that still fails deterministic patch validation.
     """
     candidate = deepcopy(initial_output)
     errors = list(initial_errors)
 
     for attempt in range(1, MAX_PATCH_REPAIR_ATTEMPTS + 1):
-        repair_messages = deepcopy(base_messages)
-
-        repair_messages.append({
-            "role": "assistant",
-            "content": json.dumps(
-                candidate,
-                ensure_ascii=False,
-                indent=2,
-            ),
-        })
-
-        repair_prompt = (
-            "Your previous structured output failed deterministic "
-            "StoryState patch validation.\n\n"
-            f"REPAIR ATTEMPT: {attempt} OF "
-            f"{MAX_PATCH_REPAIR_ATTEMPTS}\n\n"
-            "VALIDATION ERRORS:\n"
-            + json.dumps(errors, ensure_ascii=False, indent=2)
-            + "\n\n"
-            + (repair_context + "\n\n" if repair_context else "")
-            + repair_instructions
-            + "\n\nReturn the complete corrected structured output "
-            "as JSON only. Do not use Markdown fences or explanations."
+        repair_messages = _build_compact_repair_messages(
+            candidate=candidate,
+            errors=errors,
+            output_model=output_model,
+            repair_instructions=repair_instructions,
+            repair_context=repair_context or {},
+            attempt=attempt,
         )
-
-        repair_messages.append({
-            "role": "user",
-            "content": repair_prompt,
-        })
 
         repaired_output, repaired_model = _call_structured_llm(
             messages=repair_messages,
             output_model=output_model,
             stage_name=stage_name,
-            groq_api_key=groq_api_key,
+            llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             models_to_try=models_to_try,
         )
 
         if repaired_output is None:
             errors = [
-                "Correction attempt did not produce output matching "
-                "the required structured schema."
+                "Compact repair request did not produce schema-valid output."
             ]
             logger.warning(
-                "%s: Repair attempt %s did not produce schema-valid output.",
+                "%s: Repair attempt %s failed across configured models; "
+                "not repeating an identical repair request.",
                 stage_name,
                 attempt,
             )
-            continue
+            break
 
         try:
             validated_output = validator(repaired_output)
             logger.info(
-                "%s: Patch validation succeeded on repair attempt %s "
-                "using model %s.",
+                "%s: Patch validation succeeded on repair attempt %s using %s.",
                 stage_name,
                 attempt,
                 repaired_model,
             )
             return validated_output, []
-
         except PatchValidationError as exc:
             candidate = repaired_output
             errors = exc.errors
@@ -486,11 +684,7 @@ def _repair_structured_output(
                 errors,
             )
 
-    logger.error(
-        "%s: Exhausted %s patch repair attempts.",
-        stage_name,
-        MAX_PATCH_REPAIR_ATTEMPTS,
-    )
+    logger.error("%s: Exhausted compact repair attempts.", stage_name)
     return None, errors
 
 
@@ -686,33 +880,14 @@ def initialize_story_state(
         },
     ]
 
-    # Reuse the existing response pipeline's credentials and model failover.
-    groq_api_key = (
-        getattr(settings, "GROQ_API_KEY", "")
-        or os.environ.get("GROQ_API_KEY", "")
-    )
-    llm_base_url = (
-        getattr(settings, "LLM_BASE_URL", "")
-        or os.environ.get(
-            "LLM_BASE_URL",
-            "https://api.groq.com/openai/v1",
-        )
-    ).rstrip("/")
-    primary_model = (
-        getattr(settings, "LLM_MODEL", "")
-        or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
-    )
-
-    models_to_try = [primary_model]
-    for fallback in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
+    # Reuse provider-selected credentials and model failover.
+    llm_api_key, llm_base_url, models_to_try = _get_llm_configuration()
 
     initialized_data, initialization_model = _call_structured_llm(
         messages=messages,
         output_model=StoryState,
         stage_name="story_state_initialization",
-        groq_api_key=groq_api_key,
+        llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         models_to_try=models_to_try,
     )
@@ -1016,27 +1191,8 @@ def generate_companion_reply(
 
     shared_system_prompt = "\n\n".join(prompt_sections)
 
-    # 7. LLM configuration shared by both stages.
-    groq_api_key = (
-        getattr(settings, "GROQ_API_KEY", "")
-        or os.environ.get("GROQ_API_KEY", "")
-    )
-    llm_base_url = (
-        getattr(settings, "LLM_BASE_URL", "")
-        or os.environ.get(
-            "LLM_BASE_URL",
-            "https://api.groq.com/openai/v1",
-        )
-    ).rstrip("/")
-    primary_model = (
-        getattr(settings, "LLM_MODEL", "")
-        or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
-    )
-
-    models_to_try = [primary_model]
-    for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
+    # 7. Provider configuration shared by both stages.
+    llm_api_key, llm_base_url, models_to_try = _get_llm_configuration()
 
     # 8. STORY DIRECTOR: PREPARE AND EXECUTE THE FIRST LLM REQUEST.
     # This step only assembles the messages; it does not call the LLM.
@@ -1055,7 +1211,7 @@ def generate_companion_reply(
         messages=planner_messages,
         output_model=StoryDirectorOutput,
         stage_name="story_director",
-        groq_api_key=groq_api_key,
+        llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         models_to_try=models_to_try,
     )
@@ -1090,10 +1246,13 @@ def generate_companion_reply(
         story_plan, repair_errors = _repair_structured_output(
             initial_output=story_plan,
             initial_errors=exc.errors,
-            base_messages=planner_messages,
             output_model=StoryDirectorOutput,
             stage_name="story_director_patch_repair",
             validator=validate_planner_candidate,
+            repair_context=_build_story_state_repair_context(
+                story_state,
+                story_plan.get("state_patch", {}),
+            ),
             repair_instructions=(
                 "You are correcting your own Story Director output.\n"
                 "Preserve the original narrative decision, focus, next beat "
@@ -1107,7 +1266,7 @@ def generate_companion_reply(
                 "safely, return an empty state_patch object.\n"
                 "Return all five StoryDirectorOutput fields."
             ),
-            groq_api_key=groq_api_key,
+            llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             models_to_try=models_to_try,
         )
@@ -1153,7 +1312,7 @@ def generate_companion_reply(
         messages=writer_messages,
         output_model=CompanionReplyOutput,
         stage_name="response_generator",
-        groq_api_key=groq_api_key,
+        llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         models_to_try=models_to_try,
     )
@@ -1188,30 +1347,35 @@ def generate_companion_reply(
             exc.errors,
         )
 
-        repair_context = ""
-        if story_state is not None:
-            repair_context = (
-                "AUTHORITATIVE CURRENT CANONICAL STORYSTATE (read-only):\n"
-                + json.dumps(
-                    story_state.model_dump(mode="json"),
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
+        repair_context = {
+            "current_user_message": message,
+            "validated_story_director_plan": {
+                "decision": story_plan["decision"],
+                "focus": story_plan["focus"],
+                "next_beat": story_plan["next_beat"],
+                "scene_direction": story_plan["scene_direction"],
+                "state_patch": story_plan["state_patch"],
+            },
+            "canonical_story_state": _build_story_state_repair_context(
+                story_state,
+                writer_output.get("state_patch", {}),
+            ),
+        }
 
         writer_output, repair_errors = _repair_structured_output(
             initial_output=writer_output,
             initial_errors=exc.errors,
-            base_messages=writer_messages,
             output_model=CompanionReplyOutput,
             stage_name="response_generator_patch_repair",
             validator=validate_writer_candidate,
             repair_instructions=(
                 "You are correcting your previous Response Generator output.\n"
-                "Regenerate BOTH the final user-facing reply and state_patch.\n"
+                "Preserve the original reply unless it conflicts with the "
+                "validated plan or corrected patch. Correct the state_patch.\n"
                 "The reply and final state_patch must describe the same "
                 "fictional development.\n"
-                "Follow the validated Story Director plan included in the "
+                "Remain within planner-approved scope. Follow the validated "
+                "Story Director plan included in the "
                 "original request.\n"
                 "Do not introduce new characters, relationship operations, "
                 "plot threads, scene fields or state changes outside the "
@@ -1224,7 +1388,7 @@ def generate_companion_reply(
                 "state_patch object.\n"
                 "Return all three CompanionReplyOutput fields."
             ),
-            groq_api_key=groq_api_key,
+            llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             models_to_try=models_to_try,
             repair_context=repair_context,
