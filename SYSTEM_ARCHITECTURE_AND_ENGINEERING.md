@@ -1,6 +1,6 @@
 # Amour AI — Comprehensive System Architecture & Deep Engineering Specification
 
-Amour AI is a production-grade, multimodal AI companion and roleplay application built for iOS and Android. It integrates an **Expo React Native** frontend with a high-performance **Django REST Framework** backend, utilizing **Neon Lakebase PostgreSQL** as the persistent relational source of truth, **AWS S3** for media asset storage, **Reeve / Neo4j** for graph-based episodic memory, and **Amazon Bedrock Runtime (Mistral Large 3)** for the Story Director and Response Generator, with optional provider-level Groq compatibility.
+Amour AI is a production-grade, multimodal AI companion and roleplay application built for iOS and Android. It integrates an **Expo React Native** frontend with a high-performance **Django REST Framework** backend, utilizing **Neon Lakebase PostgreSQL** as the persistent relational source of truth, **AWS S3** for media asset storage, **Reeve / Neo4j** for graph-based episodic memory, and **Amazon Bedrock Runtime (Mistral Large v1)** for the Story Director and Response Generator, with optional provider-level Groq compatibility.
 
 ---
 
@@ -62,7 +62,7 @@ flowchart TD
         NeonPG[("Neon Lakebase PostgreSQL")]
         S3Bucket[("AWS S3: reeve-devpilot-downloads")]
         ReeveGraph[("Reeve / Neo4j Episodic Graph")]
-        Bedrock["AWS Bedrock Runtime (Mistral Large 3 chat inference + memory extraction)"]
+        Bedrock["AWS Bedrock Runtime (Mistral Large v1 chat inference + memory extraction)"]
         Groq["Groq (optional legacy provider)"]
     end
 
@@ -436,7 +436,7 @@ Consecutive messages sent within any 30-minute conversation window share the exa
 
 ### 4.3 Smart Ingestion Filter (Cost & Latency Optimization)
 
-In companion roleplay, users frequently send short affirmations or greetings (`"ok"`, `"hi"`, `"good night"`, `"yeah"`). Running heavy entity extraction via AWS Bedrock (Mistral Large 3) on these messages wastes compute, inflates costs, and adds 2-4 seconds of graph extraction latency.
+In companion roleplay, users frequently send short affirmations or greetings (`"ok"`, `"hi"`, `"good night"`, `"yeah"`). Running heavy entity extraction via AWS Bedrock (Mistral Large v1) on these messages wastes compute, inflates costs, and adds 2-4 seconds of graph extraction latency.
 
 `should_ingest_into_reeve(text)` acts as a semantic gate:
 
@@ -470,16 +470,16 @@ This retrieves personal facts, shared memories, and emotional conflict status in
 
 ### 4.5 Amazon Bedrock Runtime Chat Inference
 
-The Story Director and Response Generator use Amazon Bedrock Runtime's OpenAI-compatible Chat Completions endpoint. Mistral Large 3 is the default model:
+The Story Director and Response Generator use Amazon Bedrock Runtime's OpenAI-compatible Chat Completions endpoint. Mistral Large v1 is the default model:
 
 ```env
 LLM_PROVIDER=bedrock
 AWS_REGION=us-west-2
 AWS_BEARER_TOKEN_BEDROCK=<Amazon Bedrock API key>
-BEDROCK_MODEL_ID=mistral.mistral-large-3-675b-instruct
+BEDROCK_MODEL_ID=mistral.mistral-large-2402-v1:0
 ```
 
-The runtime base URL is `https://bedrock-runtime.{region}.amazonaws.com/openai/v1`. The provider uses the Bedrock API key as a Bearer token. The region must have the selected model enabled. Bedrock's model card lists Mistral Large 3 in `us-west-2` and `ap-south-1`, among other regions.
+The runtime base URL is `https://bedrock-runtime.{region}.amazonaws.com`. The provider uses the Bedrock API key as a Bearer token. The region must have the selected model enabled. Mistral Large v1 supports Converse and Invoke, not Chat Completions; the implementation therefore uses `bedrock-runtime` `Converse`. Bedrock's model card lists Mistral Large v1 in `us-west-2` and `ap-south-1`, among other regions.
 
 Optional failover models must be configured explicitly through `BEDROCK_FALLBACK_MODEL_IDS` and must be available in the same selected region. The application does not silently send Bedrock model IDs to Groq or Mistral's direct API.
 
@@ -536,7 +536,7 @@ Standard AI chatbots suffer from "breakup amnesia" and fold on the first simple 
 | `backend/memory/models.py` | Persona, Chat, Like, Follow schemas | Neon PostgreSQL UUID keys, client idempotency keys |
 | `backend/memory/views.py` | Feed, Chat, & Persona endpoints | Paginated history, idempotency check, seed ingestion |
 | `backend/memory/reeve_service.py` | Memory & retrieval service | Reeve LTM Neo4j integration, client-managed zero-knowledge encryption |
-| `backend/response_generator/` | Main response generator | Bedrock Runtime Mistral Large 3, compact repair, patch validation, prompt caching, 30m time bucket |
+| `backend/response_generator/` | Main response generator | Bedrock Runtime Mistral Large v1, compact repair, patch validation, prompt caching, 30m time bucket |
 
 ---
 
