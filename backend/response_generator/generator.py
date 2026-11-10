@@ -420,7 +420,19 @@ def _call_structured_llm(
                     provider_request_id,
                     getattr(response, "text", "")[:500],
                 )
-                continue
+                # A payload-size rejection applies to the request, not just
+                # sampling quality. Do not resend the same body to a fallback.
+                return None, None
+
+            if response.status_code in {400, 401, 403, 422}:
+                logger.error(
+                    "%s: Non-retryable HTTP %s from %s: %s",
+                    stage_name,
+                    response.status_code,
+                    current_model,
+                    getattr(response, "text", "")[:500],
+                )
+                return None, None
 
             if response.status_code != 200:
                 response_headers = getattr(response, "headers", {})
