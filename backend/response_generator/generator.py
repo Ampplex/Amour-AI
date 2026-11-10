@@ -395,9 +395,9 @@ def _invoke_bedrock_converse(
     """
     Invoke Mistral Large v1 through the Bedrock Converse API.
 
-    Mistral Large v1 supports Invoke and Converse on bedrock-runtime but
-    does not support Bedrock Chat Completions. Boto3 >= 1.39.0 reads the
-    existing AWS IAM credentials through Boto3's default credential chain.
+    Mistral Large v1 uses Bedrock Runtime Converse, not Chat Completions.
+    Boto3 uses the AWS credentials already available in the application's
+    standard credential chain; no explicit key is passed to the client.
     """
     parsed_url = urlparse(llm_base_url)
     hostname = parsed_url.hostname or ""
