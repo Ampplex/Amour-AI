@@ -398,19 +398,45 @@ class ChatMemoryView(APIView):
                 # FEATURE 4: Pass the retrieved canonical world to the planner.
                 story_state=story_state,
             )
-            reply_text = result.get("reply", "").strip()
-            new_conflict_stage = result.get("conflict_stage", current_conflict_stage)
+            # FEATURE 5: Do not persist conversation metadata when generation
+            # or patch repair has failed.
+            if result.get("success") is False:
+                error_info = result.get("error", {})
+                logger.error(
+                    "Companion generation failed. namespace=%s stage=%s code=%s",
+                    namespace,
+                    error_info.get("stage"),
+                    error_info.get("code"),
+                )
+                return Response(
+                    {
+                        "error": "Unable to generate a consistent companion response.",
+                        "code": error_info.get(
+                            "code",
+                            "COMPANION_GENERATION_FAILED",
+                        ),
+                        "stage": error_info.get("stage"),
+                    },
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
 
-            # Persist updated conflict stage into PostgreSQL database
-            if rel_state.conflict_stage != new_conflict_stage:
-                rel_state.conflict_stage = new_conflict_stage
-                rel_state.save(update_fields=["conflict_stage", "updated_at"])
+            reply_text = result.get("reply", "").strip()
 
             if not reply_text:
                 return Response(
                     {"error": "Failed to generate companion reply from model"},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
+
+            new_conflict_stage = result.get(
+                "conflict_stage",
+                current_conflict_stage,
+            )
+
+            # Persist updated conflict stage only after a usable reply exists.
+            if rel_state.conflict_stage != new_conflict_stage:
+                rel_state.conflict_stage = new_conflict_stage
+                rel_state.save(update_fields=["conflict_stage", "updated_at"])
 
             # 3. Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
             try:

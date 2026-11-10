@@ -16,6 +16,11 @@ from response_generator import (
     strip_emojis,
 )
 from memory.models import CompanionStoryState
+from response_generator.state_patch_validator import (
+    PatchValidationError,
+    validate_story_state_patch,
+    validate_patch_scope,
+)
 from response_generator.story_director import (
     StoryState,
     CompanionReplyOutput,
@@ -80,6 +85,69 @@ def make_mock_response(payload, status_code=200):
     return response
 
 
+def make_patch_test_story_state():
+    return StoryState.model_validate({
+        "schema_version": 1,
+        "story_summary": "Maya and John are navigating their relationship.",
+        "characters": {
+            "maya": {
+                "name": "Maya",
+                "role": "Main character",
+                "current_emotional_state": "Hurt",
+                "current_physical_state": "Healthy",
+                "current_goal": "Understand John's actions",
+                "current_location": "University",
+                "important_knowledge": [
+                    "Maya knows about the secret"
+                ],
+            },
+            "user": {
+                "name": "John",
+                "role": "User",
+                "current_emotional_state": "",
+                "current_physical_state": "",
+                "current_goal": "",
+                "current_location": "University",
+                "important_knowledge": [],
+            },
+            "alex": {
+                "name": "Alex",
+                "role": "Maya's friend",
+                "current_emotional_state": "Curious",
+                "current_physical_state": "",
+                "current_goal": "Understand the situation",
+                "current_location": "University",
+                "important_knowledge": [],
+            },
+        },
+        "relationships": [
+            {
+                "characters": ["maya", "user"],
+                "relationship": "Friends",
+                "current_dynamic": "Guarded",
+            }
+        ],
+        "plot_threads": [
+            {
+                "id": "thread_1",
+                "description": "An unresolved secret",
+                "status": "active",
+                "involved_characters": ["maya"],
+            }
+        ],
+        "current_scene": {
+            "location": "University",
+            "time": "Evening",
+            "participants": ["maya", "user"],
+            "situation": "Maya is avoiding John",
+            "atmosphere": "Tense",
+            "continuity_details": [
+                "Maya's phone is on the table"
+            ],
+        },
+    })
+
+
 class ResponseGeneratorUnitTests(TestCase):
     def test_strip_emojis(self):
         sample = "Hello! ❤️ 😊 Have a great day! 🔥"
@@ -124,8 +192,10 @@ class ResponseGeneratorUnitTests(TestCase):
                 {"role": "assistant", "content": "I remember."},
             ],
             user_key="user-123",
+            story_state=make_patch_test_story_state(),
         )
 
+        self.assertTrue(result["success"])
         self.assertEqual(result["reply"], VALID_WRITER_OUTPUT["reply"])
         self.assertEqual(result["conflict_stage"], 2)
         self.assertEqual(result["decision"], "RELATIONSHIP_DEVELOPMENT")
@@ -271,9 +341,17 @@ class ResponseGeneratorUnitTests(TestCase):
     ):
         mock_retrieve.return_value = ""
 
+        empty_story_plan = {
+            **VALID_STORY_PLAN,
+            "state_patch": {},
+        }
+        empty_writer_output = {
+            **VALID_WRITER_OUTPUT,
+            "state_patch": {},
+        }
         mock_post.side_effect = [
-            make_mock_response(VALID_STORY_PLAN),
-            make_mock_response(VALID_WRITER_OUTPUT),
+            make_mock_response(empty_story_plan),
+            make_mock_response(empty_writer_output),
         ]
 
         result = generate_companion_reply(
@@ -283,6 +361,7 @@ class ResponseGeneratorUnitTests(TestCase):
             story_state=None,
         )
 
+        self.assertTrue(result["success"])
         self.assertEqual(
             result["reply"],
             VALID_WRITER_OUTPUT["reply"],
@@ -322,8 +401,10 @@ class ResponseGeneratorUnitTests(TestCase):
             message="Hi",
             namespace="user_123_companion_456",
             persona_name="Aria",
+            story_state=make_patch_test_story_state(),
         )
 
+        self.assertTrue(result["success"])
         self.assertEqual(result["reply"], VALID_WRITER_OUTPUT["reply"])
         self.assertEqual(mock_post.call_count, 3)
 
@@ -368,8 +449,10 @@ class ResponseGeneratorUnitTests(TestCase):
             message="Hi",
             namespace="user_123_companion_456",
             persona_name="Aria",
+            story_state=make_patch_test_story_state(),
         )
 
+        self.assertFalse(result["success"])
         self.assertEqual(result["reply"], "")
         self.assertEqual(result["decision"], VALID_STORY_PLAN["decision"])
         self.assertEqual(mock_post.call_count, 4)
@@ -768,3 +851,480 @@ class StoryStateRetrievalTests(DjangoTestCase):
         result = retrieve_story_state("")
         self.assertIsNone(result)
 
+
+
+class StoryStatePatchValidationTests(TestCase):
+
+    def setUp(self):
+        self.state = make_patch_test_story_state()
+
+    def test_empty_patch_is_valid(self):
+        result = validate_story_state_patch({}, self.state)
+        self.assertEqual(result, {})
+
+    def test_valid_existing_character_update(self):
+        patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Gradually softening"
+                }
+            }
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, patch)
+
+    def test_unknown_character_is_rejected(self):
+        patch = {
+            "characters": {
+                "unknown_person": {
+                    "current_emotional_state": "Angry"
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_existing_character_name_cannot_be_changed(self):
+        patch = {
+            "characters": {
+                "maya": {
+                    "name": "Different Name"
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_complete_new_character_is_valid(self):
+        patch = {
+            "characters": {
+                "new_character": {
+                    "name": "New Character",
+                    "role": "University student",
+                    "current_emotional_state": "Curious",
+                    "current_physical_state": "",
+                    "current_goal": "Meet Maya",
+                    "current_location": "University",
+                    "important_knowledge": [],
+                }
+            }
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, patch)
+
+    def test_incomplete_new_character_is_rejected(self):
+        patch = {
+            "characters": {
+                "new_character": {
+                    "name": "New Character"
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_important_knowledge_add_remove(self):
+        patch = {
+            "characters": {
+                "maya": {
+                    "important_knowledge": {
+                        "add": ["John knows about the secret"],
+                        "remove": ["Maya knows about the secret"],
+                    }
+                }
+            }
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, patch)
+
+    def test_important_knowledge_direct_replacement_rejected(self):
+        patch = {
+            "characters": {
+                "maya": {
+                    "important_knowledge": ["New knowledge"]
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_relationship_update(self):
+        patch = {
+            "relationships": [
+                {
+                    "op": "update",
+                    "characters": ["maya", "user"],
+                    "changes": {
+                        "current_dynamic": "Growing mutual trust"
+                    },
+                }
+            ]
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, patch)
+
+    def test_relationship_update_target_must_exist(self):
+        patch = {
+            "relationships": [
+                {
+                    "op": "update",
+                    "characters": ["maya", "alex"],
+                    "changes": {
+                        "current_dynamic": "Growing trust"
+                    },
+                }
+            ]
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_duplicate_relationship_add_is_rejected(self):
+        patch = {
+            "relationships": [
+                {
+                    "op": "add",
+                    "value": {
+                        "characters": ["maya", "user"],
+                        "relationship": "Close friends",
+                        "current_dynamic": "Trusting",
+                    },
+                }
+            ]
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_valid_plot_thread_update(self):
+        patch = {
+            "plot_threads": [
+                {
+                    "op": "update",
+                    "id": "thread_1",
+                    "changes": {
+                        "status": "resolved"
+                    },
+                }
+            ]
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, patch)
+
+    def test_duplicate_plot_thread_id_is_rejected(self):
+        patch = {
+            "plot_threads": [
+                {
+                    "op": "add",
+                    "value": {
+                        "id": "thread_1",
+                        "description": "Another secret",
+                        "status": "active",
+                        "involved_characters": ["maya"],
+                    },
+                }
+            ]
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_invalid_plot_thread_status_is_rejected(self):
+        patch = {
+            "plot_threads": [
+                {
+                    "op": "update",
+                    "id": "thread_1",
+                    "changes": {
+                        "status": "pending"
+                    },
+                }
+            ]
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_valid_scene_update_and_array_operations(self):
+        patch = {
+            "current_scene": {
+                "situation": "Maya has started explaining herself",
+                "continuity_details": {
+                    "add": ["Maya picks up her phone"],
+                    "remove": ["Maya's phone is on the table"],
+                },
+                "participants": {
+                    "add": ["alex"],
+                    "remove": [],
+                },
+            }
+        }
+        result = validate_story_state_patch(patch, self.state)
+        self.assertEqual(result, patch)
+
+    def test_unknown_scene_participant_is_rejected(self):
+        patch = {
+            "current_scene": {
+                "participants": {
+                    "add": ["unknown_person"],
+                    "remove": [],
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_schema_version_cannot_be_patched(self):
+        patch = {"schema_version": 2}
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, self.state)
+
+    def test_non_empty_patch_requires_story_state(self):
+        patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Happy"
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_story_state_patch(patch, None)
+
+    def test_writer_cannot_expand_planner_scope(self):
+        planner_patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Softening"
+                }
+            }
+        }
+        final_patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Still hurt",
+                    "current_goal": "Leave the university",
+                }
+            }
+        }
+        with self.assertRaises(PatchValidationError):
+            validate_patch_scope(final_patch, planner_patch)
+
+    def test_writer_can_keep_planner_approved_new_character(self):
+        new_character = {
+            "name": "New Character",
+            "role": "University student",
+            "current_emotional_state": "Curious",
+            "current_physical_state": "",
+            "current_goal": "Meet Maya",
+            "current_location": "University",
+            "important_knowledge": ["Already knows Maya"],
+        }
+        planner_patch = {
+            "characters": {
+                "new_character": new_character,
+            }
+        }
+        final_patch = {
+            "characters": {
+                "new_character": dict(new_character),
+            }
+        }
+
+        result = validate_story_state_patch(
+            final_patch,
+            self.state,
+            planner_patch=planner_patch,
+        )
+        self.assertEqual(result, final_patch)
+
+    def test_writer_can_refine_approved_field(self):
+        planner_patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Softening"
+                }
+            }
+        }
+        final_patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Still hurt but willing to listen"
+                }
+            }
+        }
+        validate_patch_scope(final_patch, planner_patch)
+
+    def test_validation_does_not_mutate_story_state(self):
+        original_state = self.state.model_dump(mode="json")
+        patch = {
+            "characters": {
+                "maya": {
+                    "current_emotional_state": "Softening"
+                }
+            }
+        }
+        validate_story_state_patch(patch, self.state)
+        self.assertEqual(
+            self.state.model_dump(mode="json"),
+            original_state,
+        )
+
+
+class StoryStatePatchRepairTests(TestCase):
+
+    def setUp(self):
+        self.story_state = make_patch_test_story_state()
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_invalid_planner_patch_is_repaired_before_writer(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        invalid_plan = json.loads(json.dumps(VALID_STORY_PLAN))
+        invalid_plan["state_patch"]["characters"]["ghost"] = {
+            "current_emotional_state": "Angry"
+        }
+
+        mock_post.side_effect = [
+            make_mock_response(invalid_plan),
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="Why are you upset?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=self.story_state,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            result["reply"],
+            VALID_WRITER_OUTPUT["reply"],
+        )
+        self.assertEqual(mock_post.call_count, 3)
+
+        repair_messages = (
+            mock_post.call_args_list[1]
+            .kwargs["json"]["messages"]
+        )
+        self.assertIn(
+            "VALIDATION ERRORS",
+            repair_messages[-1]["content"],
+        )
+        self.assertIn("ghost", repair_messages[-1]["content"])
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_invalid_writer_patch_repairs_reply_and_patch_together(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        invalid_writer = json.loads(json.dumps(VALID_WRITER_OUTPUT))
+        invalid_writer["state_patch"]["characters"]["maya"][
+            "current_goal"
+        ] = "Leave the university"
+
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(invalid_writer),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="Why are you upset?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=self.story_state,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            result["reply"],
+            VALID_WRITER_OUTPUT["reply"],
+        )
+        self.assertEqual(
+            result["state_patch"],
+            VALID_WRITER_OUTPUT["state_patch"],
+        )
+        self.assertEqual(mock_post.call_count, 3)
+
+        repair_messages = (
+            mock_post.call_args_list[2]
+            .kwargs["json"]["messages"]
+        )
+        self.assertIn("planner-approved scope", repair_messages[-1]["content"])
+        self.assertIn("AUTHORITATIVE CURRENT CANONICAL STORYSTATE", repair_messages[-1]["content"])
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_exhausted_planner_repairs_return_structured_error(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        invalid_plan = json.loads(json.dumps(VALID_STORY_PLAN))
+        invalid_plan["state_patch"]["characters"]["ghost"] = {
+            "current_emotional_state": "Angry"
+        }
+
+        mock_post.side_effect = [
+            make_mock_response(invalid_plan),
+            make_mock_response(invalid_plan),
+            make_mock_response(invalid_plan),
+        ]
+
+        result = generate_companion_reply(
+            message="Why are you upset?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=self.story_state,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(
+            result["error"]["code"],
+            "STORY_STATE_PATCH_VALIDATION_FAILED",
+        )
+        self.assertEqual(result["error"]["stage"], "story_director")
+        self.assertEqual(mock_post.call_count, 3)
+        mock_store.assert_called_once()
+
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_exhausted_writer_repairs_return_error_without_exchange_storage(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        invalid_writer = json.loads(json.dumps(VALID_WRITER_OUTPUT))
+        invalid_writer["state_patch"]["characters"]["maya"][
+            "current_goal"
+        ] = "Leave the university"
+
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(invalid_writer),
+            make_mock_response(invalid_writer),
+            make_mock_response(invalid_writer),
+        ]
+
+        result = generate_companion_reply(
+            message="Why are you upset?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=self.story_state,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(
+            result["error"]["code"],
+            "STORY_STATE_PATCH_VALIDATION_FAILED",
+        )
+        self.assertEqual(result["error"]["stage"], "response_generator")
+        self.assertEqual(mock_post.call_count, 4)
+
+        # Only the initial user-message ingestion is allowed.
+        # No final reply or combined exchange may be stored.
+        mock_store.assert_called_once()

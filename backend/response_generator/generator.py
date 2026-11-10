@@ -12,7 +12,9 @@ import re
 import time
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime
+from typing import Callable
 import requests
 from django.conf import settings
 from django.utils import timezone
@@ -30,6 +32,10 @@ from .story_director import (
     CompanionReplyOutput,
     StoryState,
     STORY_STATE_INITIALIZATION_PROMPT,
+)
+from .state_patch_validator import (
+    PatchValidationError,
+    validate_story_state_patch,
 )
 
 logger = logging.getLogger("amour.response_generator")
@@ -127,6 +133,8 @@ def _call_structured_llm(
                 "story_director": 900,
                 "response_generator": 500,
                 "story_state_initialization": 1400,
+                "story_director_patch_repair": 900,
+                "response_generator_patch_repair": 500,
             }
             token_budget = token_budgets.get(stage_name, 500)
             if "gpt-oss" in current_model:
@@ -234,6 +242,163 @@ def _call_structured_llm(
     logger.error("%s: All configured models failed.", stage_name)
     return None, None
 
+
+
+
+
+MAX_PATCH_REPAIR_ATTEMPTS = 2
+
+
+def _repair_structured_output(
+    *,
+    initial_output: dict,
+    initial_errors: list[str],
+    base_messages: list,
+    output_model: type[BaseModel],
+    stage_name: str,
+    validator: Callable[[dict], dict],
+    repair_instructions: str,
+    groq_api_key: str,
+    llm_base_url: str,
+    models_to_try: list[str],
+    repair_context: str = "",
+) -> tuple[dict | None, list[str]]:
+    """
+    Correct a schema-valid output whose state patch failed deterministic
+    validation. Each correction reuses the original stage context, includes
+    the previous candidate and diagnostics, and is revalidated in Python.
+
+    _call_structured_llm retains its existing model failover behavior.
+    """
+    candidate = deepcopy(initial_output)
+    errors = list(initial_errors)
+
+    for attempt in range(1, MAX_PATCH_REPAIR_ATTEMPTS + 1):
+        repair_messages = deepcopy(base_messages)
+
+        repair_messages.append({
+            "role": "assistant",
+            "content": json.dumps(
+                candidate,
+                ensure_ascii=False,
+                indent=2,
+            ),
+        })
+
+        repair_prompt = (
+            "Your previous structured output failed deterministic "
+            "StoryState patch validation.\n\n"
+            f"REPAIR ATTEMPT: {attempt} OF "
+            f"{MAX_PATCH_REPAIR_ATTEMPTS}\n\n"
+            "VALIDATION ERRORS:\n"
+            + json.dumps(errors, ensure_ascii=False, indent=2)
+            + "\n\n"
+            + (repair_context + "\n\n" if repair_context else "")
+            + repair_instructions
+            + "\n\nReturn the complete corrected structured output "
+            "as JSON only. Do not use Markdown fences or explanations."
+        )
+
+        repair_messages.append({
+            "role": "user",
+            "content": repair_prompt,
+        })
+
+        repaired_output, repaired_model = _call_structured_llm(
+            messages=repair_messages,
+            output_model=output_model,
+            stage_name=stage_name,
+            groq_api_key=groq_api_key,
+            llm_base_url=llm_base_url,
+            models_to_try=models_to_try,
+        )
+
+        if repaired_output is None:
+            errors = [
+                "Correction attempt did not produce output matching "
+                "the required structured schema."
+            ]
+            logger.warning(
+                "%s: Repair attempt %s did not produce schema-valid output.",
+                stage_name,
+                attempt,
+            )
+            continue
+
+        try:
+            validated_output = validator(repaired_output)
+            logger.info(
+                "%s: Patch validation succeeded on repair attempt %s "
+                "using model %s.",
+                stage_name,
+                attempt,
+                repaired_model,
+            )
+            return validated_output, []
+
+        except PatchValidationError as exc:
+            candidate = repaired_output
+            errors = exc.errors
+            logger.warning(
+                "%s: Repair attempt %s still failed patch validation: %s",
+                stage_name,
+                attempt,
+                errors,
+            )
+
+    logger.error(
+        "%s: Exhausted %s patch repair attempts.",
+        stage_name,
+        MAX_PATCH_REPAIR_ATTEMPTS,
+    )
+    return None, errors
+
+
+def _build_generation_error_result(
+    *,
+    code: str,
+    stage: str,
+    namespace: str,
+    memory_context: str,
+    current_conflict_stage: int,
+    errors: list[str] | None = None,
+    story_plan: dict | None = None,
+) -> dict:
+    """
+    Return a structured error without inventing a conversational reply.
+    Diagnostics stay in backend logs and are not sent to the client.
+    """
+    logger.error(
+        "Companion generation failed. namespace=%s stage=%s code=%s diagnostics=%s",
+        namespace,
+        stage,
+        code,
+        errors or [],
+    )
+
+    result = {
+        "success": False,
+        "reply": "",
+        "conflict_stage": current_conflict_stage,
+        "context": memory_context,
+        "namespace": namespace,
+        "error": {
+            "code": code,
+            "stage": stage,
+            "retryable": True,
+        },
+    }
+
+    if story_plan is not None:
+        result.update({
+            "decision": story_plan["decision"],
+            "focus": story_plan["focus"],
+            "next_beat": story_plan["next_beat"],
+            "scene_direction": story_plan["scene_direction"],
+            "planner_state_patch": story_plan["state_patch"],
+        })
+
+    return result
 
 
 def initialize_story_state(
@@ -755,16 +920,67 @@ def generate_companion_reply(
         models_to_try=models_to_try,
     )
 
-    if not story_plan:
-        logger.error(
-            "Story Director failed to produce a valid narrative plan."
+    if story_plan is None:
+        return _build_generation_error_result(
+            code="STORY_DIRECTOR_GENERATION_FAILED",
+            stage="story_director",
+            namespace=namespace,
+            memory_context=memory_context,
+            current_conflict_stage=current_conflict_stage,
         )
-        return {
-            "reply": "",
-            "conflict_stage": current_conflict_stage,
-            "context": memory_context,
-            "namespace": namespace,
-        }
+
+    # FEATURE 5: Validate the planner's proposed patch against canonical state.
+    def validate_planner_candidate(candidate: dict) -> dict:
+        validated = deepcopy(candidate)
+        validated["state_patch"] = validate_story_state_patch(
+            patch=validated["state_patch"],
+            story_state=story_state,
+        )
+        return validated
+
+    try:
+        story_plan = validate_planner_candidate(story_plan)
+    except PatchValidationError as exc:
+        logger.warning(
+            "Story Director patch failed validation for namespace %s: %s",
+            namespace,
+            exc.errors,
+        )
+
+        story_plan, repair_errors = _repair_structured_output(
+            initial_output=story_plan,
+            initial_errors=exc.errors,
+            base_messages=planner_messages,
+            output_model=StoryDirectorOutput,
+            stage_name="story_director_patch_repair",
+            validator=validate_planner_candidate,
+            repair_instructions=(
+                "You are correcting your own Story Director output.\n"
+                "Preserve the original narrative decision, focus, next beat "
+                "and scene direction wherever possible.\n"
+                "Correct the invalid state_patch using the supplied "
+                "canonical StoryState and validation errors.\n"
+                "Do not invent character IDs, relationship targets or "
+                "plot-thread IDs.\n"
+                "Do not introduce unrelated narrative developments.\n"
+                "If no justified persistent change can be represented "
+                "safely, return an empty state_patch object.\n"
+                "Return all five StoryDirectorOutput fields."
+            ),
+            groq_api_key=groq_api_key,
+            llm_base_url=llm_base_url,
+            models_to_try=models_to_try,
+        )
+
+        if story_plan is None:
+            return _build_generation_error_result(
+                code="STORY_STATE_PATCH_VALIDATION_FAILED",
+                stage="story_director",
+                namespace=namespace,
+                memory_context=memory_context,
+                current_conflict_stage=current_conflict_stage,
+                errors=repair_errors,
+            )
 
     # 9. RESPONSE GENERATOR: PREPARE AND EXECUTE THE SECOND LLM REQUEST.
     # Serialize the validated plan so the writer receives all five planner fields.
@@ -802,21 +1018,88 @@ def generate_companion_reply(
         models_to_try=models_to_try,
     )
 
-    if not writer_output:
-        logger.error(
-            "Response Generator failed to produce a valid reply."
+    if writer_output is None:
+        return _build_generation_error_result(
+            code="RESPONSE_GENERATOR_FAILED",
+            stage="response_generator",
+            namespace=namespace,
+            memory_context=memory_context,
+            current_conflict_stage=current_conflict_stage,
+            story_plan=story_plan,
         )
-        return {
-            "reply": "",
-            "conflict_stage": current_conflict_stage,
-            "decision": story_plan["decision"],
-            "focus": story_plan["focus"],
-            "next_beat": story_plan["next_beat"],
-            "scene_direction": story_plan["scene_direction"],
-            "planner_state_patch": story_plan["state_patch"],
-            "context": memory_context,
-            "namespace": namespace,
-        }
+
+    # FEATURE 5: Validate the writer's final patch against both canonical
+    # StoryState and the patch scope approved by Story Director.
+    def validate_writer_candidate(candidate: dict) -> dict:
+        validated = deepcopy(candidate)
+        validated["state_patch"] = validate_story_state_patch(
+            patch=validated["state_patch"],
+            story_state=story_state,
+            planner_patch=story_plan["state_patch"],
+        )
+        return validated
+
+    try:
+        writer_output = validate_writer_candidate(writer_output)
+    except PatchValidationError as exc:
+        logger.warning(
+            "Response Generator patch failed validation for namespace %s: %s",
+            namespace,
+            exc.errors,
+        )
+
+        repair_context = ""
+        if story_state is not None:
+            repair_context = (
+                "AUTHORITATIVE CURRENT CANONICAL STORYSTATE (read-only):\n"
+                + json.dumps(
+                    story_state.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+
+        writer_output, repair_errors = _repair_structured_output(
+            initial_output=writer_output,
+            initial_errors=exc.errors,
+            base_messages=writer_messages,
+            output_model=CompanionReplyOutput,
+            stage_name="response_generator_patch_repair",
+            validator=validate_writer_candidate,
+            repair_instructions=(
+                "You are correcting your previous Response Generator output.\n"
+                "Regenerate BOTH the final user-facing reply and state_patch.\n"
+                "The reply and final state_patch must describe the same "
+                "fictional development.\n"
+                "Follow the validated Story Director plan included in the "
+                "original request.\n"
+                "Do not introduce new characters, relationship operations, "
+                "plot threads, scene fields or state changes outside the "
+                "Story Director's validated state_patch.\n"
+                "You may remove unsupported proposed changes or refine "
+                "approved changes, but do not expand their scope.\n"
+                "Do not claim that a persistent development occurred when "
+                "it cannot be represented within the approved patch.\n"
+                "If no persistent change is justified, return an empty "
+                "state_patch object.\n"
+                "Return all three CompanionReplyOutput fields."
+            ),
+            groq_api_key=groq_api_key,
+            llm_base_url=llm_base_url,
+            models_to_try=models_to_try,
+            repair_context=repair_context,
+        )
+
+        if writer_output is None:
+            return _build_generation_error_result(
+                code="STORY_STATE_PATCH_VALIDATION_FAILED",
+                stage="response_generator",
+                namespace=namespace,
+                memory_context=memory_context,
+                current_conflict_stage=current_conflict_stage,
+                errors=repair_errors,
+                story_plan=story_plan,
+            )
 
     # 10. Sanitize the final user-facing response.
     reply = sanitize_companion_reply(writer_output["reply"])
@@ -843,6 +1126,7 @@ def generate_companion_reply(
 
     # 12. Return final response and internal narrative metadata.
     return {
+        "success": True,
         "reply": reply,
         "conflict_stage": writer_output["conflict_stage"],
         "decision": story_plan["decision"],
