@@ -161,9 +161,9 @@ REEVE_API_KEY = os.environ.get("REEVE_API_KEY", "")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "bedrock").strip().lower()
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 BEDROCK_API_KEY = os.environ.get("BEDROCK_API_KEY", "")
-AWS_BEARER_TOKEN_BEDROCK = os.environ.get(
-    "AWS_BEARER_TOKEN_BEDROCK",
-    BEDROCK_API_KEY,
+AWS_BEARER_TOKEN_BEDROCK = (
+    os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
+    or BEDROCK_API_KEY
 )
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
