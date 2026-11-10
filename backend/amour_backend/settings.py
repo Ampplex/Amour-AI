@@ -154,11 +154,53 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-# Reeve & Google OAuth Settings
+# Reeve & LLM Provider Settings
 REEVE_API_KEY = os.environ.get("REEVE_API_KEY", "")
+
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mistral").strip().lower()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+
+if LLM_PROVIDER == "mistral":
+    LLM_API_KEY = MISTRAL_API_KEY
+    LLM_BASE_URL = os.environ.get(
+        "MISTRAL_BASE_URL",
+        "https://api.mistral.ai/v1",
+    )
+    LLM_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-large-4")
+    fallback_models_value = os.environ.get(
+        "MISTRAL_FALLBACK_MODELS",
+        "mistral-small-2603",
+    )
+elif LLM_PROVIDER == "groq":
+    LLM_API_KEY = GROQ_API_KEY
+    LLM_BASE_URL = os.environ.get(
+        "GROQ_BASE_URL",
+        os.environ.get(
+            "LLM_BASE_URL",
+            "https://api.groq.com/openai/v1",
+        ),
+    )
+    LLM_MODEL = os.environ.get(
+        "GROQ_MODEL",
+        os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b"),
+    )
+    fallback_models_value = os.environ.get(
+        "GROQ_FALLBACK_MODELS",
+        "openai/gpt-oss-120b,openai/gpt-oss-20b",
+    )
+else:
+    LLM_API_KEY = ""
+    LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
+    LLM_MODEL = os.environ.get("LLM_MODEL", "")
+    fallback_models_value = os.environ.get("LLM_FALLBACK_MODELS", "")
+
+LLM_BASE_URL = LLM_BASE_URL.rstrip("/")
+LLM_FALLBACK_MODELS = tuple(
+    model.strip()
+    for model in fallback_models_value.split(",")
+    if model.strip()
+)
 GOOGLE_CLIENT_IDS = [
     os.environ.get("GOOGLE_WEB_CLIENT_ID", "665738151857-0f765nnvu4no6qhbdbua132vfv2iu10k.apps.googleusercontent.com"),
     os.environ.get("GOOGLE_ANDROID_CLIENT_ID", "665738151857-epjtqdvodprak901bkmi2k9t68t15830.apps.googleusercontent.com"),
