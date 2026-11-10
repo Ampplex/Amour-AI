@@ -46,6 +46,39 @@ class LLMRateLimitReliabilityTests(TestCase):
         )
 
     @patch("response_generator.generator.requests.post")
+    def test_bedrock_request_uses_runtime_chat_completions_endpoint(self, mock_post):
+        mock_post.return_value = make_response(200, {"ok": True})
+
+        output, model = generator._call_structured_llm(
+            messages=[{"role": "user", "content": "test"}],
+            output_model=StructuredProbeOutput,
+            stage_name="bedrock_test",
+            llm_api_key="bedrock-test-key",
+            llm_base_url=(
+                "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+            ),
+            models_to_try=["mistral.mistral-large-3-675b-instruct"],
+        )
+
+        self.assertEqual(output, {"ok": True})
+        self.assertEqual(model, "mistral.mistral-large-3-675b-instruct")
+        self.assertEqual(
+            mock_post.call_args.args[0],
+            (
+                "https://bedrock-runtime.us-west-2.amazonaws.com/"
+                "openai/v1/chat/completions"
+            ),
+        )
+        self.assertEqual(
+            mock_post.call_args.kwargs["headers"]["Authorization"],
+            "Bearer bedrock-test-key",
+        )
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"]["model"],
+            "mistral.mistral-large-3-675b-instruct",
+        )
+
+    @patch("response_generator.generator.requests.post")
     def test_429_does_not_retry_same_model_before_trying_fallback(self, mock_post):
         mock_post.side_effect = [
             make_response(
