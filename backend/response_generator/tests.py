@@ -344,14 +344,9 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertIn("We met yesterday.", [m["content"] for m in writer_messages])
         self.assertIn("Hey, are you free tonight?", [m["content"] for m in writer_messages])
 
-        # The user message is ingested for retrieval, and the complete
-        # user + final assistant exchange is stored after generation.
-        mock_store.assert_any_call(
-            "User (John): Hey, are you free tonight?",
-            "user_123_companion_456",
-            user_key="user-123",
-        )
-        mock_store.assert_any_call(
+        # Only the completed exchange is stored; the current user message
+        # must not be written before historical memory retrieval.
+        mock_store.assert_called_once_with(
             "User: Hey, are you free tonight?\nAssistant: "
             + VALID_WRITER_OUTPUT["reply"],
             "user_123_companion_456",
@@ -469,11 +464,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["code"], "RESPONSE_CONTINUITY_FAILED")
         self.assertEqual(mock_post.call_count, 3)
-        mock_store.assert_called_once_with(
-            "User: Nothing, I just remembered it.",
-            "user_123_companion_456",
-            user_key=None,
-        )
+        mock_store.assert_not_called()
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -664,7 +655,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
 
         self.assertEqual(result["reply"], "")
         self.assertEqual(mock_post.call_count, 3)
-        mock_store.assert_called_once()
+        mock_store.assert_not_called()
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1724,7 +1715,7 @@ class StoryStatePatchRepairTests(SimpleTestCase):
         )
         self.assertEqual(result["error"]["stage"], "story_director")
         self.assertEqual(mock_post.call_count, 3)
-        mock_store.assert_called_once()
+        mock_store.assert_not_called()
 
 
     @patch("response_generator.generator.requests.post")
@@ -1756,7 +1747,7 @@ class StoryStatePatchRepairTests(SimpleTestCase):
         self.assertEqual(result["error"]["code"], "RESPONSE_GENERATOR_FAILED")
         self.assertEqual(result["error"]["stage"], "response_generator")
         self.assertEqual(mock_post.call_count, 4)
-        mock_store.assert_called_once()
+        mock_store.assert_not_called()
 
 
 class StoryStatePatchApplicationTests(SimpleTestCase):
@@ -2135,7 +2126,7 @@ class StoryStatePatchPipelineTests(SimpleTestCase):
         self.assertEqual(result["state_patch"], VALID_STORY_PLAN["state_patch"])
         self.assertEqual(story_state.model_dump(mode="json"), original_state)
         self.assertEqual(mock_post.call_count, 2)
-        self.assertEqual(mock_store.call_count, 2)
+        self.assertEqual(mock_store.call_count, 1)
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -2265,7 +2256,7 @@ class StoryStatePatchPipelineTests(SimpleTestCase):
         )
         self.assertEqual(result["error"]["stage"], "state_application")
         mock_apply.assert_called_once()
-        mock_store.assert_called_once()
+        mock_store.assert_not_called()
         self.assertEqual(mock_post.call_count, 2)
 
     @patch("response_generator.generator.requests.post")

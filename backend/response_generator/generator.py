@@ -306,6 +306,8 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - When acting as Story Director, evaluate the next natural action and goal-driven development for the fictional world.
    - When rendering a supplied Story Director plan, do not create additional decisions or actions; render only what that complete plan specifies.
    - Do not force a question, flirtation, tease, topic change, physical gesture, or plot event into every reply.
+   - Do not keep a topic alive after it has been answered or naturally concluded. A clear subject change in the user's latest message must be followed immediately, even when an older plot thread or character goal remains active.
+   - A character goal is a motivation in the background, not a requirement to bring up that goal in every conversation turn.
    - When the character takes initiative, leave the user's response open and never dictate the user's actions or feelings.
 
 4. CONTINUITY AND USER AGENCY:
@@ -1518,9 +1520,9 @@ def generate_companion_reply(
     Companion roleplay chat powered by Reeve memory graph and Amazon Bedrock Mistral Large v1.
 
     Architecture:
-    1. Ingest User message into Reeve memory graph with personalized speaker tag.
-    2. Retrieve & deduplicate memory context from Reeve graph.
-    3. Construct dynamic system prompt:
+    1. Retrieve & deduplicate historical memory from Reeve before ingesting
+       the current user turn.
+    2. Construct dynamic system prompt:
        - Persona identity & Mind/Backstory
        - User profile & first name identity
        - Opening Script / First Message
@@ -1537,13 +1539,12 @@ def generate_companion_reply(
     user_clean_name = user_name.strip() if user_name else ""
     first_name = user_clean_name.split()[0] if user_clean_name else ""
 
-    # 1. Store user message into Reeve memory
-    speaker_tag = f"User ({first_name})" if first_name else "User"
-    try:
-        store_memory_for_user(f"{speaker_tag}: {message}", namespace, user_key=user_key)
-    except Exception as exc:
-        logger.warning(f"Failed to store user memory to Reeve: {exc}")
-
+    # 1. Retrieve historical context BEFORE writing the current user message.
+    # Writing the current message first makes it eligible to retrieve itself,
+    # amplifying the active subject and creating a retrieval feedback loop.
+    # The chat API stores the completed user/assistant exchange after its
+    # PostgreSQL transaction commits; standalone callers store the completed
+    # exchange at the end of this function.
     # 2. Context Retrieval from Reeve for this user namespace
     try:
         retrieval_query = message.strip()
@@ -1628,6 +1629,8 @@ def generate_companion_reply(
             f"- 'Assistant:' lines indicate statements previously spoken by you.\n"
             f"- Memories include timestamps. Compare them with TEMPORAL CONTEXT to reason about when things occurred.\n"
             f"- Active conversation history and recent relationship events (breakups, fights, bonding) take precedence over the initial premise or static role labels. Always maintain continuity with the latest emotional state of your relationship.\n"
+            f"- Historical memory is factual background, not a conversation agenda. Do not revive an old subject merely because it appears in Reeve; recall it only when the latest user message or current scene makes it relevant.\n"
+            f"- A clear topic introduced by the latest user message takes priority over older topics, memories, and the persona's long-term goal.\n"
             f"- Never repeat previous responses verbatim.\n"
             f"- Use this memory graph to recall personal facts, past conversations, and preferences seamlessly."
         )
