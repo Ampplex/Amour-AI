@@ -48,6 +48,9 @@ from django.conf import settings
 
 logger = logging.getLogger("amour.reeve")
 
+# Keep Reeve extraction requests below Groq's on-demand output-token limits.
+REEVE_LLM_MAX_TOKENS = 512
+
 # Ensure REEVE_API_KEY is available in environment
 if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
     os.environ["REEVE_API_KEY"] = settings.REEVE_API_KEY
@@ -87,6 +90,7 @@ def _get_memory_tools():
         cfg.LLM_PROVIDER = "openai"
         cfg.OPENAI_API_KEY = groq_key
         cfg.OPENAI_CHAT_MODEL = "qwen/qwen3.8-27b"
+        cfg.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
     cfg.EMBEDDING_PROVIDER = "bedrock"
     cfg.BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
     import threelane_memory.tools as tools
@@ -226,4 +230,3 @@ def __dir__():
         "GLOBAL_COMPANION_DIRECTIVES",
         "get_bucketed_time_str",
     ]
-
