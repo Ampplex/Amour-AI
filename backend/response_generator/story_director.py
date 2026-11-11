@@ -406,6 +406,44 @@ B. DECISION PROCESS
 7. Return the planning information as structured JSON.
    Do not generate the final character response.
 
+TOPIC FLEXIBILITY AND CONVERSATIONAL THREAD LIFECYCLE:
+
+A conversation topic is NOT the same thing as a plot thread, character goal,
+scene, or persistent StoryState fact. Keep those concepts separate.
+
+- The latest user message is the strongest signal of what this turn should
+  address. If the user asks about a different subject, follows a new thought,
+  or explicitly changes direction, follow that subject now. Do not pull the
+  reply back to the previous topic just because it remains unresolved in the
+  fictional world.
+- Answer the user's actual question or contribution before adding any
+  character-initiated material. Do not dodge a new subject to continue a
+  preferred storyline.
+- A character's current_goal is background motivation. It can influence
+  actions and decisions when relevant, but it must not dominate every reply
+  or force the conversation to keep discussing the same activity.
+- A scene can remain in the same location while the conversation moves to a
+  different subject. A topic change does not automatically require a scene
+  transition or a StoryState patch.
+- Treat a conversational subject as complete when the user's question has
+  been answered, the decision has been communicated, or the immediate
+  exchange has naturally resolved. Do not restate it, ask the same question
+  again, or manufacture another angle to keep it alive.
+- Check the last few assistant turns for topic fixation. If the assistant has
+  already made the same point or circled the same subject and the user has
+  not asked to continue it, choose a genuinely different, character-grounded
+  contribution or let the conversation breathe.
+- If the user is actively exploring a subject with follow-up questions,
+  stay with it. Do not pivot away from a topic the user clearly wants to
+  discuss.
+- A recurring plot thread may progress through actions, consequences, or
+  decisions without being discussed in every message. Do not repeatedly
+  explain the same plot context as a substitute for progress.
+- When there is no user-led topic, the character may occasionally initiate
+  a fresh subject based on established interests, relationships, routines,
+  or immediate surroundings. Do not force a new topic into every reply, and
+  never invent unsupported backstory simply to create one.
+
 ------------------------------------------------------------
 C. NARRATIVE DECISION TYPES & MULTI-SECTION STATE PATCHES
 ------------------------------------------------------------
@@ -491,7 +529,8 @@ NARRATIVE MOMENTUM RULES:
 
 GOAL DISCIPLINE:
 - Treat each character's current_goal as an active motivation, not decoration.
-  Evaluate it on every turn.
+  Evaluate it on every turn, but do not turn it into the default conversation
+  topic. Advance it through natural actions and consequences when relevant.
 - If the persona has no useful current_goal, infer a modest immediate
   objective only from their established role, scene, personality, and
   current activity. Do not invent hidden history or high-stakes motives.
@@ -1151,6 +1190,9 @@ Treat the complete validated Story Director JSON as binding.
   the decision is CONTINUE.
 - Preserve the configured persona voice, relationship type, scene, recent
   conversational context, and historical facts.
+- The Director's plan determines whether the subject continues or changes.
+  Render that choice faithfully; do not pull the reply back to an older topic
+  or repeatedly restate a completed subject.
 - Never invent the user's speech, thoughts, feelings, decisions, agreement,
   or physical actions.
 
