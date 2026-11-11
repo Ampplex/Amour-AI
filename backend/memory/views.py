@@ -19,10 +19,6 @@ from .reeve_service import (
 )
 from response_generator import (
     generate_companion_reply,
-    initialize_story_state,
-    retrieve_story_state_snapshot,
-    persist_story_state,
-    StoryStateRevisionConflict,
     strip_emojis,
 )
 
@@ -321,12 +317,12 @@ class ChatMemoryView(APIView):
         )
         current_conflict_stage = rel_state.conflict_stage
 
-        # Fetch the last six exchanges for immediate conversational continuity.
+        # Fetch the last six messages from PostgreSQL for immediate conversational continuity.
         recent_turns_qs = list(
             PersonaChatMessage.objects.filter(
                 user_identifier=str(user_id),
                 persona_identifier=str(persona_id),
-            ).order_by("-created_at")[:12]
+            ).order_by("-created_at")[:6]
         )
         recent_turns_qs.reverse()
         conversation_history = [
@@ -361,82 +357,14 @@ class ChatMemoryView(APIView):
         except Exception as e:
             logger.warning(f"Could not persist user message to DB: {e}")
 
-        # Initialize the canonical fictional world once per user-persona namespace.
-        # This reuses existing state and never blocks normal chat on failure.
-        initialized_story_state = None
-        try:
-            initialized_story_state = initialize_story_state(
-                namespace=namespace,
-                persona_id=str(persona_id),
-                persona_name=persona_name or "Companion",
-                persona_age=persona_age,
-                persona_tagline=persona_tagline,
-                greeting=greeting,
-                memory_prompt=memory_prompt,
-                user_name=user_name,
-                client_time=client_time,
-                client_timezone=client_timezone,
-            )
-            if initialized_story_state is None:
-                logger.warning(
-                    "StoryState remains uninitialized for namespace %s.",
-                    namespace,
-                )
-        except Exception:
-            logger.exception(
-                "Unexpected StoryState initialization error for namespace %s.",
-                namespace,
-            )
-
-        # ============================================================
-        # FEATURE 3 & 7: STORYSTATE SNAPSHOT RETRIEVAL
-        # ============================================================
-
-        # Retrieve the canonical world and revision after ensuring initialization.
-        story_state = None
-        story_state_revision = None
-
-        try:
-            story_state_snapshot = retrieve_story_state_snapshot(
-                namespace=namespace,
-            )
-            if story_state_snapshot is not None:
-                story_state, story_state_revision = story_state_snapshot
-                logger.info(
-                    "StoryState snapshot retrieved successfully for namespace %s (revision=%s).",
-                    namespace,
-                    story_state_revision,
-                )
-            else:
-                logger.warning(
-                    "No valid StoryState available for namespace %s.",
-                    namespace,
-                )
-
-        except Exception:
-            logger.exception(
-                "Unexpected StoryState retrieval error for namespace %s.",
-                namespace,
-            )
-
-        # If initialization succeeded but its stored state cannot be retrieved,
-        # do not silently continue with a missing canonical world.
-        if initialized_story_state is not None and story_state is None:
-            return Response(
-                {
-                    "error": "Canonical StoryState could not be retrieved.",
-                    "code": "STORY_STATE_RETRIEVAL_FAILED",
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        # 2. Generate companion reply (Reeve memory graph storage, recall, dialogue context, and Groq LLM)
+        # 2. Generate companion reply (single-prompt roleplay engine with Reeve memory and Postgres history)
         try:
             result = generate_companion_reply(
                 message=message,
                 namespace=namespace,
                 persona_name=persona_name,
                 persona_age=persona_age,
+                persona_tagline=persona_tagline,
                 greeting=greeting,
                 memory_prompt=memory_prompt,
                 client_time=client_time,
@@ -445,34 +373,25 @@ class ChatMemoryView(APIView):
                 conversation_history=conversation_history,
                 current_conflict_stage=current_conflict_stage,
                 user_key=user_key,
-                # FEATURE 4: Pass the retrieved canonical world to the planner.
-                story_state=story_state,
                 persist_exchange_to_memory=False,
             )
-            # FEATURE 5: Do not persist conversation metadata when generation
-            # or patch repair has failed.
+
             if result.get("success") is False:
                 error_info = result.get("error", {})
                 logger.error(
-                    "Companion generation failed. namespace=%s stage=%s code=%s",
+                    "Companion generation failed. namespace=%s error=%s",
                     namespace,
-                    error_info.get("stage"),
-                    error_info.get("code"),
+                    error_info,
                 )
                 return Response(
                     {
-                        "error": "Unable to generate a consistent companion response.",
-                        "code": error_info.get(
-                            "code",
-                            "COMPANION_GENERATION_FAILED",
-                        ),
-                        "stage": error_info.get("stage"),
+                        "error": "Unable to generate a companion response.",
+                        "code": error_info.get("code", "COMPANION_GENERATION_FAILED"),
                     },
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
             reply_text = result.get("reply", "").strip()
-
             if not reply_text:
                 return Response(
                     {"error": "Failed to generate companion reply from model"},
@@ -484,61 +403,19 @@ class ChatMemoryView(APIView):
                 current_conflict_stage,
             )
 
-            updated_story_state = result.get("updated_story_state")
-            state_revision = story_state_revision
-            state_updated = False
-
             try:
-                # StoryState, relationship stage and bot message must succeed
-                # together as one PostgreSQL transaction.
                 with transaction.atomic():
-                    if story_state is not None:
-                        if updated_story_state is None:
-                            raise RuntimeError(
-                                "Generator did not return updated_story_state "
-                                "for an initialized canonical StoryState."
-                            )
-                        state_revision, state_updated = persist_story_state(
-                            namespace=namespace,
-                            expected_revision=story_state_revision,
-                            previous_state=story_state,
-                            updated_state=updated_story_state,
-                        )
-
-                    # Persist updated conflict stage only after a usable reply exists.
+                    # Persist updated conflict stage only after a usable reply exists
                     if rel_state.conflict_stage != new_conflict_stage:
                         rel_state.conflict_stage = new_conflict_stage
                         rel_state.save(update_fields=["conflict_stage", "updated_at"])
 
                     response_metadata = {
-                        "narrative_decision": result.get("decision"),
-                        "narrative_trace": {
-                            "planned_patch_sections": sorted(
-                                (result.get("planner_state_patch") or {}).keys()
-                            ),
-                            "applied_patch_sections": sorted(
-                                (result.get("state_patch") or {}).keys()
-                            ),
-                            "has_planned_event": bool(
-                                (result.get("next_beat") or {}).get("event")
-                            ),
-                            "planned_action_count": len(
-                                (result.get("next_beat") or {}).get("character_actions") or []
-                            ),
-                        },
-                        "story_state": {
-                            "available": story_state is not None,
-                            "schema_version": (
-                                updated_story_state.schema_version
-                                if updated_story_state is not None
-                                else None
-                            ),
-                            "revision": state_revision,
-                            "updated": state_updated,
-                        },
+                        "engine": "single_prompt_roleplay",
+                        "model": result.get("model", ""),
                     }
 
-                    # Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
+                    # Store bot response in PostgreSQL
                     encrypted_bot_msg = encrypt_chat_message(
                         reply_text,
                         user_id=str(user_id),
@@ -558,19 +435,12 @@ class ChatMemoryView(APIView):
                     )
                     bot_msg_id = str(bot_msg_record.id)
                     logger.info(
-                        "Persisted narrative turn namespace=%s decision=%s "
-                        "revision=%s state_updated=%s planned_sections=%s "
-                        "applied_sections=%s",
+                        "Persisted conversation turn namespace=%s bot_msg_id=%s",
                         namespace,
-                        result.get("decision"),
-                        state_revision,
-                        state_updated,
-                        response_metadata["narrative_trace"]["planned_patch_sections"],
-                        response_metadata["narrative_trace"]["applied_patch_sections"],
+                        bot_msg_id,
                     )
 
-                    # Only publish the completed exchange to Reeve after the
-                    # PostgreSQL transaction successfully commits.
+                    # Publish the completed exchange to Reeve after PostgreSQL transaction commits
                     def store_committed_exchange():
                         try:
                             store_memory_for_user(
@@ -580,22 +450,12 @@ class ChatMemoryView(APIView):
                             )
                         except Exception:
                             logger.exception(
-                                "Committed chat turn could not be stored in Reeve "
-                                "(namespace=%s).",
+                                "Committed chat turn could not be stored in Reeve (namespace=%s).",
                                 namespace,
                             )
 
                     transaction.on_commit(store_committed_exchange)
 
-            except StoryStateRevisionConflict as conf_exc:
-                logger.warning("StoryState revision conflict: %s", conf_exc)
-                return Response(
-                    {
-                        "error": "State revision conflict. Please retry your message.",
-                        "code": "STORY_STATE_REVISION_CONFLICT",
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
             except Exception as e:
                 logger.exception("Failed to commit conversation turn in PostgreSQL: %s", e)
                 return Response(

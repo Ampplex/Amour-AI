@@ -50,6 +50,7 @@ logger = logging.getLogger("amour.reeve")
 
 # Keep Reeve extraction requests below Groq's on-demand output-token limits.
 REEVE_LLM_MAX_TOKENS = 512
+os.environ["LLM_MAX_TOKENS"] = str(REEVE_LLM_MAX_TOKENS)
 
 # Ensure REEVE_API_KEY is available in environment
 if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
@@ -70,6 +71,7 @@ os.environ["ASYNC_WRITE_ENABLED"] = "true"
 try:
     import threelane_memory.config as _tmc
     _tmc.ASYNC_WRITE_ENABLED = True
+    _tmc.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
 except ImportError:
     pass
 
@@ -91,6 +93,7 @@ def _get_memory_tools():
         cfg.OPENAI_API_KEY = groq_key
         cfg.OPENAI_CHAT_MODEL = "qwen/qwen3.8-27b"
         cfg.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
+        os.environ["LLM_MAX_TOKENS"] = str(REEVE_LLM_MAX_TOKENS)
     cfg.EMBEDDING_PROVIDER = "bedrock"
     cfg.BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
     import threelane_memory.tools as tools

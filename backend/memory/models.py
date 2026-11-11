@@ -189,39 +189,3 @@ class UserMemoryKeyBackup(models.Model):
     def __str__(self):
         return f"MemoryKeyBackup for {self.user_identifier}"
 
-class CompanionStoryState(models.Model):
-    """
-    Stores the current canonical fictional world for one user-persona
-    conversation namespace.
-
-    The namespace follows the same isolation key used by Reeve and
-    PersonaChatMessage. The state is the complete current StoryState
-    document; historical conversation events remain in Reeve.
-    """
-    namespace = models.CharField(
-        max_length=255,
-        unique=True,
-    )
-    state = models.JSONField(
-        null=True,
-        blank=True,
-    )
-    schema_version = models.PositiveSmallIntegerField(
-        default=1,
-    )
-    revision = models.PositiveBigIntegerField(
-        default=0,
-    )
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-    )
-    updated_at = models.DateTimeField(
-        auto_now=True,
-    )
-
-    class Meta:
-        db_table = "companion_story_states"
-
-    def __str__(self):
-        return f"StoryState: {self.namespace}"
-
