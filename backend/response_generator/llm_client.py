@@ -284,10 +284,10 @@ def call_llm(
                 cd = record_model_rate_limit(llm_base_url, current_model)
                 logger.warning("Bedrock model %s throttled (%s); cooldown %.1fs", current_model, err_code, cd)
             else:
-                logger.error("Bedrock ClientError for %s: %s", current_model, exc)
+                logger.error("Bedrock ClientError for %s: %s", current_model, err_code)
             continue
         except Exception as exc:
-            logger.exception("Unexpected error calling LLM model %s: %s", current_model, exc)
+            logger.exception("Unexpected error calling LLM model %s: %s", current_model, type(exc).__name__)
             continue
 
     return None, None

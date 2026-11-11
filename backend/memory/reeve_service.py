@@ -148,7 +148,7 @@ def store_memory_for_user(text: str, namespace: str, user_key: str = None):
     try:
         return tools.store_memory(text, **kwargs)
     except Exception as exc:
-        logger.warning(f"Reeve write failed: {exc}")
+        logger.warning("Reeve write failed: %s", type(exc).__name__)
         if is_remote and hasattr(tools, "reset_client_cache"):
             tools.reset_client_cache()
             return tools.store_memory(text, **kwargs)
@@ -167,7 +167,7 @@ def query_memory_for_user(question: str, namespace: str, user_key: str = None):
     try:
         return tools.query_memory(question, **kwargs)
     except Exception as exc:
-        logger.warning(f"Reeve query failed: {exc}")
+        logger.warning("Reeve query failed: %s", type(exc).__name__)
         if is_remote and hasattr(tools, "reset_client_cache"):
             tools.reset_client_cache()
             return tools.query_memory(question, **kwargs)
@@ -187,7 +187,7 @@ def retrieve_context_for_user(question: str, namespace: str, user_key: str = Non
     try:
         return tools.retrieve_memory_context(question, **kwargs)
     except Exception as exc:
-        logger.warning(f"Reeve context retrieve failed: {exc}")
+        logger.warning("Reeve context retrieve failed: %s", type(exc).__name__)
         if is_remote and hasattr(tools, "reset_client_cache"):
             tools.reset_client_cache()
             return tools.retrieve_memory_context(question, **kwargs)

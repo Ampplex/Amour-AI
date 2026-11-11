@@ -85,7 +85,7 @@ def encrypt_chat_message(plaintext: str, user_id: str, client_key: str | bytes |
         payload = base64.b64encode(nonce + ct_and_tag).decode("ascii")
         return f"{prefix}{payload}"
     except Exception as exc:
-        logger.error(f"Failed to encrypt chat message: {exc}")
+        logger.error("Failed to encrypt chat message: %s", type(exc).__name__)
         return plaintext
 
 
@@ -132,7 +132,7 @@ def decrypt_chat_message(ciphertext: str, user_id: str, client_key: str | bytes 
             decrypted = aesgcm.decrypt(nonce, ct_and_tag, None)
             return decrypted.decode("utf-8")
         except Exception as exc:
-            logger.warning(f"Failed server decryption for user {user_id}: {exc}")
+            logger.warning("Failed server decryption: %s", type(exc).__name__)
             return "[Decryption Error]"
 
     # 3. Generic enc:v2: fallback (try client then server)
@@ -186,6 +186,6 @@ def migrate_user_messages_to_client_key(user_id: str, client_key: str | bytes) -
 
     if updated_records:
         PersonaChatMessage.objects.bulk_update(updated_records, ["text"], batch_size=200)
-        logger.info(f"Handover complete: Migrated {migrated_count} messages for user {user_id} to Client Zero-Knowledge encryption.")
+        logger.info("Handover complete: Migrated %d messages to Client Zero-Knowledge encryption.", migrated_count)
 
     return migrated_count

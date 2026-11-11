@@ -37,13 +37,13 @@ def send_brevo_email(to_email: str, to_name: str, subject: str, html_content: st
     try:
         response = requests.post(BREVO_API_URL, json=payload, headers=headers, timeout=12)
         if response.status_code in (200, 201, 202):
-            logger.info(f"Brevo email sent to {to_email}. Response: {response.text}")
+            logger.info("Brevo email dispatched successfully (status %s)", response.status_code)
             return True
         else:
-            logger.error(f"Brevo email failed for {to_email} with status {response.status_code}: {response.text}")
+            logger.error("Brevo email dispatch failed with HTTP %s", response.status_code)
             return False
     except Exception as exc:
-        logger.error(f"Brevo email network error sending to {to_email}: {exc}")
+        logger.error("Brevo email network error: %s", type(exc).__name__)
         return False
 
 

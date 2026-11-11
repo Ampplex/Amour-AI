@@ -11,6 +11,8 @@ from django.conf import settings
 from django.utils import timezone
 from django.utils.html import escape
 from django.contrib.auth.hashers import make_password
+from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
+from django.utils.decorators import method_decorator
 from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.views import APIView
@@ -322,7 +324,7 @@ class GoogleAuthView(APIView):
                 google_sub=google_sub,
                 verified_email=True,
             )
-            logger.info(f"Created new Google user: {email} with namespace: {user.namespace}")
+            logger.info("Created new Google user with namespace: %s", user.namespace)
         else:
             # Update latest profile details if not customized
             if name and not user.name:
@@ -348,6 +350,8 @@ class GoogleAuthView(APIView):
             status=status.HTTP_200_OK,
         )
 
+@method_decorator(sensitive_post_parameters("password"), name="dispatch")
+@method_decorator(sensitive_variables("password", "hashed_password"), name="post")
 class SignupView(APIView):
     """
     Step 1 of Signup:
@@ -403,7 +407,7 @@ class SignupView(APIView):
         )
 
         if not email_sent:
-            logger.warning(f"Could not send Brevo email to {email}, but pending token was saved.")
+            logger.warning("Could not send Brevo verification email, but pending token was saved.")
 
         return Response(
             {
@@ -472,7 +476,7 @@ class ConfirmEmailView(APIView):
             else:
                 user.set_unusable_password()
             user.save()
-            logger.info(f"Local user successfully inserted into DB: {user.email} (id: {user.id})")
+            logger.info("Local user successfully registered in DB (id: %s)", user.id)
         else:
             user.verified_email = True
             user.is_active = True
@@ -481,7 +485,7 @@ class ConfirmEmailView(APIView):
             if name and not user.name:
                 user.name = name
             user.save()
-            logger.info(f"Existing user marked verified: {user.email}")
+            logger.info("Existing user marked verified (id: %s)", user.id)
 
         token_obj.is_used = True
         token_obj.save()
@@ -562,7 +566,7 @@ class WebVerifyEmailView(APIView):
             else:
                 user.set_unusable_password()
             user.save()
-            logger.info(f"Web verification: inserted new user {user.email}")
+            logger.info("Web verification: inserted new user (id: %s)", user.id)
         else:
             user.verified_email = True
             user.is_active = True
@@ -571,7 +575,7 @@ class WebVerifyEmailView(APIView):
             if name and not user.name:
                 user.name = name
             user.save()
-            logger.info(f"Web verification: updated user {user.email}")
+            logger.info("Web verification: updated user (id: %s)", user.id)
 
         token_obj.is_used = True
         token_obj.save()
@@ -671,6 +675,8 @@ class ResendVerificationView(APIView):
         )
 
 
+@method_decorator(sensitive_post_parameters("password"), name="dispatch")
+@method_decorator(sensitive_variables("password"), name="post")
 class LoginView(APIView):
     """
     Logs in user with email and password.
@@ -803,6 +809,8 @@ class ForgotPasswordView(APIView):
         )
 
 
+@method_decorator(sensitive_post_parameters("new_password", "code", "token"), name="dispatch")
+@method_decorator(sensitive_variables("new_password", "code", "token"), name="post")
 class ResetPasswordView(APIView):
     """
     Step 2 of Password Reset (Mobile App API):
@@ -850,7 +858,7 @@ class ResetPasswordView(APIView):
         token_obj.is_used = True
         token_obj.save()
 
-        logger.info(f"Password reset successfully completed for {user.email}")
+        logger.info("Password reset successfully completed for user id: %s", user.id)
 
         return Response(
             {

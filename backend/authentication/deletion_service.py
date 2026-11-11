@@ -237,5 +237,5 @@ def delete_user_account_and_memories(user_or_id_or_email: Any) -> Dict[str, Any]
         del_user = user.delete()
         report["postgres"]["user_deleted"] = del_user[0]
 
-    logger.info(f"User {user_id} ({email}) and all graph memories successfully deleted: {report}")
+    logger.info(f"User {user_id} and all graph memories successfully deleted.")
     return report

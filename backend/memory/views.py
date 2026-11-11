@@ -1,6 +1,8 @@
 import logging
 import time
 from django.db import transaction
+from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
+from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -31,6 +33,8 @@ class ReeveStatusView(APIView):
         status_data = get_reeve_status()
         return Response(status_data)
 
+@method_decorator(sensitive_post_parameters("user_key", "client_key"), name="dispatch")
+@method_decorator(sensitive_variables("user_key", "client_key", "message", "reply_text"), name="post")
 class ChatMemoryView(APIView):
     """
     Companion roleplay chat endpoint powered 100% by Reeve memory graph and Groq LLM.
@@ -60,7 +64,7 @@ class ChatMemoryView(APIView):
             try:
                 migrate_user_messages_to_client_key(user_id, user_key)
             except Exception as exc:
-                logger.warning(f"Error during client-key handover: {exc}")
+                logger.warning("Error during client-key handover: %s", type(exc).__name__)
 
         try:
             page = max(1, int(request.query_params.get("page", 1)))
@@ -390,7 +394,7 @@ class ChatMemoryView(APIView):
             try:
                 migrate_user_messages_to_client_key(str(user_id), user_key)
             except Exception as exc:
-                logger.warning(f"Error during client-key handover on post: {exc}")
+                logger.warning("Error during client-key handover on post: %s", type(exc).__name__)
 
         # 1. Store or update user message in PostgreSQL
         user_msg_record = None
@@ -582,7 +586,7 @@ class ChatMemoryView(APIView):
                         pass
                 return Response(
                     {
-                        "error": f"Failed to persist conversation turn: {str(e)}",
+                        "error": "Failed to persist conversation turn.",
                         "code": "CONVERSATION_PERSISTENCE_FAILED",
                     },
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -604,9 +608,9 @@ class ChatMemoryView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
-            logger.error(f"Companion chat error: {e}")
+            logger.error("Companion chat error: %s", type(e).__name__)
             return Response(
-                {"error": f"Companion chat error: {str(e)}"},
+                {"error": "Companion chat service encountered an error."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
