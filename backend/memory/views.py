@@ -128,6 +128,7 @@ class ChatMemoryView(APIView):
                         store_memory_for_user(
                             f"Core Story & Mind of {persona_obj.name}:\n{persona_obj.memory_prompt.strip()}",
                             namespace,
+                            user_key=user_key,
                         )
                     except Exception as exc:
                         logger.warning(f"Could not ingest initial persona memory into Reeve: {exc}")
@@ -135,7 +136,11 @@ class ChatMemoryView(APIView):
                 if persona_obj.greeting and persona_obj.greeting.strip():
                     try:
                         from .reeve_service import store_memory_for_user
-                        store_memory_for_user(f"Assistant: {persona_obj.greeting.strip()}", namespace)
+                        store_memory_for_user(
+                            f"Assistant: {persona_obj.greeting.strip()}",
+                            namespace,
+                            user_key=user_key,
+                        )
                     except Exception:
                         pass
 
@@ -496,7 +501,8 @@ class StoreMemoryView(APIView):
         if not text:
             return Response({"error": "text is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        res = store_memory_for_user(text, request.user.namespace)
+        user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or request.query_params.get("user_key") or "").strip() or None
+        res = store_memory_for_user(text, request.user.namespace, user_key=user_key)
         return Response({"status": "stored", "namespace": request.user.namespace, "result": res})
 
 class QueryMemoryView(APIView):
@@ -507,8 +513,9 @@ class QueryMemoryView(APIView):
         if not question:
             return Response({"error": "question is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        answer = query_memory_for_user(question, request.user.namespace)
-        context = retrieve_context_for_user(question, request.user.namespace)
+        user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or request.query_params.get("user_key") or "").strip() or None
+        answer = query_memory_for_user(question, request.user.namespace, user_key=user_key)
+        context = retrieve_context_for_user(question, request.user.namespace, user_key=user_key)
         return Response({
             "answer": answer,
             "context": context,
@@ -1059,14 +1066,17 @@ class PersonaDetailView(APIView):
             greeting = request.data.get("greeting")
             if memory_prompt or greeting:
                 user_id = request.user.id if (request.user and request.user.is_authenticated) else request.data.get("user_id", "guest")
-                namespace = f"{user_id}_{persona.id}"
+                clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
+                clean_persona_id = str(persona.id).strip().replace(":", "_").replace("/", "_")
+                namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+                user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or request.query_params.get("user_key") or "").strip() or None
                 try:
                     summary_text = (
                         f"Persona Profile for {updated_persona.name}: "
                         f"Backstory & Memory: {updated_persona.memory_prompt}. "
                         f"First message script: {updated_persona.greeting}"
                     )
-                    store_memory_for_user(summary_text, namespace)
+                    store_memory_for_user(summary_text, namespace, user_key=user_key)
                 except Exception as exc:
                     pass
 

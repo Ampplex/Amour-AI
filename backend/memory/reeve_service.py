@@ -142,7 +142,7 @@ def store_memory_for_user(text: str, namespace: str, user_key: str = None):
     """
     tools, is_remote = _get_memory_tools()
     kwargs = {"speaker": namespace}
-    if user_key and is_remote:
+    if user_key:
         kwargs["user_key"] = user_key
 
     try:
@@ -161,7 +161,7 @@ def query_memory_for_user(question: str, namespace: str, user_key: str = None):
     """
     tools, is_remote = _get_memory_tools()
     kwargs = {"speaker": namespace}
-    if user_key and is_remote:
+    if user_key:
         kwargs["user_key"] = user_key
 
     try:
@@ -181,7 +181,7 @@ def retrieve_context_for_user(question: str, namespace: str, user_key: str = Non
     """
     tools, is_remote = _get_memory_tools()
     kwargs = {"speaker": namespace}
-    if user_key and is_remote:
+    if user_key:
         kwargs["user_key"] = user_key
 
     try:

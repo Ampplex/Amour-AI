@@ -41,36 +41,45 @@ def check_reeve_neo4j_status() -> dict[str, Any]:
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
-def store_user_memory(text: str, namespace: str) -> dict[str, Any]:
+def store_user_memory(text: str, namespace: str, user_key: Optional[str] = None) -> dict[str, Any]:
     """Store a conversational memory into Neo4j graph isolated by speaker=namespace."""
     tools = _get_reeve_tools()
     if not tools:
         raise RuntimeError("Reeve SDK not available")
+    kwargs = {"speaker": namespace}
+    if user_key:
+        kwargs["user_key"] = user_key
     try:
-        return tools["store_memory"](text, speaker=namespace)
+        return tools["store_memory"](text, **kwargs)
     except Exception as exc:
         log.warning("Reeve write error, retrying with fresh client: %s", exc)
         tools["reset_client_cache"]()
-        return tools["store_memory"](text, speaker=namespace)
+        return tools["store_memory"](text, **kwargs)
 
-def ask_user_memory(question: str, namespace: str) -> str:
+def ask_user_memory(question: str, namespace: str, user_key: Optional[str] = None) -> str:
     """Ask question against the user's isolated memory graph in Neo4j."""
     tools = _get_reeve_tools()
     if not tools:
         raise RuntimeError("Reeve SDK not available")
+    kwargs = {"speaker": namespace}
+    if user_key:
+        kwargs["user_key"] = user_key
     try:
-        return tools["query_memory"](question, speaker=namespace)
+        return tools["query_memory"](question, **kwargs)
     except Exception as exc:
         log.warning("Reeve read error, retrying: %s", exc)
         tools["reset_client_cache"]()
-        return tools["query_memory"](question, speaker=namespace)
+        return tools["query_memory"](question, **kwargs)
 
-def get_user_memory_context(question: str, namespace: str) -> str:
+def get_user_memory_context(question: str, namespace: str, user_key: Optional[str] = None) -> str:
     """Retrieve raw ranked memory context for this namespace."""
     tools = _get_reeve_tools()
     if not tools:
         raise RuntimeError("Reeve SDK not available")
-    return tools["retrieve_memory_context"](question, speaker=namespace)
+    kwargs = {"speaker": namespace}
+    if user_key:
+        kwargs["user_key"] = user_key
+    return tools["retrieve_memory_context"](question, **kwargs)
 
 def clear_user_memory(namespace: str) -> dict[str, Any]:
     """Clear memory graph for this specific user namespace in Neo4j."""
