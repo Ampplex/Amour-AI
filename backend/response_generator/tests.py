@@ -237,7 +237,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertTrue(":00" in bucketed or ":30" in bucketed)
 
     def test_story_prompts_assign_concrete_worldbuilding_to_planner(self):
-        self.assertIn("preserve established facts", STORY_DIRECTOR_PROMPT)
+        self.assertIn("Never contradict established facts", STORY_DIRECTOR_PROMPT)
         self.assertIn(
             "supply concrete plausible facts in the plan",
             STORY_DIRECTOR_PROMPT,
@@ -255,7 +255,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
-            "A CONTINUE plan may contain a meaningful immediate action",
+            "CONTINUE classifies persistence",
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
@@ -428,7 +428,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         retry_prompt = "\n".join(
             item["content"] for item in retry_messages if item["role"] == "system"
         )
-        self.assertIn("CONTINUITY RETRY", retry_prompt)
+        self.assertIn("PROSE RENDERING RETRY", retry_prompt)
         self.assertIn("Nothing, I just remembered it.", [
             item["content"] for item in retry_messages
         ])
@@ -580,10 +580,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
             **VALID_STORY_PLAN,
             "state_patch": {},
         }
-        empty_writer_output = {
-            **VALID_WRITER_OUTPUT,
-            "state_patch": {},
-        }
+        empty_writer_output = deepcopy(VALID_WRITER_OUTPUT)
         mock_post.side_effect = [
             make_mock_response(empty_story_plan),
             make_mock_response(empty_writer_output),
@@ -675,9 +672,9 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         mock_retrieve.return_value = ""
         mock_post.side_effect = [
             make_mock_response(VALID_STORY_PLAN),
-            make_mock_response({"reply": "invalid"}),
-            make_mock_response({"reply": "invalid"}),
-            make_mock_response({"reply": "invalid"}),
+            make_mock_response({"reply": ""}),
+            make_mock_response({"reply": ""}),
+            make_mock_response({"reply": ""}),
         ]
 
         result = generate_companion_reply(
