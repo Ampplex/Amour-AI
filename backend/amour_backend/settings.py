@@ -159,6 +159,7 @@ REEVE_API_KEY = os.environ.get("REEVE_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "bedrock")
 GOOGLE_CLIENT_IDS = [
     os.environ.get("GOOGLE_WEB_CLIENT_ID", "665738151857-0f765nnvu4no6qhbdbua132vfv2iu10k.apps.googleusercontent.com"),
     os.environ.get("GOOGLE_ANDROID_CLIENT_ID", "665738151857-epjtqdvodprak901bkmi2k9t68t15830.apps.googleusercontent.com"),

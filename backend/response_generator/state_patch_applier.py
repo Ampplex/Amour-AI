@@ -36,13 +36,13 @@ def _apply_string_list_delta(
             f"{path}: delta must be an object."
         )
 
-    if set(delta) != {"add", "remove"}:
+    if not set(delta).issubset({"add", "remove"}):
         raise StoryStatePatchApplicationError(
-            f"{path}: delta must contain exactly 'add' and 'remove'."
+            f"{path}: delta may only contain 'add' and 'remove'."
         )
 
-    removals = set(delta["remove"])
-    additions = list(delta["add"])
+    removals = set(delta.get("remove") or [])
+    additions = list(delta.get("add") or [])
 
     updated_values = [
         value for value in current_values

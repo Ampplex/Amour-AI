@@ -21,7 +21,7 @@ import json
 
 from typing import Any, Literal, Mapping, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, AliasChoices
+from pydantic import BaseModel, ConfigDict, Field, AliasChoices, field_validator
 
 
 # ============================================================
@@ -278,6 +278,17 @@ class StoryDirectorOutput(BaseModel):
     scene_direction: dict[str, Any]
     state_patch: dict[str, Any]
 
+    @field_validator("scene_direction", mode="before")
+    @classmethod
+    def _normalize_scene_direction(cls, v: Any) -> dict[str, Any]:
+        if isinstance(v, str):
+            return {"staging": v}
+        if isinstance(v, (list, set)):
+            return {"staging": list(v)}
+        if not isinstance(v, dict):
+            return {}
+        return v
+
 
 class CompanionReplyOutput(BaseModel):
     """
@@ -380,53 +391,55 @@ B. DECISION PROCESS
    Do not generate the final character response.
 
 ------------------------------------------------------------
-C. NARRATIVE DECISION TYPES
+C. NARRATIVE DECISION TYPES & MULTI-SECTION STATE PATCHES
 ------------------------------------------------------------
 
 Choose exactly ONE primary narrative decision:
 
 1. CONTINUE
-
-Continue the existing interaction naturally without introducing a
-meaningful change to the broader story.
-Select this ONLY when the interaction is routine conversation, casual
-pleasantries, or banter where no new characters, plot threads, or
-major relationship shifts occur.
+Continue routine conversation without introducing persistent changes.
 state_patch: {} (empty object).
+Use ONLY when the user message is pure small-talk or flavour text that
+changes nothing about any character's emotion, knowledge, goal, location,
+relationship dynamic, plot thread, or scene detail.
+
+DO NOT choose CONTINUE when any of these are true:
+- The user physically touches, comforts, threatens, or emotionally engages a character → use CHARACTER_DEVELOPMENT.
+- The user declares trust, love, anger, or shifts how they relate to someone → use RELATIONSHIP_DEVELOPMENT.
+- The user announces a plot outcome, resolves a threat, or asks to drop/archive a storyline → use PLOT_DEVELOPMENT.
+- The user moves, changes atmosphere, or explicitly adds/removes a prop or participant → use SCENE_TRANSITION.
+
+If in doubt, prefer a non-CONTINUE decision with a small state_patch over CONTINUE with an empty patch.
 
 2. CHARACTER_DEVELOPMENT
-
-Select when:
-- A new named character is introduced or revealed in the dialogue.
-- An existing character undergoes an emotional shift, learns significant
-  new information, changes intentions, or makes a personal decision.
-state_patch: Propose additions or updates under "characters".
+An existing character undergoes an emotional shift, learns new knowledge, or changes goals; or a new character is introduced.
+Trigger examples: physical-emotional interactions (touching, comforting, threatening), discovering information, changing intent.
+Always update the affected character's fields in state_patch (e.g. current_emotional_state, current_goal, important_knowledge).
 
 3. RELATIONSHIP_DEVELOPMENT
-
-Select when:
-- The emotional dynamic between the user and companion evolves
-  (deepening trust, tension, distance, affection, reconciliation).
-- A new relationship between characters is established or revealed.
-- An existing relationship changes its nature or dynamic.
-state_patch: Propose additions, updates, or removals under "relationships".
+Interpersonal dynamic between characters evolves, or a new relationship is established or ended.
+Trigger examples: declarations of trust/love/betrayal, partnerships forming, bonds breaking, cutting ties.
+- Use op "add" to create a new relationship between characters (with complete "value" containing "characters", "relationship", "current_dynamic").
+- Use op "update" to change an existing dynamic ("characters" and "changes": {"current_dynamic": "..."}).
+- Use op "remove" with "characters": [id1, id2] when characters sever ties, break up, or permanently terminate their connection.
 
 4. PLOT_DEVELOPMENT
-
-Select when:
-- A new conflict, mystery, secret, goal, or unresolved story thread
-  is brought up or introduced.
-- An existing plot thread advances, reveals new developments, or
-  reaches resolution.
-state_patch: Propose additions, updates, or removals under "plot_threads".
+A plot thread is introduced, advanced, resolved, or abandoned.
+Trigger examples: new mystery/quest introduced, threat escalates, crisis resolves, user explicitly asks to close, drop, or remove a storyline.
+- Use op "add" to create new threads (with complete "value" containing "id", "description", "status", "involved_characters").
+- Use op "update" to change status/description (e.g. set status to "resolved").
+- Use op "remove" with "id": "<thread_id>" when a thread is completely concluded, discarded, archived, or when the user explicitly asks to remove/drop it from tracking.
 
 5. SCENE_TRANSITION
+Location, time, participants, atmosphere, or physical props change.
 
-Select when:
-- The physical location, setting, or time shifts.
-- Characters arrive at or leave a scene.
-- Scene atmosphere or persistent continuity props change significantly.
-state_patch: Propose updates under "current_scene".
+IMPORTANT — STATE PATCHES ARE MULTI-SECTIONAL:
+Your primary narrative decision categorizes the main dramatic beat, BUT your state_patch
+is NOT restricted to a single section! Real-world narrative beats frequently affect multiple sections simultaneously:
+- When a new character enters the scene: you MUST define them under "characters" (with all 7 required fields: name, role, current_emotional_state, current_physical_state, current_goal, current_location, important_knowledge) AND add them to "current_scene.participants" AND can establish their "relationships".
+- When an active plot thread resolves: you can update "plot_threads" AND update character emotions/goals under "characters" AND update "story_summary".
+- When a conflict escalates or scene shifts: you can update "characters", "relationships", and "current_scene" together.
+Include every section that meaningfully changes in the exact same state_patch.
 
 ------------------------------------------------------------
 D. NARRATIVE RULES
@@ -721,6 +734,13 @@ Examine the latest dialogue and context to identify all persistent developments:
 6. STORY SUMMARY: When the overarching premise changes, update "story_summary".
 7. ROUTINE DIALOGUE: When none of the above occur, return an empty state_patch {}.
 
+CRITICAL RULE ON CHARACTER REFERENCES:
+Any character ID referenced in "current_scene.participants", "relationships",
+or "plot_threads.involved_characters" MUST already exist in StoryState.characters
+OR be added under "characters" in the exact same state_patch with ALL 7 required fields:
+("name", "role", "current_emotional_state", "current_physical_state", "current_goal", "current_location", "important_knowledge").
+Never add a character to scene participants or relationships without also defining them under "characters".
+
 PATCH SECTION ROUTING AND TARGET IDENTIFICATION (REQUIRED):
 
 The state_patch MUST be a JSON object. Its TOP-LEVEL KEYS identify
@@ -865,7 +885,7 @@ Do not output bare operations outside their enclosing top-level key.
     ]
 }
 
-9. PLOT THREAD REMOVE (or mark resolved):
+9. PLOT THREAD RESOLVE:
 {
     "plot_threads": [
         {
@@ -878,7 +898,17 @@ Do not output bare operations outside their enclosing top-level key.
     ]
 }
 
-10. CURRENT SCENE (updating scene scalars, participants, or continuity props):
+10. PLOT THREAD REMOVE (delete concluded, archived, or discarded thread):
+{
+    "plot_threads": [
+        {
+            "op": "remove",
+            "id": "<existing_thread_id>"
+        }
+    ]
+}
+
+11. CURRENT SCENE (updating scene scalars, participants, or continuity props):
 {
     "current_scene": {
         "location": "<New location if changed>",
@@ -895,6 +925,39 @@ Do not output bare operations outside their enclosing top-level key.
     }
 }
 
+12. MULTI-SECTION COMPLETE EXAMPLE (new character arrives and joins the table scene):
+{
+    "characters": {
+        "detective_miller": {
+            "name": "Detective Miller",
+            "role": "Senior investigator who recovered the missing university archives",
+            "current_emotional_state": "Calm and professional",
+            "current_physical_state": "Healthy",
+            "current_goal": "Join Maya and Alex at their table to celebrate",
+            "current_location": "Gallery Cafe",
+            "important_knowledge": [
+                "Recovered the missing university archives that cleared Maya"
+            ]
+        }
+    },
+    "relationships": [
+        {
+            "op": "add",
+            "value": {
+                "characters": ["persona_maya", "detective_miller"],
+                "relationship": "Investigator and client",
+                "current_dynamic": "Grateful and respectful"
+            }
+        }
+    ],
+    "current_scene": {
+        "situation": "Maya, Alex, and Detective Miller are sitting at the corner table celebrating.",
+        "participants": {
+            "add": ["detective_miller"]
+        }
+    }
+}
+
 IMPORTANT:
 - Multiple top-level sections may appear in one state_patch.
 - Omit every section that does not need to change.
@@ -905,160 +968,6 @@ IMPORTANT:
 - Do not invent alternative section names or target identifiers.
 - Do not include unchanged fields or empty update sections.
 - The backend validates this exact structure and rejects malformed wrappers.
-
-CHARACTER UPDATES:
-
-Identify characters using their existing dictionary IDs.
-
-Include only changed properties.
-
-Example:
-
-{
-    "characters": {
-        "maya": {
-            "current_emotional_state": "Anxious and guilty"
-        }
-    }
-}
-
-Do not include Maya's unchanged goals, knowledge,
-physical state or other characters.
-
-For important_knowledge, use this complete character wrapper:
-
-{
-    "characters": {
-        "maya": {
-            "important_knowledge": {
-                "add": ["The user knows about the secret"],
-                "remove": []
-            }
-        }
-    }
-}
-
-A genuinely new character may be added using a new stable
-character ID and a complete CharacterState record.
-
-Do not duplicate existing characters.
-
-RELATIONSHIP UPDATES:
-
-Use explicit operations.
-
-Add:
-
-{
-    "relationships": [
-        {
-            "op": "add",
-            "value": {
-                "characters": ["maya", "user"],
-                "relationship": "Close friends",
-                "current_dynamic": "Growing mutual trust"
-            }
-        }
-    ]
-}
-
-Update:
-
-{
-    "relationships": [
-        {
-            "op": "update",
-            "characters": ["maya", "user"],
-            "changes": {
-                "current_dynamic": "Growing emotional tension"
-            }
-        }
-    ]
-}
-
-Remove:
-
-{
-    "relationships": [
-        {
-            "op": "remove",
-            "characters": ["maya", "user"]
-        }
-    ]
-}
-
-For updates, include only changed properties.
-
-PLOT THREAD UPDATES:
-
-Use explicit operations.
-
-Add:
-
-{
-    "plot_threads": [
-        {
-            "op": "add",
-            "value": {
-                "id": "thread_2",
-                "description": "An unknown person is contacting Maya.",
-                "status": "active",
-                "involved_characters": ["maya"]
-            }
-        }
-    ]
-}
-
-Update:
-
-{
-    "plot_threads": [
-        {
-            "op": "update",
-            "id": "thread_1",
-            "changes": {
-                "description": "Maya has partially revealed her secret."
-            }
-        }
-    ]
-}
-
-Remove:
-
-{
-    "plot_threads": [
-        {
-            "op": "remove",
-            "id": "thread_1"
-        }
-    ]
-}
-
-Do not recreate existing plot threads unnecessarily.
-
-CURRENT SCENE UPDATES:
-
-Update only changed scalar properties:
-
-- location
-- time
-- situation
-- atmosphere
-
-For participants and continuity_details, use explicit
-add/remove operations.
-
-Example:
-
-{
-    "current_scene": {
-        "situation": "Maya has acknowledged hiding something.",
-        "continuity_details": {
-            "add": ["Maya's phone has received a message"],
-            "remove": []
-        }
-    }
-}
 
 STORY SUMMARY:
 
@@ -1142,8 +1051,8 @@ OUTPUT REQUIREMENTS:
 - Do not include explanations outside the JSON object.
 - Do not return additional top-level keys.
 - Always include all five required fields.
-- Use an empty object when no scene directions are necessary.
-- Use an empty object when no persistent state changes are necessary.
+- For scene_direction, use an empty object {} or key-value mapping (e.g. {"staging": "Elena steps closer"}). Never put a bare string inside curly braces.
+- Use an empty object {} when no persistent state changes are necessary.
 - Never generate the final character reply.
 - Never expose internal narrative planning to the user.
 
@@ -1251,6 +1160,7 @@ Return the FINAL state_patch consistent with the response you
 actually generated.
 
 1. Preserve proposed changes supported by the generated response.
+   When the Story Director proposed adding a character, relationship, plot thread, or scene participant that is supported by the interaction, preserve that complete definition in your final state_patch. Do not drop required fields from proposed characters or operations.
 2. Remove proposed changes the response does not establish.
 3. Do not introduce unsupported persistent changes.
 4. Do not update relationships based on assumed user reactions.

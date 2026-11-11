@@ -517,11 +517,11 @@ def _call_structured_llm(
 
         try:
             token_budgets = {
-                "story_director": 900,
-                "response_generator": 500,
-                "story_state_initialization": 1400,
-                "story_director_patch_repair": 900,
-                "response_generator_patch_repair": 500,
+                "story_director": 2048,
+                "response_generator": 1024,
+                "story_state_initialization": 2048,
+                "story_director_patch_repair": 2048,
+                "response_generator_patch_repair": 1024,
             }
             token_budget = token_budgets.get(stage_name, 500)
             if "gpt-oss" in current_model:
@@ -687,20 +687,27 @@ def _call_structured_llm(
             )
 
             clean_content = raw_content.strip()
-            if clean_content.startswith("```"):
-                clean_content = re.sub(
-                    r"^```(?:json)?\s*", "", clean_content, flags=re.IGNORECASE
-                )
-                clean_content = re.sub(r"\s*```$", "", clean_content).strip()
-            try:
-                parsed = json.loads(clean_content)
-            except json.JSONDecodeError:
-                start_idx = clean_content.find("{")
-                end_idx = clean_content.rfind("}")
-                if start_idx != -1 and end_idx > start_idx:
-                    parsed = json.loads(clean_content[start_idx : end_idx + 1])
-                else:
-                    raise
+            # Strip markdown code fences if present
+            clean_content = re.sub(
+                r"^```(?:json)?\s*", "", clean_content, flags=re.IGNORECASE
+            )
+            clean_content = re.sub(r"\s*```.*?$", "", clean_content, flags=re.DOTALL).strip()
+
+            # Boundary extraction: strictly between first { and last }
+            start_idx = clean_content.find("{")
+            end_idx = clean_content.rfind("}")
+            if start_idx != -1 and end_idx > start_idx:
+                clean_content = clean_content[start_idx : end_idx + 1]
+
+            # Fix LLM syntax quirk where single string is placed inside braces without key:
+            # e.g. "scene_direction": { "some direction string" } -> {"staging": "some direction string"}
+            clean_content = re.sub(
+                r'\{\s*"([^":\r\n]+?)"\s*\}',
+                r'{"staging": "\1"}',
+                clean_content,
+            )
+
+            parsed = json.loads(clean_content)
             structured_output = output_model.model_validate(parsed)
             validated_output = structured_output.model_dump(mode="json")
 
@@ -1561,8 +1568,13 @@ def generate_companion_reply(
                 "and scene direction wherever possible.\n"
                 "Correct the invalid state_patch using the supplied "
                 "canonical StoryState and validation errors.\n"
-                "Do not invent character IDs, relationship targets or "
-                "plot-thread IDs.\n"
+                "If a character ID was added to current_scene.participants, relationships, or plot_threads "
+                "but reported as an unknown character ID, you MUST define that character under 'characters' "
+                "with all 7 required fields (name, role, current_emotional_state, current_physical_state, "
+                "current_goal, current_location, important_knowledge) if they entered the scene or were introduced "
+                "in the dialogue/context, OR remove the reference if unintended.\n"
+                "Ensure relationship and plot-thread operations follow the required schema "
+                "(op: 'add' with complete 'value', op: 'update' with target and 'changes', or op: 'remove').\n"
                 "Do not introduce unrelated narrative developments.\n"
                 "If no justified persistent change can be represented "
                 "safely, return an empty state_patch object.\n"

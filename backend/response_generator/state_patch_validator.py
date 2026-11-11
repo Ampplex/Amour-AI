@@ -181,14 +181,17 @@ def _validate_array_delta(
     _require_keys(
         delta,
         path,
-        required={"add", "remove"},
+        required=set(),
+        allowed={"add", "remove"},
     )
+
+    if "add" not in delta:
+        delta["add"] = []
+    if "remove" not in delta:
+        delta["remove"] = []
 
     additions = _require_string_list(delta["add"], f"{path}.add")
     removals = _require_string_list(delta["remove"], f"{path}.remove")
-
-    if not additions and not removals:
-        _fail(path, "must contain at least one addition or removal.")
 
     overlap = set(additions) & set(removals)
     if overlap:
@@ -198,23 +201,14 @@ def _validate_array_delta(
         )
 
     current_set = set(current_values)
-    already_present = set(additions) & current_set
-    if already_present:
-        _fail(
-            f"{path}.add",
-            f"values already exist: {sorted(already_present)}",
-        )
-
-    missing_values = set(removals) - current_set
-    if missing_values:
-        _fail(
-            f"{path}.remove",
-            f"values do not exist: {sorted(missing_values)}",
-        )
+    # Deduplicate additions that already exist rather than hard-failing
+    delta["add"] = [item for item in additions if item not in current_set]
+    # Filter removals to only items that actually exist
+    delta["remove"] = [item for item in removals if item in current_set]
 
     if known_character_ids is not None:
         _validate_character_references(
-            additions,
+            delta["add"],
             known_character_ids,
             f"{path}.add",
         )
@@ -329,6 +323,10 @@ def _validate_relationship_patches(
             _fail(path, "op must be add, update or remove.")
 
         if op == "add":
+            if "value" not in operation and any(k in operation for k in ("characters", "character_ids", "relationship", "current_dynamic")):
+                operation["value"] = {
+                    k: v for k, v in operation.items() if k != "op"
+                }
             _require_keys(operation, path, {"op", "value"})
             value = _require_object(operation["value"], f"{path}.value")
             _require_keys(
@@ -373,6 +371,10 @@ def _validate_relationship_patches(
                 )
 
             if op == "update":
+                if "changes" not in operation and any(k in operation for k in ("relationship", "current_dynamic")):
+                    operation["changes"] = {
+                        k: v for k, v in operation.items() if k not in {"op", "characters", "character_ids"}
+                    }
                 changes = _require_object(
                     operation["changes"],
                     f"{path}.changes",
@@ -426,6 +428,10 @@ def _validate_plot_thread_patches(
             _fail(path, "op must be add, update or remove.")
 
         if op == "add":
+            if "value" not in operation and any(k in operation for k in ("id", "description", "status", "involved_characters")):
+                operation["value"] = {
+                    k: v for k, v in operation.items() if k != "op"
+                }
             _require_keys(operation, path, {"op", "value"})
             value = _require_object(operation["value"], f"{path}.value")
             _require_keys(
@@ -473,6 +479,10 @@ def _validate_plot_thread_patches(
                 _fail(path, f"plot thread '{thread_id}' does not exist.")
 
             if op == "update":
+                if "changes" not in operation and any(k in operation for k in ("description", "status", "involved_characters")):
+                    operation["changes"] = {
+                        k: v for k, v in operation.items() if k not in {"op", "id"}
+                    }
                 changes = _require_object(
                     operation["changes"],
                     f"{path}.changes",

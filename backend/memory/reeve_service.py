@@ -52,6 +52,16 @@ logger = logging.getLogger("amour.reeve")
 if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
     os.environ["REEVE_API_KEY"] = settings.REEVE_API_KEY
 
+# Configure Reeve Chat LLM to use Groq Qwen (decoupling it from Bedrock)
+groq_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
+if groq_key:
+    os.environ.setdefault("OPENAI_API_KEY", groq_key)
+    os.environ.setdefault("OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
+    os.environ.setdefault("OPENAI_API_BASE", "https://api.groq.com/openai/v1")
+    os.environ.setdefault("OPENAI_CHAT_MODEL", "qwen/qwen3.8-27b")
+    os.environ.setdefault("LLM_PROVIDER", "openai")
+    os.environ.setdefault("EMBEDDING_PROVIDER", "bedrock")
+
 # Enable Reeve's native background worker (PersistWorker) and WriteAhead buffer
 os.environ["ASYNC_WRITE_ENABLED"] = "true"
 try:
@@ -65,8 +75,20 @@ def _get_memory_tools():
     """
     Returns the local in-process memory operations tools module.
     Exclusively uses local in-process threelane_memory against Neo4j Cloud.
-    External SSE and remote Reeve MCP network connections are completely disabled.
+    Configures Reeve to use Groq Qwen for graph LLM extraction and Bedrock Titan for embeddings.
     """
+    import threelane_memory.config as cfg
+    groq_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
+    if groq_key:
+        os.environ["OPENAI_API_KEY"] = groq_key
+        os.environ["OPENAI_BASE_URL"] = "https://api.groq.com/openai/v1"
+        os.environ["OPENAI_API_BASE"] = "https://api.groq.com/openai/v1"
+        os.environ["OPENAI_CHAT_MODEL"] = "qwen/qwen3.8-27b"
+        cfg.LLM_PROVIDER = "openai"
+        cfg.OPENAI_API_KEY = groq_key
+        cfg.OPENAI_CHAT_MODEL = "qwen/qwen3.8-27b"
+    cfg.EMBEDDING_PROVIDER = "bedrock"
+    cfg.BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
     import threelane_memory.tools as tools
     return tools, False
 
