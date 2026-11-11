@@ -169,7 +169,7 @@ def prepare_bedrock_converse_messages(messages: list) -> tuple[list[dict], list[
 def call_llm(
     messages: list,
     max_tokens: int = 1024,
-    temperature: float = 0.75,
+    temperature: float = 0.88,
 ) -> tuple[str | None, str | None]:
     """
     Direct LLM call with fallback model chain.
@@ -238,8 +238,9 @@ def call_llm(
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": min(max_tokens, 768 if "groq" in llm_base_url else max_tokens),
-                    "frequency_penalty": 0.35,
-                    "presence_penalty": 0.3,
+                    "frequency_penalty": 0.5,
+                    "presence_penalty": 0.5,
+                    "top_p": 0.9,
                 }
                 url = f"{llm_base_url}/chat/completions"
 

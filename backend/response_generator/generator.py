@@ -92,7 +92,7 @@ def generate_companion_reply(
     raw_text, successful_model = call_llm(
         messages=messages,
         max_tokens=1024,
-        temperature=0.75,
+        temperature=0.88,
     )
 
     if not raw_text:
