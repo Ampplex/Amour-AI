@@ -2,6 +2,16 @@ import * as Crypto from 'expo-crypto';
 import { API_CONFIG } from '../constants/authConfig';
 import { getOrCreateUserKey } from './keyService';
 
+export interface ChatResponseMetadata {
+  narrative_decision: string | null;
+  story_state: {
+    available: boolean;
+    schema_version: number | null;
+    revision: number | null;
+    updated: boolean;
+  };
+}
+
 export interface ChatHistoryItem {
   id: string;
   client_message_id?: string;
@@ -12,6 +22,7 @@ export interface ChatHistoryItem {
   text: string;
   conflict_stage?: number;
   conflict_level?: number;
+  response_metadata?: ChatResponseMetadata;
   created_at: string;
 }
 
@@ -48,6 +59,7 @@ export interface SendMessageResponse {
   namespace: string;
   persona_id: string;
   user_id: string;
+  metadata?: ChatResponseMetadata;
 }
 
 const CANDIDATE_URLS = [
