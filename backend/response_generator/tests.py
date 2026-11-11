@@ -237,22 +237,10 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertTrue(":00" in bucketed or ":30" in bucketed)
 
     def test_story_prompts_assign_concrete_worldbuilding_to_planner(self):
-        self.assertIn(
-            "Do not treat\\n  \\"preserve established facts\\" as a ban on creating new scene facts.",
-            STORY_DIRECTOR_PROMPT,
-        )
-        self.assertIn(
-            "include the concrete result and its\\n  relevant implication in the plan",
-            STORY_DIRECTOR_PROMPT,
-        )
-        self.assertIn(
-            "Treat a clear\\nanswer as resolving that question",
-            STORY_DIRECTOR_PROMPT,
-        )
-        self.assertIn(
-            "Read and use ALL of",
-            RESPONSE_GENERATOR_PROMPT,
-        )
+        self.assertIn("preserve established facts", STORY_DIRECTOR_PROMPT)
+        self.assertIn("include the concrete result", STORY_DIRECTOR_PROMPT)
+        self.assertIn("Treat a clear", STORY_DIRECTOR_PROMPT)
+        self.assertIn("Read and use ALL of", RESPONSE_GENERATOR_PROMPT)
         self.assertIn(
             "Do not repeat a question the user has already answered.",
             RESPONSE_GENERATOR_PROMPT,

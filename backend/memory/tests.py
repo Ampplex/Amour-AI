@@ -405,6 +405,20 @@ class ChatMemoryEndpointTests(TestCase):
 
     @patch("memory.views.generate_companion_reply")
     def test_different_user_same_request_id_cannot_replay(self, mock_reply):
+        # Seed canonical states for both namespaces so this API test never
+        # invokes the real LLM-backed StoryState initializer.
+        for user_id in ("user-A", "user-B"):
+            namespace = (
+                f"usr_{user_id.replace(':', '_').replace('/', '_')}_"
+                f"persona_{self.clean_persona_id}"
+            )
+            CompanionStoryState.objects.create(
+                namespace=namespace,
+                state=self.initial_story_state.model_dump(mode="json"),
+                schema_version=1,
+                revision=1,
+            )
+
         mock_reply.return_value = {
             "success": True,
             "reply": "Reply for User A",
@@ -414,15 +428,17 @@ class ChatMemoryEndpointTests(TestCase):
             "context": "",
         }
 
-        # User A sends request
-        self.client.post("/api/memory/chat/", {
-            "message": "Msg from user A",
-            "client_message_id": "shared-uuid-001",
-            "persona_id": str(self.persona.id),
-            "user_id": "user-A",
-        }, format="json")
+        self.client.post(
+            "/api/memory/chat/",
+            {
+                "message": "Msg from user A",
+                "client_message_id": "shared-uuid-001",
+                "persona_id": str(self.persona.id),
+                "user_id": "user-A",
+            },
+            format="json",
+        )
 
-        # User B sends request with same client_message_id
         mock_reply.return_value = {
             "success": True,
             "reply": "Reply for User B",
@@ -431,15 +447,20 @@ class ChatMemoryEndpointTests(TestCase):
             "updated_story_state": self.initial_story_state,
             "context": "",
         }
-        resp_b = self.client.post("/api/memory/chat/", {
-            "message": "Msg from user B",
-            "client_message_id": "shared-uuid-001",
-            "persona_id": str(self.persona.id),
-            "user_id": "user-B",
-        }, format="json")
+        response = self.client.post(
+            "/api/memory/chat/",
+            {
+                "message": "Msg from user B",
+                "client_message_id": "shared-uuid-001",
+                "persona_id": str(self.persona.id),
+                "user_id": "user-B",
+            },
+            format="json",
+        )
 
-        self.assertEqual(resp_b.status_code, 200)
-        self.assertEqual(resp_b.data["reply"], "Reply for User B")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["reply"], "Reply for User B")
+
 
     def test_incomplete_chat_turn_returns_409_and_prevents_duplicate_user_message(self):
         # User message was saved, but bot message never finished
