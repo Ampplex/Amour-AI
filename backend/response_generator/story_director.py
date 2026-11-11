@@ -1197,3 +1197,60 @@ Return valid JSON without Markdown fences or explanations.
 END PROSE RENDERER INSTRUCTIONS
 ============================================================
 """
+
+# ============================================================
+# 5. PROMPT BUILDER
+# ============================================================
+
+def _serialize_story_state(
+    story_state: StoryState | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Convert StoryState to JSON-compatible data without mutating it."""
+    if isinstance(story_state, StoryState):
+        return story_state.model_dump(mode="json")
+
+    if isinstance(story_state, Mapping):
+        return dict(story_state)
+
+    raise TypeError(
+        "story_state must be a StoryState instance or Mapping."
+    )
+
+
+def build_story_director_prompt(
+    story_state: StoryState | Mapping[str, Any] | None = None,
+) -> str:
+    """
+    Build the planner-specific prompt with the canonical current StoryState.
+    """
+    prompt = STORY_DIRECTOR_PROMPT
+
+    if story_state is not None:
+        serialized_state = _serialize_story_state(story_state)
+        state_json = json.dumps(
+            serialized_state,
+            ensure_ascii=False,
+            indent=2,
+        )
+        prompt += (
+            "\n\n"
+            "============================================================\n"
+            "CURRENT CANONICAL STORY STATE\n"
+            "============================================================\n"
+            "This is the existing authoritative StoryState.\n"
+            "Preserve unchanged fields when proposing state_patch.\n\n"
+            f"{state_json}"
+        )
+    else:
+        prompt += (
+            "\n\n"
+            "============================================================\n"
+            "CURRENT CANONICAL STORY STATE\n"
+            "============================================================\n"
+            "No initialized StoryState was provided.\n"
+            "Do not invent established historical facts.\n"
+            "Only propose state changes supported by the supplied "
+            "persona, conversation and memory context."
+        )
+
+    return prompt
