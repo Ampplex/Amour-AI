@@ -15,6 +15,7 @@ import {
   Dimensions,
   Animated,
   Easing,
+  Vibration,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -253,11 +254,13 @@ export default function CompanionChatModal({
   const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
   const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [actionMenuMessage, setActionMenuMessage] = useState<ChatMessage | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const chatInputRef = useRef<any>(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
 
   const handleStartEdit = (item: ChatMessage) => {
+    setActionMenuMessage(null);
     setEditingMessageId(item.id);
     setInputText(item.text);
     setTimeout(() => {
@@ -367,12 +370,14 @@ export default function CompanionChatModal({
     if (!visible || !persona) {
       setMessages([]);
       setEditingMessageId(null);
+      setActionMenuMessage(null);
       return;
     }
 
     setActivePersona(persona);
     setMessages([]);
     setEditingMessageId(null);
+    setActionMenuMessage(null);
     setHistoryPage(1);
     setHasMoreHistory(false);
     loadHistory();
@@ -408,12 +413,12 @@ export default function CompanionChatModal({
     }
   };
 
-  const handleSend = async (messageTextOverride?: string) => {
+  const handleSend = async (messageTextOverride?: string, targetMessageId?: string) => {
     const text = (messageTextOverride !== undefined ? messageTextOverride : inputText).trim();
     if (!text || !activePersona || isTyping) return;
 
-    const wasEditing = editingMessageId !== null;
-    const editingId = editingMessageId;
+    const inPlaceTargetId = targetMessageId || editingMessageId;
+    const isInPlace = Boolean(inPlaceTargetId);
 
     if (messageTextOverride === undefined) {
       setInputText('');
@@ -431,16 +436,16 @@ export default function CompanionChatModal({
     };
 
     setMessages((prev) => {
-      if (wasEditing && editingId) {
-        const editIdx = prev.findIndex((m) => m.id === editingId);
-        if (editIdx !== -1) {
-          // Update the message being edited in-place with the new text, and remove any bot reply after it while generating
+      if (isInPlace && inPlaceTargetId) {
+        const targetIdx = prev.findIndex((m) => m.id === inPlaceTargetId);
+        if (targetIdx !== -1) {
+          // Update the target message in-place and remove any subsequent bot reply while regenerating
           const updatedMsg: ChatMessage = {
-            ...prev[editIdx],
+            ...prev[targetIdx],
             text,
             isFailed: false,
           };
-          return [...prev.slice(0, editIdx), updatedMsg];
+          return [...prev.slice(0, targetIdx), updatedMsg];
         }
       }
       // If retrying a message that failed at the tail of messages, replace the failed entry with the new attempt
@@ -473,7 +478,7 @@ export default function CompanionChatModal({
       const data = await sendChatMessage(
         {
           client_message_id: clientMsgId,
-          edit_message_id: wasEditing && editingId ? editingId : undefined,
+          edit_message_id: isInPlace && inPlaceTargetId ? inPlaceTargetId : undefined,
           message: text,
           persona_id: activePersona.id,
           persona_name: activePersona.name,
@@ -497,7 +502,7 @@ export default function CompanionChatModal({
         setMessages((prev) => [...prev, botReply]);
       } else {
         setMessages((prev) =>
-          prev.map((m) => (m.id === (wasEditing && editingId ? editingId : clientMsgId) ? { ...m, isFailed: true } : m))
+          prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
         );
         showAlert(
           'Response Unavailable',
@@ -509,7 +514,7 @@ export default function CompanionChatModal({
     } catch (err) {
       console.warn('[CompanionChat] Send error:', err);
       setMessages((prev) =>
-        prev.map((m) => (m.id === (wasEditing && editingId ? editingId : clientMsgId) ? { ...m, isFailed: true } : m))
+        prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
       );
       showAlert(
         'Connection Issue',
@@ -679,7 +684,25 @@ export default function CompanionChatModal({
                   isUser ? styles.userBubbleRow : styles.botBubbleRow,
                 ]}
               >
-                <View
+                <TouchableOpacity
+                  activeOpacity={isLastUserMsg ? 0.88 : 1}
+                  delayLongPress={260}
+                  onLongPress={() => {
+                    if (isLastUserMsg) {
+                      try {
+                        Vibration.vibrate(25);
+                      } catch {}
+                      setActionMenuMessage(item);
+                    }
+                  }}
+                  onPress={() => {
+                    if (isLastUserMsg && item.isFailed) {
+                      try {
+                        Vibration.vibrate(20);
+                      } catch {}
+                      setActionMenuMessage(item);
+                    }
+                  }}
                   style={[
                     styles.bubbleContainer,
                     isUser
@@ -692,57 +715,11 @@ export default function CompanionChatModal({
                     style={isUser ? styles.userBubbleText : styles.botBubbleText}
                     actionStyle={isUser ? styles.userActionText : styles.botActionText}
                   />
-                  <View
-                    style={[
-                      styles.bubbleFooterRow,
-                      isLastUserMsg ? styles.bubbleFooterRowWithAction : styles.bubbleFooterRowDefault,
-                    ]}
-                  >
-                    {isLastUserMsg && (
-                      <View style={styles.bubbleActionButtonsRow}>
-                        <TouchableOpacity
-                          style={[
-                            styles.retryButton,
-                            isTyping && styles.retryButtonDisabled,
-                          ]}
-                          onPress={() => handleStartEdit(item)}
-                          disabled={isTyping}
-                          activeOpacity={0.7}
-                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                          accessibilityLabel="Edit message"
-                        >
-                          <EditIcon size={11} color="#FFFFFF" />
-                          <Text style={styles.retryButtonText}>Edit</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.retryButton,
-                            item.isFailed && styles.retryButtonFailed,
-                            isTyping && styles.retryButtonDisabled,
-                          ]}
-                          onPress={() => handleSend(item.text)}
-                          disabled={isTyping}
-                          activeOpacity={0.7}
-                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                          accessibilityLabel={item.isFailed ? 'Retry sending message' : 'Resend message'}
-                        >
-                          <Animated.View
-                            style={[
-                              styles.retryIconWrapper,
-                              isTyping && { transform: [{ rotate: spinInterpolate }] },
-                            ]}
-                          >
-                            <RetryIcon size={11} color="#FFFFFF" />
-                          </Animated.View>
-                          <Text style={styles.retryButtonText}>
-                            {isTyping
-                              ? 'Sending...'
-                              : item.isFailed
-                              ? 'Failed · Retry'
-                              : 'Resend'}
-                          </Text>
-                        </TouchableOpacity>
+                  <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
+                    {item.isFailed && (
+                      <View style={styles.failedIndicatorRow}>
+                        <View style={styles.failedDot} />
+                        <Text style={styles.failedText}>Failed</Text>
                       </View>
                     )}
                     <Text
@@ -754,7 +731,7 @@ export default function CompanionChatModal({
                       {item.timestamp}
                     </Text>
                   </View>
-                </View>
+                </TouchableOpacity>
               </View>
             );
           }}
@@ -828,6 +805,105 @@ export default function CompanionChatModal({
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Instagram-style Message Action Modal */}
+        <Modal
+          visible={Boolean(actionMenuMessage)}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setActionMenuMessage(null)}
+          statusBarTranslucent={true}
+        >
+          <TouchableOpacity
+            style={styles.igOverlayBackdrop}
+            activeOpacity={1}
+            onPress={() => setActionMenuMessage(null)}
+          >
+            <View style={styles.igOverlayContent} onStartShouldSetResponder={() => true}>
+              {/* Spotlighted bubble preview */}
+              {actionMenuMessage && (
+                <View style={styles.igPreviewBubbleWrapper}>
+                  <View
+                    style={[
+                      styles.bubbleContainer,
+                      styles.userBubble,
+                      { backgroundColor: borderColor },
+                      styles.igElevatedBubble,
+                    ]}
+                  >
+                    <MarkdownText
+                      content={actionMenuMessage.text}
+                      style={styles.userBubbleText}
+                      actionStyle={styles.userActionText}
+                    />
+                    <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
+                      {actionMenuMessage.isFailed && (
+                        <View style={styles.failedIndicatorRow}>
+                          <View style={styles.failedDot} />
+                          <Text style={styles.failedText}>Failed</Text>
+                        </View>
+                      )}
+                      <Text style={[styles.bubbleTimestamp, styles.userTimestampText]}>
+                        {actionMenuMessage.timestamp}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Floating Instagram Action Menu Card */}
+              {actionMenuMessage && (
+                <View style={styles.igActionCard}>
+                  <TouchableOpacity
+                    style={styles.igActionRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      const msg = actionMenuMessage;
+                      setActionMenuMessage(null);
+                      handleStartEdit(msg);
+                    }}
+                    disabled={isTyping}
+                  >
+                    <View style={styles.igActionRowLeft}>
+                      <View style={styles.igActionIconCircle}>
+                        <EditIcon size={14} color="#FFFFFF" />
+                      </View>
+                      <Text style={styles.igActionText}>Edit</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  <View style={styles.igActionDivider} />
+
+                  <TouchableOpacity
+                    style={styles.igActionRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      const textToSend = actionMenuMessage.text;
+                      const msgId = actionMenuMessage.id;
+                      setActionMenuMessage(null);
+                      handleSend(textToSend, msgId);
+                    }}
+                    disabled={isTyping}
+                  >
+                    <View style={styles.igActionRowLeft}>
+                      <View
+                        style={[
+                          styles.igActionIconCircle,
+                          actionMenuMessage.isFailed && styles.igActionIconCircleFailed,
+                        ]}
+                      >
+                        <RetryIcon size={14} color="#FFFFFF" />
+                      </View>
+                      <Text style={styles.igActionText}>
+                        {actionMenuMessage.isFailed ? 'Retry Message' : 'Resend'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
+        </Modal>
 
         {/* Fullscreen DP / Avatar Viewer - Netflix Paused Photo Preview */}
         {isPreviewImageOpen && (
@@ -1086,43 +1162,92 @@ const styles = StyleSheet.create({
   bubbleFooterRowDefault: {
     justifyContent: 'flex-end',
   },
-  bubbleFooterRowWithAction: {
-    justifyContent: 'space-between',
-    minWidth: 180,
-    gap: 8,
-  },
-  bubbleActionButtonsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  retryButton: {
+  failedIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 7.5,
-    paddingVertical: 3.5,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    marginRight: 6,
+  },
+  failedDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#F87171',
+  },
+  failedText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#FCA5A5',
+    letterSpacing: 0.2,
+  },
+  igOverlayBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  igOverlayContent: {
+    width: '100%',
+    alignItems: 'flex-end',
+  },
+  igPreviewBubbleWrapper: {
+    maxWidth: '85%',
+    marginBottom: 10,
+  },
+  igElevatedBubble: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  igActionCard: {
+    minWidth: 170,
+    backgroundColor: '#1E1E26',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.22)',
+    borderColor: '#2F2F3D',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.55,
+    shadowRadius: 14,
+    elevation: 12,
   },
-  retryButtonFailed: {
-    backgroundColor: 'rgba(220, 38, 38, 0.45)',
-    borderColor: 'rgba(254, 202, 202, 0.5)',
+  igActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
   },
-  retryButtonDisabled: {
-    opacity: 0.65,
+  igActionRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  retryIconWrapper: {
+  igActionIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  retryButtonText: {
-    fontSize: 10.5,
+  igActionIconCircleFailed: {
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+  },
+  igActionText: {
+    fontSize: 14.5,
     fontWeight: '600',
     color: '#FFFFFF',
     letterSpacing: 0.2,
+  },
+  igActionDivider: {
+    height: 1,
+    backgroundColor: '#292936',
+    width: '100%',
   },
   bubbleTimestamp: {
     fontSize: 10,

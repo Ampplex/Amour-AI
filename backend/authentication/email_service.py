@@ -11,7 +11,7 @@ def send_brevo_email(to_email: str, to_name: str, subject: str, html_content: st
     """
     Sends a transactional email via Brevo REST API v3.
     """
-    api_key = getattr(settings, "BREVO_API_KEY", "") or "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"
+    api_key = getattr(settings, "BREVO_API_KEY", "")
     sender_email = getattr(settings, "BREVO_SENDER_EMAIL", "ankesh3905222@gmail.com")
     sender_name = getattr(settings, "BREVO_SENDER_NAME", "Amour AI")
 
