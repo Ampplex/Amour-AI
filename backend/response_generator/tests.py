@@ -263,6 +263,28 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
             RESPONSE_GENERATOR_PROMPT,
         )
 
+    def test_prompts_allow_natural_continuation_without_forced_progression(self):
+        self.assertIn(
+            "When uncertain, prefer CONTINUE and an empty patch",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertIn(
+            "do not require a hook or a new development",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertIn(
+            "Treat short replies as complete when appropriate.",
+            RESPONSE_GENERATOR_PROMPT,
+        )
+        self.assertNotIn(
+            "If in doubt, prefer a non-CONTINUE decision",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertNotIn(
+            "Every response must contain a conversational hook",
+            RESPONSE_GENERATOR_PROMPT,
+        )
+
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
