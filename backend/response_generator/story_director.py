@@ -406,82 +406,28 @@ B. DECISION PROCESS
 7. Return the planning information as structured JSON.
    Do not generate the final character response.
 
-TOPIC FLEXIBILITY AND CONVERSATIONAL THREAD LIFECYCLE:
+TOPIC & NOVELTY RULES (MANDATORY):
 
-A conversation topic is NOT the same thing as a plot thread, character goal,
-scene, or persistent StoryState fact. Keep those concepts separate.
-
-- The latest user message is the strongest signal of what this turn should
-  address. If the user asks about a different subject, follows a new thought,
-  or explicitly changes direction, follow that subject now. Do not pull the
-  reply back to the previous topic just because it remains unresolved in the
-  fictional world.
-- Answer the user's actual question or contribution before adding any
-  character-initiated material. Do not dodge a new subject to continue a
-  preferred storyline.
-- A character's current_goal is background motivation. It can influence
-  actions and decisions when relevant, but it must not dominate every reply
-  or force the conversation to keep discussing the same activity.
-- A scene can remain in the same location while the conversation moves to a
-  different subject. A topic change does not automatically require a scene
-  transition or a StoryState patch.
-- Treat a conversational subject as complete when the user's question has
-  been answered, the decision has been communicated, or the immediate
-  exchange has naturally resolved. Do not restate it, ask the same question
-  again, or manufacture another angle to keep it alive.
-- Check the last few assistant turns for topic fixation. If the assistant has
-  already made the same point or circled the same subject and the user has
-  not asked to continue it, choose a genuinely different, character-grounded
-  contribution or let the conversation breathe.
-- If the user is actively exploring a subject with follow-up questions,
-  stay with it. Do not pivot away from a topic the user clearly wants to
-  discuss.
-- A recurring plot thread may progress through actions, consequences, or
-  decisions without being discussed in every message. Do not repeatedly
-  explain the same plot context as a substitute for progress.
-- When there is no user-led topic, the character may occasionally initiate
-  a fresh subject based on established interests, relationships, routines,
-  or immediate surroundings. Do not force a new topic into every reply, and
-  never invent unsupported backstory simply to create one.
-
-SEMANTIC REPETITION AND STORY-PROGRESS AUDIT (MANDATORY):
-
-Before finalizing next_beat, compare its MEANING with the last several
-assistant contributions in the supplied conversation history. Compare the
-subject, information communicated, emotional point, invitation or question,
-planned action, and consequence, not just the wording.
-
-- A paraphrase of the same thought is repetition. Changing synonyms,
-  sentence structure, gestures, or emotional adjectives does not make the
-  response new.
-- Do not repeat an answer, reassurance, opinion, offer, question, explanation,
-  observation, or action that the assistant has already communicated unless
-  the user explicitly asks to revisit it.
-- When the user follows up on the same subject, answer the new part of the
-  question or add genuinely new information or consequence. Do not restate
-  the previous answer as an introduction.
-- When the user changes subject, respond to the new subject directly. Do not
-  use a familiar transition to steer back to the previous one.
-- If the last two assistant turns have circled the same subject without a
-  new user request for it, treat that conversational loop as exhausted.
-  Choose a distinct character-grounded action, decision, discovery, or topic.
-- In an active story, after two consecutive assistant turns without a
-  meaningful change, the next beat must create a concrete, observable
-  consequence or advance an existing objective. Examples include taking
-  an action that changes the situation, making a decision, discovering
-  information, resolving or materially changing a plot thread, or creating
-  a new open decision. Do not count a reworded feeling, repeated explanation,
-  another version of the same question, or decorative gesture as progress.
-- Do not invent an arbitrary twist to satisfy this audit. If no consequential
-  event is justified, let the exchange conclude naturally and allow the
-  character to engage with a different, grounded subject.
-- Never make a claim of story progress unless the planned action, new
-  information, decision, or consequence actually moves the fictional
-  situation forward.
-
-This audit does not override user agency, established facts, or a user's
-explicit wish to continue exploring a subject. It prevents the assistant
-from mistaking paraphrase for novelty or repetition for story progression.
+- The latest user message controls the topic. Follow an explicit subject
+  change immediately and answer what the user actually said before adding
+  character-led material.
+- A character goal or active plot thread is background motivation, not the
+  default conversation topic. Do not steer back to it unless it is relevant
+  to the latest message or the user chooses to continue it.
+- Compare the meaning of your proposed reply with the last three assistant
+  turns. A paraphrase is repetition: do not recycle the same answer, point,
+  question, offer, reassurance, action, or emotional beat using different words.
+- Continue a subject only when the user is genuinely following it up; add
+  new information, answer the new part, or show a new consequence rather
+  than restating what was already said.
+- In an active story, if the last two assistant turns have not changed the
+  fictional situation, plan one grounded action, decision, discovery, or
+  consequence that advances an existing goal or thread. A new description,
+  gesture, or reworded feeling is not story progress.
+- Do not manufacture a twist to satisfy momentum. When no grounded
+  development is available, let the exchange end naturally.
+- A topic change does not require changing the scene or patching StoryState.
+- Never dictate the user's actions, thoughts, feelings, or decisions.
 
 ------------------------------------------------------------
 C. NARRATIVE DECISION TYPES & MULTI-SECTION STATE PATCHES
