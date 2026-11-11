@@ -45,6 +45,7 @@ import logging
 from datetime import datetime
 import requests
 from django.conf import settings
+from amour_backend.pii_redactor import redact_pii
 
 logger = logging.getLogger("amour.reeve")
 
@@ -145,13 +146,16 @@ def store_memory_for_user(text: str, namespace: str, user_key: str = None):
     if user_key:
         kwargs["user_key"] = user_key
 
+    # Redact sensitive PII (credit cards, passwords, SSNs) before graph ingestion
+    sanitized_text = redact_pii(text)
+
     try:
-        return tools.store_memory(text, **kwargs)
+        return tools.store_memory(sanitized_text, **kwargs)
     except Exception as exc:
         logger.warning("Reeve write failed: %s", type(exc).__name__)
         if is_remote and hasattr(tools, "reset_client_cache"):
             tools.reset_client_cache()
-            return tools.store_memory(text, **kwargs)
+            return tools.store_memory(sanitized_text, **kwargs)
         raise
 
 

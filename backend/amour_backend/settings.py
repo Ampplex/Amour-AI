@@ -175,11 +175,17 @@ BACKEND_PUBLIC_URL = os.environ.get(
 )
 
 # Security-Hardened Logging Configuration:
+# - Automatically scrubs PII (emails, phones, cards, tokens, IPs, passwords) via PIIRedactionFilter
 # - Suppresses raw SQL query logs and debug parameter dumping
 # - Prevents logging of request payloads, secrets, and auth tokens
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "pii_redaction": {
+            "()": "amour_backend.pii_redactor.PIIRedactionFilter",
+        },
+    },
     "formatters": {
         "standard": {
             "format": "[%(asctime)s] %(levelname)s [%(name)s] %(message)s",
@@ -190,6 +196,7 @@ LOGGING = {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "standard",
+            "filters": ["pii_redaction"],
         },
     },
     "loggers": {
