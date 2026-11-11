@@ -97,6 +97,7 @@ class LLMProviderConfigurationTests(SimpleTestCase):
 
 VALID_STORY_PLAN = {
     "decision": "RELATIONSHIP_DEVELOPMENT",
+    "conflict_stage": 2,
     "focus": "maya",
     "next_beat": {
         "event": None,
@@ -127,14 +128,6 @@ VALID_WRITER_OUTPUT = {
         "She looks at you for a moment before moving closer. "
         "I guess I don't mind having you around."
     ),
-    "conflict_stage": 2,
-    "state_patch": {
-        "characters": {
-            "maya": {
-                "current_emotional_state": "Guarded but gradually softening"
-            }
-        }
-    },
 }
 
 
@@ -235,54 +228,64 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertTrue(bucketed)
         self.assertTrue(":00" in bucketed or ":30" in bucketed)
 
+    def test_get_bucketed_time_str_respects_requested_timezone(self):
+        bucketed = get_bucketed_time_str(
+            "Wednesday, November 11, 2026 at 6:40 PM",
+            "Asia/Kolkata",
+        )
+        self.assertIn("Asia/Kolkata", bucketed)
+        self.assertTrue(":00" in bucketed or ":30" in bucketed)
+
     def test_story_prompts_assign_concrete_worldbuilding_to_planner(self):
         self.assertIn(
-            "Do not treat\n  \"preserve established facts\" as a ban on creating new scene facts.",
+            "Do not treat\\n  \\"preserve established facts\\" as a ban on creating new scene facts.",
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
-            "include the concrete result and its\n  relevant implication in the plan",
+            "include the concrete result and its\\n  relevant implication in the plan",
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
-            "Treat a clear\nanswer as resolving that question",
+            "Treat a clear\\nanswer as resolving that question",
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
-            "Flesh out the specified observations, readings, deductions, and\n"
-            "recommendations naturally",
+            "Read and use ALL of",
             RESPONSE_GENERATOR_PROMPT,
         )
         self.assertIn(
-            "A brief or negative answer can\nstill be a complete answer.",
-            RESPONSE_GENERATOR_PROMPT,
-        )
-        self.assertIn(
-            "do not use that\nfreedom to invent user actions, contradict established facts, or add\n"
-            "unapproved persistent developments",
+            "Do not repeat a question the user has already answered.",
             RESPONSE_GENERATOR_PROMPT,
         )
 
-    def test_prompts_allow_natural_continuation_without_forced_progression(self):
+    def test_prompts_separate_narrative_decisions_from_prose_rendering(self):
         self.assertIn(
-            "When uncertain, prefer CONTINUE and an empty patch",
+            "You are the sole narrative decision-maker in this pipeline.",
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
-            "do not require a hook or a new development",
+            "A CONTINUE plan may contain a meaningful immediate action",
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
-            "Treat short replies as complete when appropriate.",
+            "You alone determine conflict_stage",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertIn(
+            "Read and use ALL of",
+            RESPONSE_GENERATOR_PROMPT,
+        )
+        self.assertIn(
+            "YOU DO NOT MAKE DECISIONS.",
+            RESPONSE_GENERATOR_PROMPT,
+        )
+        self.assertIn(
+            "Return exactly one JSON object with exactly one key",
             RESPONSE_GENERATOR_PROMPT,
         )
         self.assertNotIn(
-            "If in doubt, prefer a non-CONTINUE decision",
-            STORY_DIRECTOR_PROMPT,
-        )
-        self.assertNotIn(
-            "Every response must contain a conversational hook",
-            RESPONSE_GENERATOR_PROMPT,
+            "ALWAYS MOVE THE CONVERSATION FORWARD",
+            GLOBAL_COMPANION_DIRECTIVES,
         )
 
     @patch("response_generator.generator.requests.post")
@@ -313,13 +316,13 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["reply"], VALID_WRITER_OUTPUT["reply"])
-        self.assertEqual(result["conflict_stage"], 2)
+        self.assertEqual(result["conflict_stage"], VALID_STORY_PLAN["conflict_stage"])
         self.assertEqual(result["decision"], "RELATIONSHIP_DEVELOPMENT")
         self.assertEqual(result["focus"], "maya")
         self.assertEqual(result["next_beat"], VALID_STORY_PLAN["next_beat"])
         self.assertEqual(result["scene_direction"], VALID_STORY_PLAN["scene_direction"])
         self.assertEqual(result["planner_state_patch"], VALID_STORY_PLAN["state_patch"])
-        self.assertEqual(result["state_patch"], VALID_WRITER_OUTPUT["state_patch"])
+        self.assertEqual(result["state_patch"], VALID_STORY_PLAN["state_patch"])
         self.assertEqual(result["namespace"], "user_123_companion_456")
         self.assertEqual(result["context"], "Past user memory")
         self.assertEqual(mock_post.call_count, 2)
@@ -333,6 +336,9 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertIn("RELATIONSHIP_DEVELOPMENT", writer_system_prompt)
         self.assertIn("Maya gradually becomes more comfortable.", writer_system_prompt)
         self.assertIn("scene_direction", writer_system_prompt)
+        self.assertIn('"conflict_stage": 2', writer_system_prompt)
+        self.assertIn('"state_patch":', writer_system_prompt)
+        self.assertIn('"focus": "maya"', writer_system_prompt)
         self.assertIn("Past user memory", writer_system_prompt)
         self.assertIn("PERSONA IDENTITY", writer_system_prompt)
         self.assertIn(GLOBAL_COMPANION_DIRECTIVES, writer_system_prompt)
@@ -719,7 +725,7 @@ class StructuredOutputTests(SimpleTestCase):
             StoryDirectorOutput.model_validate(plan)
 
     def test_planner_missing_fields_and_extra_fields_raise(self):
-        for field in ("next_beat", "scene_direction", "state_patch"):
+        for field in ("conflict_stage", "next_beat", "scene_direction", "state_patch"):
             incomplete = {k: v for k, v in self.valid_plan.items() if k != field}
             with self.subTest(field=field), self.assertRaises(ValidationError):
                 StoryDirectorOutput.model_validate(incomplete)
@@ -732,12 +738,14 @@ class StructuredOutputTests(SimpleTestCase):
         output = CompanionReplyOutput.model_validate(self.valid_writer)
         self.assertEqual(output.reply, VALID_WRITER_OUTPUT["reply"])
 
-    def test_writer_invalid_outputs_raise(self):
+    def test_writer_output_is_prose_only_and_rejects_decision_fields(self):
         cases = [
             {**self.valid_writer, "reply": ""},
-            {**self.valid_writer, "conflict_stage": 4},
+            {**self.valid_writer, "conflict_stage": 2},
+            {**self.valid_writer, "state_patch": {}},
+            {**self.valid_writer, "decision": "PLOT_DEVELOPMENT"},
             {**self.valid_writer, "unexpected": True},
-            {k: v for k, v in self.valid_writer.items() if k != "state_patch"},
+            {},
         ]
         for payload in cases:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
@@ -1681,55 +1689,17 @@ class StoryStatePatchRepairTests(SimpleTestCase):
             repair_messages[-1]["content"],
         )
 
-    @patch("response_generator.generator.requests.post")
-    @patch("response_generator.generator.store_memory_for_user")
-    @patch("response_generator.generator.retrieve_context_for_user")
-    def test_invalid_writer_patch_repairs_reply_and_patch_together(
-        self, mock_retrieve, mock_store, mock_post
-    ):
-        mock_retrieve.return_value = ""
-        invalid_writer = json.loads(json.dumps(VALID_WRITER_OUTPUT))
-        invalid_writer["state_patch"]["characters"]["maya"][
-            "current_goal"
-        ] = "Leave the university"
-
-        mock_post.side_effect = [
-            make_mock_response(VALID_STORY_PLAN),
-            make_mock_response(invalid_writer),
-            make_mock_response(VALID_WRITER_OUTPUT),
-        ]
-
-        result = generate_companion_reply(
-            message="Why are you upset?",
-            namespace="user_123_companion_456",
-            persona_name="Maya",
-            story_state=self.story_state,
-        )
-
-        self.assertTrue(result["success"])
-        self.assertEqual(
-            result["reply"],
-            VALID_WRITER_OUTPUT["reply"],
-        )
-        self.assertEqual(
-            result["state_patch"],
-            VALID_WRITER_OUTPUT["state_patch"],
-        )
-        self.assertEqual(mock_post.call_count, 3)
-
-        repair_messages = (
-            mock_post.call_args_list[2]
-            .kwargs["json"]["messages"]
-        )
-        self.assertEqual(len(repair_messages), 2)
-        repair_payload = json.loads(repair_messages[-1]["content"])
-        self.assertIn("planner-approved scope", repair_payload["repair_instructions"])
-        self.assertIn("canonical_story_state", repair_payload["relevant_context"])
-        self.assertIn("validated_story_director_plan", repair_payload["relevant_context"])
-        self.assertNotIn(
-            "UNIVERSAL COMPANION DIRECTIVES",
-            repair_messages[-1]["content"],
-        )
+    def test_writer_cannot_return_or_override_state_patch(self):
+        invalid_renderer_output = {
+            "reply": VALID_WRITER_OUTPUT["reply"],
+            "state_patch": {
+                "characters": {
+                    "maya": {"current_emotional_state": "Angry"}
+                }
+            },
+        }
+        with self.assertRaises(ValidationError):
+            CompanionReplyOutput.model_validate(invalid_renderer_output)
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -1769,20 +1739,19 @@ class StoryStatePatchRepairTests(SimpleTestCase):
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
-    def test_exhausted_writer_repairs_return_error_without_exchange_storage(
+    def test_renderer_schema_failure_returns_error_without_exchange_storage(
         self, mock_retrieve, mock_store, mock_post
     ):
         mock_retrieve.return_value = ""
-        invalid_writer = json.loads(json.dumps(VALID_WRITER_OUTPUT))
-        invalid_writer["state_patch"]["characters"]["maya"][
-            "current_goal"
-        ] = "Leave the university"
-
+        invalid_renderer_output = {
+            "reply": "Maya answers naturally.",
+            "state_patch": {"characters": {"maya": {"current_goal": "Do something"}}},
+        }
         mock_post.side_effect = [
             make_mock_response(VALID_STORY_PLAN),
-            make_mock_response(invalid_writer),
-            make_mock_response(invalid_writer),
-            make_mock_response(invalid_writer),
+            make_mock_response(invalid_renderer_output),
+            make_mock_response(invalid_renderer_output),
+            make_mock_response(invalid_renderer_output),
         ]
 
         result = generate_companion_reply(
@@ -1793,15 +1762,9 @@ class StoryStatePatchRepairTests(SimpleTestCase):
         )
 
         self.assertFalse(result["success"])
-        self.assertEqual(
-            result["error"]["code"],
-            "STORY_STATE_PATCH_VALIDATION_FAILED",
-        )
+        self.assertEqual(result["error"]["code"], "RESPONSE_GENERATOR_FAILED")
         self.assertEqual(result["error"]["stage"], "response_generator")
         self.assertEqual(mock_post.call_count, 4)
-
-        # Only the initial user-message ingestion is allowed.
-        # No final reply or combined exchange may be stored.
         mock_store.assert_called_once()
 
 
@@ -2178,10 +2141,104 @@ class StoryStatePatchPipelineTests(SimpleTestCase):
             .current_emotional_state,
             "Guarded but gradually softening",
         )
-        self.assertEqual(result["state_patch"], VALID_WRITER_OUTPUT["state_patch"])
+        self.assertEqual(result["state_patch"], VALID_STORY_PLAN["state_patch"])
         self.assertEqual(story_state.model_dump(mode="json"), original_state)
         self.assertEqual(mock_post.call_count, 2)
         self.assertEqual(mock_store.call_count, 2)
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_story_director_advances_goal_across_two_turns(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        initial_state = make_patch_test_story_state()
+
+        first_plan = deepcopy(VALID_STORY_PLAN)
+        first_plan["decision"] = "CHARACTER_DEVELOPMENT"
+        first_plan["next_beat"] = {
+            "event": "Maya decides to contact Alex",
+            "narrative_development": "Maya takes the first step on her photography project.",
+            "character_actions": ["Maya takes out her phone and messages Alex."],
+            "emotional_direction": "Focused and hopeful",
+            "dialogue_direction": "Tell John she has decided to ask Alex to review the photographs.",
+        }
+        first_plan["state_patch"] = {
+            "characters": {
+                "maya": {"current_goal": "Ask Alex to review her photography project"}
+            }
+        }
+        first_reply = {
+            "reply": "Maya unlocks her phone and messages Alex. 'I've decided to ask him to look over the project.'"
+        }
+
+        second_plan = deepcopy(first_plan)
+        second_plan["next_beat"] = {
+            "event": "Maya prepares to meet Alex",
+            "narrative_development": "After contacting Alex, Maya moves toward arranging a review.",
+            "character_actions": ["Maya checks Alex's reply and opens her calendar."],
+            "emotional_direction": "Encouraged and purposeful",
+            "dialogue_direction": "Tell John Alex agreed to meet tomorrow and suggest a time.",
+        }
+        second_plan["state_patch"] = {
+            "characters": {
+                "maya": {
+                    "current_goal": "Meet Alex tomorrow to review the photography project"
+                }
+            }
+        }
+        second_reply = {
+            "reply": "Maya checks the reply and opens her calendar. 'He can meet tomorrow; I'm going to find us a time.'"
+        }
+        mock_post.side_effect = [
+            make_mock_response(first_plan),
+            make_mock_response(first_reply),
+            make_mock_response(second_plan),
+            make_mock_response(second_reply),
+        ]
+
+        first_result = generate_companion_reply(
+            message="How was your afternoon?",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=initial_state,
+            conversation_history=[],
+        )
+        self.assertTrue(first_result["success"])
+        self.assertEqual(
+            first_result["updated_story_state"].characters["maya"].current_goal,
+            "Ask Alex to review her photography project",
+        )
+
+        second_result = generate_companion_reply(
+            message="That sounds good.",
+            namespace="user_123_companion_456",
+            persona_name="Maya",
+            story_state=first_result["updated_story_state"],
+            conversation_history=[
+                {"role": "user", "content": "How was your afternoon?"},
+                {"role": "assistant", "content": first_result["reply"]},
+            ],
+        )
+        self.assertTrue(second_result["success"])
+        self.assertEqual(
+            second_result["updated_story_state"].characters["maya"].current_goal,
+            "Meet Alex tomorrow to review the photography project",
+        )
+        planner_messages = mock_post.call_args_list[2].kwargs["json"]["messages"]
+        self.assertIn(first_result["reply"], [item["content"] for item in planner_messages])
+        renderer_messages = mock_post.call_args_list[3].kwargs["json"]["messages"]
+        renderer_system = "\n".join(
+            item["content"] for item in renderer_messages if item["role"] == "system"
+        )
+        self.assertIn("VALIDATED STORY DIRECTOR PLAN", renderer_system)
+        self.assertIn("CHARACTER_DEVELOPMENT", renderer_system)
+        self.assertIn("Meet Alex tomorrow", renderer_system)
+        self.assertEqual(
+            set(CompanionReplyOutput.model_fields),
+            {"reply"},
+        )
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.apply_story_state_patch")
@@ -2242,10 +2299,6 @@ class StoryStatePatchPipelineTests(SimpleTestCase):
         }
 
         writer_with_empty_sections = deepcopy(VALID_WRITER_OUTPUT)
-        writer_with_empty_sections["state_patch"] = {
-            "plot_threads": [],
-            "characters": {},
-        }
 
         mock_post.side_effect = [
             make_mock_response(plan_with_empty_sections),

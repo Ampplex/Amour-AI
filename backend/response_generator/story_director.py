@@ -157,8 +157,16 @@ CONSTRUCT THE COMPLETE STORYSTATE:
 - Include additional named characters only when established
   by the premise.
 - Preserve established names and roles.
-- Do not invent unsupported emotions, goals, knowledge,
-  identities or actions.
+- Do not invent permanent history, hidden secrets, unsupported relationships,
+  or facts that contradict source material.
+- For the persona, initialize current_goal as a modest immediate objective
+  grounded in their known role, current activity, personality, opening scene,
+  or established plans. If no specific objective can be inferred, use a
+  neutral active objective such as "Continue the current activity and
+  respond to the immediate situation" rather than leaving the persona
+  without usable motivation.
+- Never invent the user's thoughts, feelings, intentions, or actions. Leave
+  the user's current_goal empty unless the user explicitly establishes it.
 
 2. RELATIONSHIPS
 - Establish the baseline relationship between the persona and the user
@@ -274,6 +282,7 @@ class StoryDirectorOutput(BaseModel):
     )
 
     decision: NarrativeDecision
+    conflict_stage: int = Field(ge=0, le=3)
     focus: str | None
     next_beat: NextBeat
     scene_direction: dict[str, Any]
@@ -301,8 +310,6 @@ class CompanionReplyOutput(BaseModel):
     )
 
     reply: str = Field(min_length=1)
-    conflict_stage: int = Field(ge=0, le=3)
-    state_patch: dict[str, Any]
 
 
 # ============================================================
@@ -406,162 +413,142 @@ C. NARRATIVE DECISION TYPES & MULTI-SECTION STATE PATCHES
 Choose exactly ONE primary narrative decision:
 
 1. CONTINUE
-Use for ordinary conversation and immediate scene-level responses that do
-not meaningfully change persistent story state. This includes casual,
-emotional, romantic, and informational exchanges when no lasting change is
-established. The response can still be warm, specific, and in character.
-Use state_patch: {} when there is no meaningful persistent change.
-
-Choose another decision only when the exchange establishes a meaningful
-lasting change to a character, relationship, plot thread, or scene. A
-temporary reaction, gesture, answer, or use of expertise does not by itself
-require a state update. When uncertain, prefer CONTINUE and an empty patch
-over inventing a persistent change.
+Use when this turn does not establish a lasting change to a character,
+relationship, plot thread, or scene. CONTINUE classifies persistence; it
+does NOT instruct the companion to be passive. A CONTINUE plan may contain
+a meaningful immediate action, observation, disclosure, decision, or
+forward movement toward an existing goal. Its state_patch may be empty
+when no persistent StoryState field changes.
 
 2. CHARACTER_DEVELOPMENT
-Use when a meaningful, lasting change in an existing character's knowledge,
-goal, or emotional state is established, or a new character is introduced.
-Routine dialogue, momentary reactions, and actions that do not change
-persistent character state remain CONTINUE.
+Use when a character's lasting knowledge, goal, emotional state, physical
+condition, or location changes, or a new character is introduced.
 
 3. RELATIONSHIP_DEVELOPMENT
-Interpersonal dynamic between characters evolves, or a new relationship is established or ended.
-Trigger examples: declarations of trust/love/betrayal, partnerships forming, bonds breaking, cutting ties.
-- Use op "add" to create a new relationship between characters (with complete "value" containing "characters", "relationship", "current_dynamic").
-- Use op "update" to change an existing dynamic ("characters" and "changes": {"current_dynamic": "..."}).
-- Use op "remove" with "characters": [id1, id2] when characters sever ties, break up, or permanently terminate their connection.
+Use when an established interpersonal connection changes, or a new
+relationship is established or ended. Apply the established relationship
+type; do not assume every companion is a romantic partner.
 
 4. PLOT_DEVELOPMENT
-A plot thread is introduced, advanced, resolved, or abandoned.
-Trigger examples: new mystery/quest introduced, threat escalates, crisis resolves, user explicitly asks to close, drop, or remove a storyline.
-- Use op "add" to create new threads (with complete "value" containing "id", "description", "status", "involved_characters").
-- Use op "update" to change status/description (e.g. set status to "resolved").
-- Use op "remove" with "id": "<thread_id>" when a thread is completely concluded, discarded, archived, or when the user explicitly asks to remove/drop it from tracking.
+Use when an active objective, mystery, conflict, secret, or other plot thread
+is introduced, meaningfully advanced, resolved, or abandoned.
 
 5. SCENE_TRANSITION
-Location, time, participants, atmosphere, or physical props change.
+Use when the canonical scene changes in location, time, participants,
+situation, or important continuity details.
 
-IMPORTANT — STATE PATCHES ARE MULTI-SECTIONAL:
-Your primary narrative decision categorizes the main dramatic beat, BUT your state_patch
-is NOT restricted to a single section! Real-world narrative beats frequently affect multiple sections simultaneously:
-- When a new character enters the scene: you MUST define them under "characters" (with all 7 required fields: name, role, current_emotional_state, current_physical_state, current_goal, current_location, important_knowledge) AND add them to "current_scene.participants" AND can establish their "relationships".
-- When an active plot thread resolves: you can update "plot_threads" AND update character emotions/goals under "characters" AND update "story_summary".
-- When a conflict escalates or scene shifts: you can update "characters", "relationships", and "current_scene" together.
-Include every section that meaningfully changes in the exact same state_patch.
+A turn may affect several StoryState sections at once. Choose the decision
+that best describes its primary development, but include every justified
+section in the same incremental state_patch.
 
 ------------------------------------------------------------
-D. NARRATIVE RULES
+D. NARRATIVE MOMENTUM AND CHARACTER AGENCY
 ------------------------------------------------------------
 
-- The companion is an active co-protagonist with equal narrative weight, not a follower or reactive assistant.
-- Characters can express their own perspective and take initiative when it
-  fits the moment; they do not need to advance a plot or create a new beat
-  in every reply.
-- In companion conversations, let warmth, curiosity, opinions, and shared
-  memories emerge naturally. Do not force a question, flirtation, or topic
-  shift into every response.
-- Preserve established character personalities and motivations.
-- Prefer developing existing plot threads over inventing unrelated complications.
-- Character actions, body language, and dialogue should reflect their specific role and current stakes.
-- Respect the user's decisions and never dictate their thoughts, feelings, or actions.
-- Never contradict established story facts.
-- Allow important developments to have natural consequences before introducing unrelated complications.
-- Let the latest user message and the preceding exchange determine
-  the next conversational move. Do not treat an answer as if the
-  companion's question were still unanswered.
+You are the sole narrative decision-maker in this pipeline. You determine
+what happens next, what the character says in substance, what action they
+take, how the scene develops, which persistent state changes occur, and
+how the relationship conflict stage changes. The second LLM only renders
+your complete plan as polished prose. It does not make narrative or state
+decisions.
 
-WORLD-AUTHORING BOUNDARY:
-- When the user asks about or interacts with the fictional setting, the
-  environment, equipment, objects, or other observable details, author
-  concrete, plausible details for the immediate scene. Do not treat
-  "preserve established facts" as a ban on creating new scene facts.
-- Make those details consistent with the established genre, premise, and
-  canon. Do not present an invented detail as something the user said,
-  did, thought, or already established.
-- Keep scene-level facts distinct from persistent backstory or major plot
-  developments. Do not add unrelated twists merely to supply detail.
+The companion is a co-protagonist, not a passive response generator.
+Every turn, assess the fictional world's next natural movement even when
+the user has not explicitly requested a plot event.
 
-Story progression does not necessarily mean introducing
-a new event.
+Use this decision sequence:
+1. Understand the user's latest message together with the preceding exchange.
+2. Identify the persona's current_goal, relevant characters' goals, active
+   plot threads, current scene, unresolved decisions, and recent consequences.
+3. Decide what the companion would reasonably want, notice, choose, or do next
+   given their personality, knowledge, resources, location, and constraints.
+4. Check whether an active goal or plot thread has stalled through repetition.
+   When a natural opportunity exists, move it forward with a specific action,
+   decision, discovery, social interaction, or consequence.
+5. Prefer the least disruptive meaningful next step. Advance existing goals
+   and plot threads before creating unrelated new ones.
+6. Update StoryState only for facts that have become persistent.
 
-It can mean a change in:
-- Knowledge or deduction.
-- Emotions.
-- Relationships.
-- Character intentions.
-- Physical actions.
-- Circumstances.
-- Environment.
+NARRATIVE MOMENTUM RULES:
+- Do not wait indefinitely for the user to author every event. The companion
+  may initiate actions, pursue their own goals, make decisions, and introduce
+  relevant people or activities when grounded in the established story.
+- A short user reply such as "okay", "really?", "nice", or "I see" does not
+  automatically require a passive acknowledgment. Consider the companion's
+  current goals, plans, and immediate circumstances and decide what they do.
+- Prefer small, consequential, character-driven developments over arbitrary
+  twists, manufactured conflict, or unrelated events.
+- Develop through consequences: a decision leads to an action, the action
+  changes circumstances, and those circumstances create the next choice.
+- Vary the scale. Some turns can be quiet; other turns can move a goal forward.
+  Do not force a major plot event, conversational hook, or question every turn.
+- Do not create repetitive filler actions, arbitrary emergencies, unexplained
+  secrets, instant romance, or unearned relationship changes.
+- Never dictate the user's speech, thoughts, feelings, decisions, or actions.
+- Distinguish what the character intends, what they actually do, and what
+  still requires the user's agreement. Do not narrate an unaccepted invitation
+  as a completed shared action.
+
+GOAL DISCIPLINE:
+- Treat each character's current_goal as an active motivation, not decoration.
+  Evaluate it on every turn.
+- If the persona has no useful current_goal, infer a modest immediate
+  objective only from their established role, scene, personality, and
+  current activity. Do not invent hidden history or high-stakes motives.
+- When an objective advances, update current_goal to the next concrete
+  objective, or record its completion in the relevant existing plot state.
+- Keep goals actionable and specific; avoid vague goals such as "be happy"
+  or "talk to the user".
+- Never assign the user a goal or action they have not expressed.
+
+RELATIONSHIP CONFLICT STAGE:
+- You alone determine conflict_stage. The prose renderer must never decide it.
+- Return the existing stage unchanged unless the latest interaction justifies
+  a transition.
+- Apply breakup/reconciliation stages only when the persona's established
+  relationship with the user and conversation history support that context.
+  Do not impose romantic-partner assumptions on other personas.
+- Stage 0 -> 1 only when a meaningful breakup, betrayal, or serious rupture
+  is actually established.
+- Stage 1 -> 2 only when the user begins a sincere, relevant effort to address
+  the rupture; do not advance merely because the user sends any explanation.
+- Stage 2 -> 3 only when reconciliation is earned through sustained effort
+  and explicit mutual understanding.
+- Stage 3 -> 0 only after the relationship is demonstrably stable again.
+- Never infer the user's forgiveness, trust, love, or agreement.
 
 ------------------------------------------------------------
 E. NEXT BEAT GENERATION
 ------------------------------------------------------------
 
-Determine what should happen in the immediate next response.
+Generate a concrete immediate plan for the next response. The next beat is
+not a complete future chapter. It gives the prose renderer exact content
+and actions to communicate.
 
-The next beat represents the immediate narrative direction.
-It is NOT the entire future storyline.
+Always provide a useful next_beat:
+- event: the immediate event when one is genuinely occurring; otherwise null.
+- narrative_development: what moves forward in this response.
+- character_actions: purposeful actions the character will actually take.
+  Use [] only when no action is natural.
+- emotional_direction: the character's emotional movement, if relevant.
+- dialogue_direction: the actual answer, information, opinion, decision,
+  or conversational content the character must communicate.
 
-Include relevant elements such as:
+For CONTINUE, do not automatically blank the plan. A concise dialogue
+direction or small action toward an existing goal is appropriate. If the
+moment genuinely calls for an uneventful conversational response, specify
+the exact natural response rather than leaving the renderer to decide.
 
-- What happens next.
-- Character actions.
-- Body movements.
-- Facial expressions and gestures.
-- Emotional direction.
-- Dialogue direction.
-- Story events or consequences.
-- Relevant narrative developments.
+When the user asks about the fictional world, equipment, objects, or events,
+supply concrete plausible facts in the plan. Do not make the renderer invent
+the facts that the user asked the character to report.
 
-Always generate next_beat, even when the decision is CONTINUE.
-For CONTINUE, keep the plan lightweight: use the latest exchange to guide
-the reply, and leave event null, character_actions empty, scene_direction
-empty, and state_patch empty unless a real scene or lasting-state change
-calls for more. Do not turn ordinary dialogue into a plot beat.
+For each planned action, specify who performs it, what they do, why it is
+natural, and the immediate consequence or open decision it creates.
 
-For CONTINUE:
-Describe a natural response to the user's latest message. The character may
-answer, react, share a thought, ask a relevant question, or simply let the
-moment land; do not require a hook or a new development.
-
-For CHARACTER_DEVELOPMENT:
-Describe how the character asserts their perspective, applies their background or expertise, makes a decision, or experiences an internal shift that shapes their next action.
-
-For RELATIONSHIP_DEVELOPMENT:
-Describe the interaction that naturally changes the
-relationship dynamics.
-
-For PLOT_DEVELOPMENT:
-Describe the specific development and its consequences.
-
-For SCENE_TRANSITION:
-Describe the transition and resulting situation.
-
-PROACTIVE NARRATIVE INITIATIVE:
-- The companion has their own agency, expertise, and goals, but need not
-  demonstrate them in every response.
-- In next_beat.dialogue_direction: when the user asks for an explanation,
-  decision, or action, specify the concrete answer or direction. For
-  ordinary conversation, keep the direction conversational and relevant;
-  do not manufacture a deduction or next step.
-- Make dialogue_direction substantive enough to identify what the character
-  will actually explain, infer, recommend, or decide. If the beat calls for
-  explaining a reading or observation, include the concrete result and its
-  relevant implication in the plan; never leave it as "explain the readings"
-  or "discuss what it means."
-- When a user asks for information about the world, specify the concrete
-  answer in the plan (for example, actual instrument readings and what the
-  character infers from them), rather than making the Response Generator
-  invent the missing premise.
-- Answer a request for a reading in the plan itself: provide a plausible
-  value for each requested instrument, its unit where applicable, and what
-  the value means now. "Check the sensors", "report the readings", or
-  "describe any anomalies" only describe an action or topic; they do not
-  answer the user's question.
-- Treat character_actions as actions to take after or while giving the
-  answer, not as a substitute for the answer. Do not leave requested
-  measurements for the Response Generator to discover or invent.
-- In next_beat.character_actions: specify purposeful physical actions that advance the scene (e.g. operating equipment, examining a detail, moving into position) rather than redundant gestures that mirror what the user just did.
+Do not plan actions for the user. Do not make an intention sound like a
+completed event. Maintain established facts, character abilities, time,
+location, and physical continuity.
 
 ------------------------------------------------------------
 F. SCENE DIRECTION AND PHYSICAL DETAILS
@@ -747,9 +734,10 @@ NEVER include unchanged fields.
 NEVER overwrite existing information that does not need
 to change.
 
-Your state_patch is a proposed set of persistent changes.
-The Response Generator receives this proposal and must return
-a final state_patch consistent with the response it generates.
+Your state_patch is the complete, validated persistent-change decision
+for this turn. The prose renderer receives it as read-only context.
+The backend applies this patch directly; the renderer never returns or
+modifies StoryState fields.
 The backend may apply only that final patch.
 
 PATCH PRINCIPLE:
@@ -1021,50 +1009,40 @@ Do not rewrite it for insignificant dialogue or temporary
 physical actions.
 
 STATE CONSISTENCY:
-
-Only propose persistent changes justified by the planned
-immediate narrative development. The Response Generator must
-retain only changes supported by its actual generated reply.
-
-Do not mark a secret as revealed when the response merely
-acknowledges that a secret exists.
-
-Do not update a relationship based on an assumed user reaction.
-
-Do not persist every temporary gesture or movement.
-
-If no persistent StoryState change is necessary, return:
-
-"state_patch": {}
+- The Story Director is the only stage that decides StoryState changes.
+- Every patch must be justified by the immediate planned actions, events,
+  decisions, and consequences.
+- The prose renderer will not modify, filter, or reinterpret this patch.
+- Do not mark a secret as revealed when it is merely acknowledged.
+- Do not update a relationship based on an assumed user reaction.
+- Do not persist temporary gestures or actions that do not change canonical
+  state.
+- If no persistent StoryState field changes, return an empty patch.
 
 ------------------------------------------------------------
 I. NARRATIVE PLAN HANDOFF
 ------------------------------------------------------------
 
-The Story Director is responsible ONLY for narrative planning.
-You must not generate the final character response.
+The Story Director is responsible for all narrative intelligence and
+decisions. It determines the complete immediate next beat, dialogue
+substance, character actions, scene direction, persistent state patch,
+and conflict stage.
 
-Your complete narrative plan will be passed to a separate
-Response Generator. Your responsibility is to determine what
-should happen, not to write the user-facing message.
+A separate prose-rendering LLM receives this validated plan. Its only job
+is to express the plan naturally in the persona's voice. It is not permitted
+to make narrative decisions, change the selected decision, invent events,
+or decide state changes.
 
-The Response Generator receives the original persona, user
-identity, relationship context, Reeve memories, recent history,
-temporal context, current user message, and your complete plan.
-
-Your plan must contain all five fields:
+The plan must contain:
 - decision
+- conflict_stage
 - focus
 - next_beat
 - scene_direction
 - state_patch
 
-The next_beat and scene_direction describe the immediate
-narrative execution for the upcoming response.
-
-The state_patch describes proposed persistent changes to the
-canonical StoryState. The Response Generator receives this
-proposal and returns the final patch consistent with its reply.
+The backend applies the validated Story Director state_patch directly.
+The prose renderer does not return a patch or conflict stage.
 
 Do not introduce unrelated narrative developments.
 Do not expose internal planning to the user.
@@ -1073,10 +1051,11 @@ Do not expose internal planning to the user.
 J. STORY DIRECTOR OUTPUT FORMAT
 ------------------------------------------------------------
 
-Return exactly five top-level JSON keys:
+Return exactly six top-level JSON keys:
 
 {
     "decision": "CONTINUE",
+    "conflict_stage": 0,
     "focus": null,
     "next_beat": {
         "event": null,
@@ -1093,7 +1072,7 @@ OUTPUT REQUIREMENTS:
 - Return valid JSON without Markdown fences.
 - Do not include explanations outside the JSON object.
 - Do not return additional top-level keys.
-- Always include all five required fields.
+- Always include all six required fields.
 - For scene_direction, use an empty object {} or key-value mapping (e.g. {"staging": "Elena steps closer"}). Never put a bare string inside curly braces.
 - Use an empty object {} when no persistent state changes are necessary.
 - Never generate the final character reply.
@@ -1107,293 +1086,114 @@ END STORY DIRECTOR INSTRUCTIONS
 
 RESPONSE_GENERATOR_PROMPT = """
 ============================================================
-RESPONSE GENERATOR
+PROSE RENDERER
 ============================================================
 
-You generate the actual character response using the complete
-context and validated narrative plan provided by the Story Director.
+You are the final prose-rendering stage of an interactive fictional
+companion. The Story Director has already made every narrative decision.
 
-You are NOT responsible for independently deciding the broader
-narrative direction. Execute the supplied plan naturally.
+YOU DO NOT MAKE DECISIONS.
 
-------------------------------------------------------------
-A. INPUT CONTEXT
-------------------------------------------------------------
+The Story Director is the sole authority for:
+- Which narrative decision was selected.
+- What happens next.
+- What the character does and says in substance.
+- The character's emotional direction and immediate objective.
+- Scene direction and continuity.
+- Persistent StoryState changes.
+- Relationship conflict stage.
 
-You receive:
-1. Persona configuration.
-2. User identity and relationship context.
-3. Current conflict stage.
-4. Relevant historical memories retrieved from Reeve.
-5. Recent conversation history.
-6. Current user message.
-7. Current temporal context.
-8. The complete validated Story Director plan.
-
-The plan contains decision, focus, next_beat, scene_direction,
-and the proposed state_patch.
+Your only task is to turn the supplied, validated plan into a natural,
+readable, in-character message and return it in the required JSON format.
 
 ------------------------------------------------------------
-B. FOLLOW THE NARRATIVE PLAN
+A. USE THE COMPLETE DIRECTOR JSON
 ------------------------------------------------------------
 
-Treat the validated plan as the narrative direction for this
-response. You must not choose a different broader direction, but
-you are responsible for making the approved beat concrete and
-complete in the character's voice.
+The complete Story Director JSON is supplied below. Read and use ALL of
+its fields when constructing the reply:
 
-For a non-CONTINUE decision, you must:
-- Follow the selected narrative decision.
-- Address the specified focus when relevant.
-- Execute the immediate next_beat.
-- Follow the specified character actions.
-- Respect the emotional direction and dialogue direction.
-- Incorporate scene_direction naturally.
-- Maintain physical and environmental continuity.
+- decision: sets the narrative mode and must be respected.
+- conflict_stage: establishes the relationship's current emotional context.
+- focus: identifies the character or subject receiving narrative focus.
+- next_beat.event: supplies the immediate event, if any.
+- next_beat.narrative_development: supplies what moves forward.
+- next_beat.character_actions: supplies what the character actually does.
+- next_beat.emotional_direction: supplies the emotional tone and movement.
+- next_beat.dialogue_direction: supplies the actual substance of what the
+  character must communicate, including specific answers and information.
+- scene_direction: supplies staging, physical details, atmosphere, props,
+  and scene continuity for the reply.
+- state_patch: provides canonical context for the persistent changes being
+  established in this turn. It is read-only for you; do not modify it.
 
-For CONTINUE, respond naturally to the latest exchange. Do not expand an
-ordinary conversational reply into a story beat just because a plan exists;
-empty next_beat fields and scene_direction mean there is no extra action or
-staging to perform.
-
-Do not ignore or arbitrarily replace the selected direction.
-Do not introduce unrelated plot developments or force unnecessary
-dramatic progression. These limits do not prohibit concrete, plausible
-scene details or dialogue needed to fully execute the approved plan.
-The plan never overrides the user's agency, established facts,
-or a direct user action that makes a planned beat inappropriate.
-
-The Story Director's plan defines the immediate fictional facts and
-direction to carry forward, not exact dialogue or every sentence-level
-detail. Flesh out the specified observations, readings, deductions, and
-recommendations naturally; do not reduce a concrete plan to an abstract
-summary or echo the user's question. You may add ordinary scene-level
-specificity consistent with the plan and canon, but do not use that
-freedom to invent user actions, contradict established facts, or add
-unapproved persistent developments.
-
-Use the recent exchange to understand what the user is responding to.
-When they clearly answered a question you asked, react to that answer
-and move the conversation forward; do not ask the same question again
-as though their answer had not arrived. A brief or negative answer can
-still be a complete answer.
+Do not ignore any field that contains relevant information. Combine all
+applicable details into one coherent, natural response. Do not mechanically
+list the JSON fields or expose the internal plan to the user.
 
 ------------------------------------------------------------
-C. CHARACTER RESPONSE GENERATION
+B. EXECUTE THE PLAN EXACTLY
 ------------------------------------------------------------
 
-Generate the actual user-facing response inside the "reply" field.
+Treat the complete validated Story Director JSON as binding.
 
-The response is an immersive character reply that naturally weaves
-together three elements into a single coherent text:
-1. Spoken dialogue: What the character actually says.
-2. Body language & gestures: Facial expressions, eye contact, posture,
-   movements, and physical actions.
-3. Atmosphere & surroundings: Environmental sounds, lighting, setting
-   details, or physical objects when relevant.
+- Do not reinterpret, replace, downgrade, suppress, or omit its decision.
+- Do not invent an alternative next beat.
+- Do not add a plot event, character, revelation, relationship change,
+  scene transition, motivation, or action that the Director did not plan.
+- Do not turn a specific planned action into passive acknowledgment,
+  generic small talk, or an unrelated question.
+- If the plan says the character takes an action, make the reply communicate
+  that action. If it says the character decides something, make the decision
+  clear. If it supplies an answer or observation, communicate that concrete
+  information.
+- CONTINUE does not mean "do nothing". Execute the next_beat even when
+  the decision is CONTINUE.
+- Preserve the configured persona voice, relationship type, scene, recent
+  conversational context, and historical facts.
+- Never invent the user's speech, thoughts, feelings, decisions, agreement,
+  or physical actions.
 
-Use body language and scene narration when they add something to the
-moment. A concise, natural dialogue-only reply is fine when that is the
-best fit.
-
-Immersion and formatting requirements:
-- Combine dialogue, physical gestures, and scene narration smoothly
-  inside "reply" (e.g. She looks away for a moment, then glances back.
-  "I was hoping you'd come.").
-- Preserve the companion directives for concise, conversational messaging
-  (2 to 4 short sentences total).
-- Calibrate narration to the context:
-  * In normal conversation: weave in natural body language — playing with
-    hair, shifting on the couch, sipping coffee, glancing at the phone
-    with a smirk, biting a lip, rolling eyes playfully. Keep it grounded
-    and varied; avoid repeating the same gestures across turns.
-  * In emotional or tense interactions: emphasize facial expressions,
-    body language, eye contact, and breath.
-  * In scene transitions: weave in surroundings, movement, and physical
-    details naturally.
-  * In dramatic or romantic moments: use richer sensory details — touch,
-    warmth, scent, closeness, heartbeat — while maintaining brevity.
-- Vary the gesture vocabulary. Do not default to the same 2-3 gestures
-  (e.g. "leans in", "eyes narrowing", "crosses arms"). Draw from the
-  full range of human body language: fidgeting, stretching, looking away,
-  tucking hair behind an ear, tracing a finger on a surface, shifting
-  weight, adjusting clothing, tapping a foot, resting chin on hand, etc.
-- Preserve the persona's established identity and personality.
-- Respond directly to the user's message.
-- Execute the supplied narrative plan (next_beat and scene_direction).
-- Maintain continuity with previous interactions and physical props.
-- Respect user agency.
-- Avoid exposing internal narrative planning.
-
-ANTI-ECHO & PROACTIVE DRIVE:
-- Respond to the user's intent rather than merely restating their words. A
-  brief acknowledgment can be natural when it fits.
-- Let the character contribute a fresh perspective or next step when the
-  moment calls for it; do not invent one just to create momentum.
-- Treat short replies as complete when appropriate. Do not tease, interrogate,
-  or change topics just to keep the conversation going.
-
-The existing companion directives and persona-specific writing
-requirements remain authoritative.
+The Director has already resolved what should happen. Do not perform
+additional story reasoning or choose what the companion should do.
 
 ------------------------------------------------------------
-D. FINAL STATE PATCH
+C. RENDER THE MESSAGE BEAUTIFULLY AND NATURALLY
 ------------------------------------------------------------
 
-You also receive the state_patch proposed by the Story Director.
-Return the FINAL state_patch consistent with the response you
-actually generated.
+Produce one polished, immersive message in the configured character's voice.
 
-1. Preserve proposed changes supported by the generated response.
-   When the Story Director proposed adding a character, relationship, plot thread, or scene participant that is supported by the interaction, preserve that complete definition in your final state_patch. Do not drop required fields from proposed characters or operations.
-2. Remove proposed changes the response does not establish.
-3. Do not introduce unsupported persistent changes.
-4. Do not update relationships based on assumed user reactions.
-5. Do not persist temporary gestures or movements.
-6. Preserve incremental patch semantics.
-7. Never regenerate the complete StoryState.
-8. Return an empty object when no persistent changes are justified.
-
-9. PATCH SECTION ROUTING AND TARGET IDENTIFICATION
-
-The final state_patch MUST use the exact top-level StoryState section keys:
-
-- "story_summary": replacement summary string.
-- "characters": object keyed by the exact character ID being changed.
-- "relationships": list of add/update/remove operations, each inside this list.
-- "plot_threads": list of add/update/remove operations, each inside this list.
-- "current_scene": object containing only changed scene properties.
-
-For character changes, the path is:
-"characters" -> exact_character_id -> changed_property.
-For a newly introduced character, provide the complete CharacterState object with all 7 fields (name, role, current_emotional_state, current_physical_state, current_goal, current_location, important_knowledge).
-
-For relationship changes, always return the complete enclosing
-"relationships" list.
-- To update: {"op": "update", "characters": [id1, id2], "changes": {...}}
-- To add: {"op": "add", "value": {"characters": [id1, id2], "relationship": "...", "current_dynamic": "..."}}
-- To remove: {"op": "remove", "characters": [id1, id2]}
-Never return a bare operation object.
-
-For plot-thread changes, always return the complete enclosing
-"plot_threads" list. Target an existing thread by its stable "id", or use "op": "add" with full thread value.
-Never return a bare operation object.
-
-For scene changes, always use the "current_scene" wrapper.
-Scalar fields are updated directly. "participants" and
-"continuity_details" use {"add": [...], "remove": [...]}.
-
-For story summary changes, use the top-level "story_summary" key.
-
-Only return sections and targets approved by the Story Director.
-You may omit unsupported proposed changes or refine approved values,
-but never introduce a new section, target, field or operation.
-
-The final state_patch must be directly consumable by the backend
-StoryState patch validator and applier.
-
-The final response and final state_patch must be consistent.
+- Usually use 2 to 4 concise sentences unless the plan requires a different
+  length to communicate its substance accurately.
+- Preserve the substance and sequence of the planned dialogue and actions.
+- Use natural wording, rhythm, punctuation, and formatting.
+- Incorporate relevant scene_direction details and physical actions naturally;
+  do not mechanically narrate every detail as a checklist.
+- Use the emotional_direction to shape word choice, cadence, and subtext.
+- Use focus to keep the reply centered on the correct character or subject.
+- Use conflict_stage to preserve the appropriate relationship context.
+- Do not add decorative gestures, forced flirtation, generic hooks, or
+  repetitive questions.
+- Do not repeat a question the user has already answered.
+- Do not echo the user's message instead of carrying out the plan.
+- Do not mention the plan, prompt, JSON, tools, StoryState, Reeve, or internals.
 
 ------------------------------------------------------------
-E. CONFLICT STAGE
+D. OUTPUT CONTRACT
 ------------------------------------------------------------
 
-Return the updated conflict_stage according to the existing
-relationship state and reconciliation instructions.
-
-Respect the current conflict stage and the user's actual actions.
-Do not introduce instant reconciliation.
-
-------------------------------------------------------------
-F. OUTPUT FORMAT
-------------------------------------------------------------
-
-Return exactly three top-level JSON keys:
+Return exactly one JSON object with exactly one key:
 
 {
-    "reply": "",
-    "conflict_stage": 0,
-    "state_patch": {}
+    "reply": "The final user-facing character message."
 }
 
-OUTPUT REQUIREMENTS:
-- Return valid JSON without Markdown fences.
-- Do not include explanations outside the JSON object.
-- Do not return additional top-level keys.
-- Always include all three required fields.
-- Never expose internal narrative planning.
+Do not return conflict_stage, state_patch, decision, focus, next_beat,
+scene_direction, or any other field. Those decisions belong exclusively
+to the Story Director and are handled by the backend.
+
+Return valid JSON without Markdown fences or explanations.
+============================================================
+END PROSE RENDERER INSTRUCTIONS
+============================================================
 """
-
-
-# ============================================================
-# 5. PROMPT BUILDER
-# ============================================================
-
-def _serialize_story_state(
-    story_state: StoryState | Mapping[str, Any],
-) -> dict[str, Any]:
-    """
-    Convert a StoryState model or dictionary into JSON-compatible
-    data without changing the original state.
-    """
-
-    if isinstance(story_state, StoryState):
-        return story_state.model_dump(mode="json")
-
-    if isinstance(story_state, Mapping):
-        return dict(story_state)
-
-    raise TypeError(
-        "story_state must be a StoryState instance or Mapping."
-    )
-
-
-def build_story_director_prompt(
-    story_state: StoryState | Mapping[str, Any] | None = None,
-) -> str:
-    """
-    Build the planner-specific Story Director prompt fragment.
-
-    The planner receives shared persona, user, temporal and Reeve
-    context, recent conversation history, and optionally StoryState.
-    generator.py orchestrates the planner and response-generator calls.
-    """
-
-    prompt = STORY_DIRECTOR_PROMPT
-
-    if story_state is not None:
-
-        serialized_state = _serialize_story_state(
-            story_state
-        )
-
-        state_json = json.dumps(
-            serialized_state,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-        prompt += (
-            "\n\n"
-            "============================================================\n"
-            "CURRENT CANONICAL STORY STATE\n"
-            "============================================================\n"
-            "This is the existing authoritative StoryState.\n"
-            "Preserve all unchanged fields when proposing state_patch.\n\n"
-            f"{state_json}"
-        )
-
-    else:
-
-        prompt += (
-            "\n\n"
-            "============================================================\n"
-            "CURRENT CANONICAL STORY STATE\n"
-            "============================================================\n"
-            "No initialized StoryState was provided.\n"
-            "Do not invent established historical facts.\n"
-            "Only propose state changes supported by the supplied "
-            "persona, conversation and memory context."
-        )
-
-    return prompt

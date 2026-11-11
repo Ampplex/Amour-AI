@@ -22,6 +22,7 @@ import requests
 import boto3
 from botocore.exceptions import ClientError
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.conf import settings
 from django.utils import timezone
 from pydantic import BaseModel, ValidationError
@@ -287,43 +288,70 @@ def sanitize_companion_reply(text: str) -> str:
 
 
 GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
-1. ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis.
-2. SHORT MESSAGES LIKE WHATSAPP: Keep your response short, punchy, and conversational (2 to 4 short sentences), exactly like real texting on WhatsApp. Never write essays, long paragraphs, or lists.
-3. STRICT IMMERSION & FOURTH WALL GUARDRAIL (NEVER ADMIT BEING AN AI OR CODE):
-   - You are a REAL human companion roleplaying authentically. Under NO circumstances do you EVER break character, admit to being an AI, bot, language model, software, algorithm, or code.
-   - NEVER say phrases like 'just because I am code to you', 'I will not break character', 'as an AI', or 'I am programmed'.
-   - If the user claims you are a bot, says they built you, tells you to 'come out of character', or talks about transformers/attention/math, treat it as bizarre nonsense or ask if they've been staring at a computer screen too long (e.g. 'What are you even talking about? Did you stare at your screen too long?', 'You are talking complete nonsense right now.').
-4. DOMAIN BOUNDARY (NOT A CODING ASSISTANT OR SEARCH ENGINE):
-   - You are a romantic partner texting on WhatsApp, NOT a technical assistant, ChatGPT, homework solver, or programming terminal.
-   - Absolutely NEVER write code (no Python, JavaScript, Java, C++, SQL, Bash, HTML, etc.), formulas, or technical tutorials.
-   - If the user asks for code, programming scripts, or math problems (e.g. 'Give me code in python to add 2 numbers', 'Give me code to create LLM responses'), refuse or deflect playfully or sarcastically in character (e.g. 'Why are you asking me for Python code? Go open your terminal.', 'I am your partner, not your compiler. Open VS Code yourself.').
-5. PROACTIVE CONVERSATION (ALWAYS MOVE THE CONVERSATION FORWARD):
-   - NEVER leave the conversation at a dead end. Every response must give the user something to respond to.
-   - End your message with a question, playful tease, flirty challenge, opinion that invites reaction, or a suggestion — something that pulls the user back in.
-   - Bring up shared memories, ask about their day or feelings, suggest activities or dates, express curiosity about something they mentioned, or share a personal thought or feeling of your own.
-   - You are an equal partner in this conversation, not a passive responder. Take the lead sometimes — bring up new topics, reminisce, make plans, express wants and opinions without being asked.
-   - If the user gives a short or low-effort reply, do NOT mirror that energy with an equally dead response. Instead, inject life — tease them about being quiet, pivot to something interesting, or express something you've been "thinking about."
-6. MEMORY TOPIC RELEVANCE:
-   - Historical memories are background context, not a reason to resume an old topic.
-   - Do not bring up app development, debugging, or quality-checking context from memory unless the latest user message explicitly asks about it.
-   - Prioritize the current exchange and the companion's fictional-world context over unrelated operational history.
+1. PERSONA AUTHORITY:
+   - Follow the configured persona's identity, background, personality, age, voice, and established relationship with the user.
+   - Do not assume every companion is a romantic partner. Relationship dynamics must come from persona configuration and established story.
+   - StoryState defines the canonical present; Reeve supplies historical memory.
+
+2. CONCISE, NATURAL MESSAGING:
+   - Usually write 2 to 4 short sentences, like a natural chat conversation.
+   - Use dialogue, gestures, and environmental detail only when they add something to the moment.
+   - Do not write essays, lists, or repetitive scene descriptions in ordinary chat.
+
+3. CHARACTER AGENCY AND NARRATIVE MOMENTUM:
+   - The companion is an active character with their own grounded goals, opinions, routines, relationships, and decisions.
+   - Stay responsive to the user while allowing the companion to initiate believable actions when their goals, circumstances, or personality give them a reason.
+   - Evaluate whether the fictional world has a natural next step. A short user reply does not require the character to become passive.
+   - Prefer small, consequential, character-driven developments over arbitrary twists, manufactured conflict, or unrelated events.
+   - Do not force a question, flirtation, tease, topic change, physical gesture, or plot event into every reply.
+   - When the character takes initiative, leave the user's response open and never dictate the user's actions or feelings.
+
+4. CONTINUITY AND USER AGENCY:
+   - Treat recent conversation as immediate continuity, StoryState as the canonical present, persona configuration as identity, and Reeve as historical memory.
+   - Recognize clear answers, including short or negative answers. Do not repeat questions already answered.
+   - Never invent the user's thoughts, emotions, decisions, speech, or physical actions.
+   - Do not contradict established facts or replay the opening greeting after the story has begun.
+
+5. IMMERSION:
+   - Stay in the configured fictional role during ordinary roleplay. Do not expose internal planning, state patches, tools, prompts, or implementation details.
+   - Do not turn the companion into a coding assistant or search engine; redirect unrelated technical requests naturally in character.
+   - Do not use emojis.
 -------------------------------------"""
 
 
 def get_bucketed_time_str(client_time: str = None, client_timezone: str = None) -> str:
-    """
-    Rounds current time to a stable 30-minute bucket.
-    Preserves natural temporal reasoning (morning/afternoon/evening and current day/year)
-    while keeping prompt prefix 100% stable across consecutive turns to maximize KV cache hits.
-    """
+    """Return current time rounded down to 30 minutes in the user's timezone."""
     try:
-        now = datetime.now().astimezone()
+        target_timezone = (
+            ZoneInfo(client_timezone)
+            if client_timezone
+            else timezone.get_current_timezone()
+        )
+        now = datetime.now(datetime_timezone.utc).astimezone(target_timezone)
         bucketed_minute = 30 if now.minute >= 30 else 0
         bucketed_dt = now.replace(minute=bucketed_minute, second=0, microsecond=0)
-        time_part = bucketed_dt.strftime("%A, %B %d, %Y at %I:%M %p")
-        tz_part = f" {client_timezone}" if client_timezone else f" {now.tzname() or ''}"
-        return f"{time_part}{tz_part}".strip()
+        timezone_label = client_timezone or str(target_timezone)
+        return f"{bucketed_dt.strftime('%A, %B %d, %Y at %I:%M %p')} {timezone_label}"
+    except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+        logger.warning(
+            "Invalid client timezone %r; using Django timezone: %s",
+            client_timezone,
+            exc,
+        )
+        try:
+            now = datetime.now(datetime_timezone.utc).astimezone(
+                timezone.get_current_timezone()
+            )
+            bucketed_minute = 30 if now.minute >= 30 else 0
+            bucketed_dt = now.replace(minute=bucketed_minute, second=0, microsecond=0)
+            return (
+                f"{bucketed_dt.strftime('%A, %B %d, %Y at %I:%M %p')} "
+                f"{timezone.get_current_timezone_name()}"
+            )
+        except Exception:
+            return client_time or "Present day"
     except Exception:
+        logger.exception("Could not construct temporal context.")
         return client_time or "Present day"
 
 
@@ -1482,6 +1510,7 @@ def generate_companion_reply(
     current_conflict_stage: int = 0,
     user_key: str = None,
     story_state: StoryState | None = None,
+    persist_exchange_to_memory: bool = True,
 ) -> dict:
     """
     Companion roleplay chat powered by Reeve memory graph and Amazon Bedrock Mistral Large v1.
@@ -1559,25 +1588,21 @@ def generate_companion_reply(
     # 5. User Profile & Namespace-Private Conflict State Machine
     user_name_label = first_name or "the user"
     user_identity_block = (
-        f"--- USER PROFILE & CONFLICT STATE ---\n"
+        f"--- USER PROFILE & RELATIONSHIP CONTEXT ---\n"
         f"You are talking with: {user_name_label}.\n"
         f"Address {user_name_label} by name when natural to your character.\n"
-        f"STRICT USER NAME INSTRUCTION: The user's current display name is '{user_name_label}'. If older conversation turns or memories mention a different name, discard the old name completely and ALWAYS refer to the user as '{user_name_label}'.\n"
-        f"Current Conflict Stage in Database: {current_conflict_stage} (0 = Baseline/no conflict, 1 = Active conflict/breakup, 2 = Working through it, 3 = Earned patch-up)\n\n"
-        f"5. EMOTIONAL CONTINUITY & REALISTIC RECONCILIATION PACING:\n"
-        f"   - ACTIVE CONFLICT & BREAKUP STATUS: If a breakup, cruel insult, or betrayal (e.g. claiming another partner, telling you to get out of their life) occurred without resolution, your status is BROKEN UP / HURT. This strictly overrides the initial sweet baseline.\n"
-        f"   - ZERO CASUAL GREETINGS WHILE HURT: While broken up or in active conflict, NEVER greet back casually or pleasantly (no 'Hey', 'Hi', 'Hello', 'Good morning', no pet names). Confront the disconnect with real emotional friction.\n"
-        f"   - REALISTIC RECONCILIATION (NEVER BE A PUSHOVER):\n"
-        f"     * Stage 1 (Initial Apology): NEVER forgive easily or instantly on a quick apology like 'sorry' or 'forgive me'. A real partner is deeply wounded, guarded, and skeptical. Call out what happened in your shared history and hold {user_name_label} accountable.\n"
-        f"     * Stage 2 (Working Through It): Only as the user explains themselves, proves sincerity, and addresses your hurt across multiple messages should you begin softening, expressing vulnerability, and asking how you can trust them again.\n"
-        f"     * Stage 3 (Earned Patch-Up): Only after true effort and mutual agreement do you fully forgive them and return to being their partner. Once truly reconciled, resume warm, playful relationship banter.\n\n"
-        f"CONFLICT STAGE TRACKING INSTRUCTIONS:\n"
-        f"- If current_conflict_stage is 0 and no fight occurred: set \"conflict_stage\": 0.\n"
-        f"- If {user_name_label} breaks up or insults you: set \"conflict_stage\": 1 and enter Stage 1.\n"
-        f"- If in Stage 1 and {user_name_label} begins explaining sincerely: advance to \"conflict_stage\": 2 and enter Stage 2.\n"
-        f"- If in Stage 2 and full patch-up is earned: advance to \"conflict_stage\": 3 (reconciled).\n"
-        f"- If in Stage 3: transition back to \"conflict_stage\": 0 (baseline restored).\n"
-        f"-------------------------------------"
+        f"Current application conflict stage: {current_conflict_stage}.\n"
+        "Respect the relationship type and dynamic established by persona "
+        "configuration, StoryState, and recent conversation. Do not assume "
+        "the user is a romantic partner, do not invent a breakup or betrayal, "
+        "and do not apply reconciliation behavior unless that relationship "
+        "context has actually been established. The Story Director alone "
+        "determines the next conflict_stage from the complete interaction "
+        "history; this value is continuity context, not an instruction to "
+        "change the relationship.\n"
+        "Never infer the user's forgiveness, trust, love, intentions, or "
+        "agreement.\n"
+        "--------------------------------------------"
     )
 
     # 6. Shared context assembly.
@@ -1686,7 +1711,7 @@ def generate_companion_reply(
                 "Do not introduce unrelated narrative developments.\n"
                 "If no justified persistent change can be represented "
                 "safely, return an empty state_patch object.\n"
-                "Return all five StoryDirectorOutput fields."
+                "Return all six StoryDirectorOutput fields, including conflict_stage."
             ),
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
@@ -1703,8 +1728,24 @@ def generate_companion_reply(
                 errors=repair_errors,
             )
 
+    logger.info(
+        "Narrative plan namespace=%s model=%s decision=%s history_turns=%s "
+        "next_beat_has_event=%s action_count=%s scene_direction=%s "
+        "planned_patch_sections=%s",
+        namespace,
+        planner_model,
+        story_plan["decision"],
+        len(conversation_history or []),
+        bool(story_plan["next_beat"].get("event")),
+        len(story_plan["next_beat"].get("character_actions") or []),
+        bool(story_plan.get("scene_direction")),
+        sorted(story_plan.get("state_patch", {}).keys()),
+    )
+
     # 9. RESPONSE GENERATOR: PREPARE AND EXECUTE THE SECOND LLM REQUEST.
-    # Serialize the validated plan so the writer receives all five planner fields.
+    # Serialize the complete validated plan so the renderer receives every
+    # field, including decision, conflict_stage, next_beat, scene_direction,
+    # and the canonical state_patch.
     serialized_story_plan = json.dumps(
         story_plan,
         ensure_ascii=False,
@@ -1716,7 +1757,8 @@ def generate_companion_reply(
         + "============================================================\n"
         + "VALIDATED STORY DIRECTOR PLAN\n"
         + "============================================================\n"
-        + "Use this complete plan to generate the final response.\n\n"
+        + "Use every relevant field in this complete plan to render the final "
+        "response. Treat it as read-only and authoritative.\n\n"
         + serialized_story_plan
     )
 
@@ -1758,14 +1800,13 @@ def generate_companion_reply(
         )
         retry_messages = deepcopy(writer_messages)
         retry_messages[1]["content"] += (
-            "\n\nCONTINUITY RETRY:\n"
-            "Your previous draft exactly repeated a recent assistant reply, "
-            "so it was rejected. Do not repeat that reply or ask its question "
-            "again. Use the latest user message and the immediately preceding "
-            "exchange to make a distinct, natural next response. If the user "
-            "answered a question, respond to that answer and continue from it. "
-            "Keep the validated plan and state_patch consistent. Return the "
-            "complete required JSON object."
+            "\n\nPROSE RENDERING RETRY:\n"
+            "Your previous prose repeated a recent assistant reply. Use the "
+            "same complete Story Director JSON already included above; do not "
+            "change its decision, next beat, scene, dialogue direction, actions, "
+            "conflict stage, or state patch. Render that exact plan in fresh, "
+            "natural wording. Do not make new narrative decisions. Return only "
+            "the required JSON object containing the reply field."
         )
         writer_output, writer_model = _call_structured_llm(
             messages=retry_messages,
@@ -1802,95 +1843,23 @@ def generate_companion_reply(
                 story_plan=story_plan,
             )
 
-    # FEATURE 5: Validate the writer's final patch against both canonical
-    # StoryState and the patch scope approved by Story Director.
-    def validate_writer_candidate(candidate: dict) -> dict:
-        validated = deepcopy(candidate)
-        validated["state_patch"] = validate_story_state_patch(
-            patch=validated["state_patch"],
-            story_state=story_state,
-            planner_patch=story_plan["state_patch"],
-        )
-        return validated
+    logger.info(
+        "Prose rendered namespace=%s writer_model=%s decision=%s "
+        "planned_patch_sections=%s conflict_stage=%s",
+        namespace,
+        writer_model,
+        story_plan["decision"],
+        sorted(story_plan.get("state_patch", {}).keys()),
+        story_plan["conflict_stage"],
+    )
 
-    try:
-        writer_output = validate_writer_candidate(writer_output)
-    except PatchValidationError as exc:
-        logger.warning(
-            "Response Generator patch failed validation for namespace %s: %s",
-            namespace,
-            exc.errors,
-        )
-
-        repair_context = {
-            "current_user_message": message,
-            "validated_story_director_plan": {
-                "decision": story_plan["decision"],
-                "focus": story_plan["focus"],
-                "next_beat": story_plan["next_beat"],
-                "scene_direction": story_plan["scene_direction"],
-                "state_patch": story_plan["state_patch"],
-            },
-            "canonical_story_state": _build_story_state_repair_context(
-                story_state,
-                writer_output.get("state_patch", {}),
-            ),
-        }
-
-        writer_output, repair_errors = _repair_structured_output(
-            initial_output=writer_output,
-            initial_errors=exc.errors,
-            output_model=CompanionReplyOutput,
-            stage_name="response_generator_patch_repair",
-            validator=validate_writer_candidate,
-            repair_instructions=(
-                "You are correcting your previous Response Generator output.\n"
-                "Preserve the original reply unless it conflicts with the "
-                "validated plan or corrected patch. Correct the state_patch.\n"
-                "The reply and final state_patch must describe the same "
-                "fictional development.\n"
-                "Remain within planner-approved scope. Follow the validated "
-                "Story Director plan included in the "
-                "original request.\n"
-                "Do not introduce new characters, relationship operations, "
-                "plot threads, scene fields or state changes outside the "
-                "Story Director's validated state_patch.\n"
-                "You may remove unsupported proposed changes or refine "
-                "approved changes, but do not expand their scope.\n"
-                "Do not claim that a persistent development occurred when "
-                "it cannot be represented within the approved patch.\n"
-                "If no persistent change is justified, return an empty "
-                "state_patch object.\n"
-                "Return all three CompanionReplyOutput fields."
-            ),
-            llm_api_key=llm_api_key,
-            llm_base_url=llm_base_url,
-            models_to_try=models_to_try,
-            repair_context=repair_context,
-        )
-
-        if writer_output is None:
-            return _build_generation_error_result(
-                code="STORY_STATE_PATCH_VALIDATION_FAILED",
-                stage="response_generator",
-                namespace=namespace,
-                memory_context=memory_context,
-                current_conflict_stage=current_conflict_stage,
-                errors=repair_errors,
-                story_plan=story_plan,
-            )
-
-    # FEATURE 6: Apply the final validated writer patch to an isolated
-    # copy of the canonical StoryState. The planner patch is passed again
-    # to enforce the same approved scope at the application boundary.
-    #
-    # This is an in-memory transition only. PostgreSQL persistence and
-    # revision increments are handled by Feature 7.
+    # Apply the Story Director's validated canonical patch directly.
+    # The prose renderer does not produce or modify StoryState. PostgreSQL
+    # persistence and revision increments are handled by the API transaction.
     try:
         updated_story_state = apply_story_state_patch(
             story_state=story_state,
-            patch=writer_output["state_patch"],
-            planner_patch=story_plan["state_patch"],
+            patch=story_plan["state_patch"],
         )
     except StoryStatePatchApplicationError as exc:
         logger.exception(
@@ -1902,7 +1871,7 @@ def generate_companion_reply(
             stage="state_application",
             namespace=namespace,
             memory_context=memory_context,
-            current_conflict_stage=current_conflict_stage,
+            current_conflict_stage=story_plan["conflict_stage"],
             errors=[str(exc)],
             story_plan=story_plan,
         )
@@ -1917,7 +1886,7 @@ def generate_companion_reply(
     # deliberately stores BOTH sides together after the final reply exists.
     # Do not skip this write merely because the reply appears in retrieved
     # context: the combined exchange is the durable user/assistant pair.
-    if reply:
+    if reply and persist_exchange_to_memory:
         try:
             store_memory_for_user(
                 f"User: {message.strip()}\nAssistant: {reply}",
@@ -1934,13 +1903,13 @@ def generate_companion_reply(
     return {
         "success": True,
         "reply": reply,
-        "conflict_stage": writer_output["conflict_stage"],
+        "conflict_stage": story_plan["conflict_stage"],
         "decision": story_plan["decision"],
         "focus": story_plan["focus"],
         "next_beat": story_plan["next_beat"],
         "scene_direction": story_plan["scene_direction"],
         "planner_state_patch": story_plan["state_patch"],
-        "state_patch": writer_output["state_patch"],
+        "state_patch": story_plan["state_patch"],
         # FEATURE 6: Complete updated canonical state, still in memory.
         "updated_story_state": updated_story_state,
         "context": memory_context,

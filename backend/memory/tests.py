@@ -235,6 +235,54 @@ class ChatMemoryEndpointTests(TestCase):
         self.assertEqual(bot_msg.response_metadata["story_state"]["revision"], 1)
         self.assertFalse(bot_msg.response_metadata["story_state"]["updated"])
 
+    @patch("memory.views.store_memory_for_user")
+    @patch("memory.views.generate_companion_reply")
+    def test_combined_exchange_is_stored_after_postgres_commit(
+        self, mock_reply, mock_store_memory
+    ):
+        mock_reply.return_value = {
+            "success": True,
+            "reply": "Maya checks her phone and smiles.",
+            "conflict_stage": 0,
+            "decision": "CHARACTER_DEVELOPMENT",
+            "focus": "maya",
+            "next_beat": {
+                "event": "Maya receives a message",
+                "character_actions": ["Maya checks her phone"],
+            },
+            "scene_direction": {"staging": "At the cafe table"},
+            "planner_state_patch": {},
+            "state_patch": {},
+            "updated_story_state": self.initial_story_state,
+            "context": "",
+        }
+
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            response = self.client.post(
+                "/api/memory/chat/",
+                {
+                    "message": "How is your project going?",
+                    "client_message_id": "post-commit-memory-001",
+                    "persona_id": str(self.persona.id),
+                    "user_id": self.user_id,
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(mock_store_memory.called)
+        self.assertEqual(len(callbacks), 1)
+        self.assertFalse(
+            mock_reply.call_args.kwargs["persist_exchange_to_memory"]
+        )
+
+        callbacks[0]()
+        mock_store_memory.assert_called_once_with(
+            "User: How is your project going?\nAssistant: Maya checks her phone and smiles.",
+            self.namespace,
+            user_key=None,
+        )
+
     @patch("memory.views.generate_companion_reply")
     def test_get_chat_history_includes_response_metadata(self, mock_reply):
         mock_reply.return_value = {

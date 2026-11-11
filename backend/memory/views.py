@@ -447,6 +447,7 @@ class ChatMemoryView(APIView):
                 user_key=user_key,
                 # FEATURE 4: Pass the retrieved canonical world to the planner.
                 story_state=story_state,
+                persist_exchange_to_memory=False,
             )
             # FEATURE 5: Do not persist conversation metadata when generation
             # or patch repair has failed.
@@ -511,6 +512,20 @@ class ChatMemoryView(APIView):
 
                     response_metadata = {
                         "narrative_decision": result.get("decision"),
+                        "narrative_trace": {
+                            "planned_patch_sections": sorted(
+                                (result.get("planner_state_patch") or {}).keys()
+                            ),
+                            "applied_patch_sections": sorted(
+                                (result.get("state_patch") or {}).keys()
+                            ),
+                            "has_planned_event": bool(
+                                (result.get("next_beat") or {}).get("event")
+                            ),
+                            "planned_action_count": len(
+                                (result.get("next_beat") or {}).get("character_actions") or []
+                            ),
+                        },
                         "story_state": {
                             "available": story_state is not None,
                             "schema_version": (
@@ -542,6 +557,35 @@ class ChatMemoryView(APIView):
                         response_metadata=response_metadata,
                     )
                     bot_msg_id = str(bot_msg_record.id)
+                    logger.info(
+                        "Persisted narrative turn namespace=%s decision=%s "
+                        "revision=%s state_updated=%s planned_sections=%s "
+                        "applied_sections=%s",
+                        namespace,
+                        result.get("decision"),
+                        state_revision,
+                        state_updated,
+                        response_metadata["narrative_trace"]["planned_patch_sections"],
+                        response_metadata["narrative_trace"]["applied_patch_sections"],
+                    )
+
+                    # Only publish the completed exchange to Reeve after the
+                    # PostgreSQL transaction successfully commits.
+                    def store_committed_exchange():
+                        try:
+                            store_memory_for_user(
+                                f"User: {message.strip()}\nAssistant: {reply_text}",
+                                namespace,
+                                user_key=user_key,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Committed chat turn could not be stored in Reeve "
+                                "(namespace=%s).",
+                                namespace,
+                            )
+
+                    transaction.on_commit(store_committed_exchange)
 
             except StoryStateRevisionConflict as conf_exc:
                 logger.warning("StoryState revision conflict: %s", conf_exc)
