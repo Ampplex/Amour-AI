@@ -185,6 +185,7 @@ class ChatMemoryView(APIView):
             )
 
         client_message_id = request.data.get("client_message_id", "").strip()
+        edit_message_id = request.data.get("edit_message_id", "").strip()
         persona_id = request.data.get("persona_id", "").strip()
         persona_name = request.data.get("persona_name", "")
         greeting = request.data.get("greeting", "")
@@ -217,8 +218,46 @@ class ChatMemoryView(APIView):
 
         from .models import PersonaChatMessage
 
-        # Client Message ID Idempotency Check
-        if client_message_id:
+        # Resolve message to edit if edit_message_id is supplied
+        user_msg_to_edit = None
+        existing_bot_reply = None
+        if edit_message_id:
+            import uuid as uuid_pkg
+            try:
+                parsed_uuid = uuid_pkg.UUID(edit_message_id)
+                user_msg_to_edit = PersonaChatMessage.objects.filter(
+                    id=parsed_uuid,
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="user",
+                ).first()
+            except (ValueError, TypeError):
+                pass
+
+            if not user_msg_to_edit:
+                user_msg_to_edit = PersonaChatMessage.objects.filter(
+                    client_message_id=edit_message_id,
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="user",
+                ).first()
+
+            if user_msg_to_edit:
+                logger.info(
+                    "Processing edit for user message id=%s client_message_id=%s",
+                    user_msg_to_edit.id,
+                    user_msg_to_edit.client_message_id,
+                )
+                existing_bot_reply = PersonaChatMessage.objects.filter(
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="bot",
+                    created_at__gte=user_msg_to_edit.created_at,
+                ).order_by("created_at").first()
+
+        # Client Message ID Idempotency Check (bypassed if editing an existing message)
+        existing_msg = None
+        if client_message_id and not user_msg_to_edit:
             existing_msg = PersonaChatMessage.objects.filter(
                 client_message_id=client_message_id,
                 user_identifier=str(user_id),
@@ -271,12 +310,12 @@ class ChatMemoryView(APIView):
                         status=status.HTTP_200_OK,
                     )
                 else:
-                    return Response(
-                        {
-                            "error": "Previous request with this client_message_id was incomplete. Please retry with a new client_message_id.",
-                            "code": "INCOMPLETE_CHAT_TURN",
-                        },
-                        status=status.HTTP_409_CONFLICT,
+                    # Incomplete turn from a previous attempt: user message was persisted,
+                    # but bot reply was not generated/saved (e.g. timeout or disconnect).
+                    # Resume this turn and generate the bot reply on retry instead of rejecting with 409!
+                    logger.info(
+                        "Incomplete chat turn for client_message_id=%s. Resuming reply generation on retry.",
+                        client_message_id,
                     )
 
         # Resolve persona from database if persona_id is provided
@@ -323,12 +362,20 @@ class ChatMemoryView(APIView):
         current_conflict_stage = rel_state.conflict_stage
 
         # Fetch the last six messages from PostgreSQL for immediate conversational continuity.
-        recent_turns_qs = list(
-            PersonaChatMessage.objects.filter(
-                user_identifier=str(user_id),
-                persona_identifier=str(persona_id),
-            ).order_by("-created_at")[:6]
+        exclude_turn_ids = []
+        if user_msg_to_edit:
+            exclude_turn_ids.append(user_msg_to_edit.id)
+            if existing_bot_reply:
+                exclude_turn_ids.append(existing_bot_reply.id)
+
+        turns_filter = PersonaChatMessage.objects.filter(
+            user_identifier=str(user_id),
+            persona_identifier=str(persona_id),
         )
+        if exclude_turn_ids:
+            turns_filter = turns_filter.exclude(id__in=exclude_turn_ids)
+
+        recent_turns_qs = list(turns_filter.order_by("-created_at")[:6])
         recent_turns_qs.reverse()
         conversation_history = [
             {
@@ -345,22 +392,62 @@ class ChatMemoryView(APIView):
             except Exception as exc:
                 logger.warning(f"Error during client-key handover on post: {exc}")
 
-        # 1. Store user message in PostgreSQL (Encrypted with client key if provided, else server shield)
-        try:
-            encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
-            PersonaChatMessage.objects.create(
-                user=user_obj,
-                user_identifier=str(user_id),
-                persona=persona_obj,
-                persona_identifier=str(persona_id),
-                namespace=namespace,
-                sender="user",
-                text=encrypted_user_msg,
-                conflict_stage=current_conflict_stage,
-                client_message_id=client_message_id,
-            )
-        except Exception as e:
-            logger.warning(f"Could not persist user message to DB: {e}")
+        # 1. Store or update user message in PostgreSQL
+        user_msg_record = None
+        newly_created_user_msg = False
+        if user_msg_to_edit:
+            try:
+                encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
+                user_msg_to_edit.text = encrypted_user_msg
+                if client_message_id:
+                    user_msg_to_edit.client_message_id = client_message_id
+                user_msg_to_edit.save(update_fields=["text", "client_message_id"])
+                user_msg_record = user_msg_to_edit
+                logger.info("Updated edited message in PostgreSQL id=%s", user_msg_to_edit.id)
+            except Exception as e:
+                logger.warning(f"Could not update edited user message in DB: {e}")
+        elif existing_msg:
+            user_msg_record = existing_msg
+        else:
+            # Clean up any trailing orphaned incomplete user message at the tail of the conversation
+            # so retrying never leaves duplicate or unanswered user messages in PostgreSQL
+            try:
+                last_turn = PersonaChatMessage.objects.filter(
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                ).order_by("-created_at").first()
+                if last_turn and last_turn.sender == "user":
+                    has_subsequent_reply = PersonaChatMessage.objects.filter(
+                        user_identifier=str(user_id),
+                        persona_identifier=str(persona_id),
+                        sender="bot",
+                        created_at__gte=last_turn.created_at,
+                    ).exists()
+                    if not has_subsequent_reply:
+                        logger.info(
+                            "Cleaning up trailing orphaned incomplete user message id=%s before creating turn.",
+                            last_turn.id,
+                        )
+                        last_turn.delete()
+            except Exception as exc:
+                logger.warning(f"Error checking trailing incomplete turn: {exc}")
+
+            try:
+                encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
+                user_msg_record = PersonaChatMessage.objects.create(
+                    user=user_obj,
+                    user_identifier=str(user_id),
+                    persona=persona_obj,
+                    persona_identifier=str(persona_id),
+                    namespace=namespace,
+                    sender="user",
+                    text=encrypted_user_msg,
+                    conflict_stage=current_conflict_stage,
+                    client_message_id=client_message_id,
+                )
+                newly_created_user_msg = True
+            except Exception as e:
+                logger.warning(f"Could not persist user message to DB: {e}")
 
         # 2. Generate companion reply (single-prompt roleplay engine with Reeve memory and Postgres history)
         try:
@@ -388,6 +475,12 @@ class ChatMemoryView(APIView):
                     namespace,
                     error_info,
                 )
+                # Rollback unfulfilled user message if newly created to keep database persisted chat clean
+                if newly_created_user_msg and user_msg_record:
+                    try:
+                        user_msg_record.delete()
+                    except Exception:
+                        pass
                 return Response(
                     {
                         "error": "Unable to generate a companion response.",
@@ -398,6 +491,11 @@ class ChatMemoryView(APIView):
 
             reply_text = result.get("reply", "").strip()
             if not reply_text:
+                if newly_created_user_msg and user_msg_record:
+                    try:
+                        user_msg_record.delete()
+                    except Exception:
+                        pass
                 return Response(
                     {"error": "Failed to generate companion reply from model"},
                     status=status.HTTP_502_BAD_GATEWAY,
@@ -420,30 +518,44 @@ class ChatMemoryView(APIView):
                         "model": result.get("model", ""),
                     }
 
-                    # Store bot response in PostgreSQL
+                    # Store or update bot response in PostgreSQL
                     encrypted_bot_msg = encrypt_chat_message(
                         reply_text,
                         user_id=str(user_id),
                         client_key=user_key,
                     )
-                    bot_msg_record = PersonaChatMessage.objects.create(
-                        user=user_obj,
-                        user_identifier=str(user_id),
-                        persona=persona_obj,
-                        persona_identifier=str(persona_id),
-                        namespace=namespace,
-                        sender="bot",
-                        text=encrypted_bot_msg,
-                        conflict_stage=new_conflict_stage,
-                        client_message_id=client_message_id,
-                        response_metadata=response_metadata,
-                    )
-                    bot_msg_id = str(bot_msg_record.id)
-                    logger.info(
-                        "Persisted conversation turn namespace=%s bot_msg_id=%s",
-                        namespace,
-                        bot_msg_id,
-                    )
+                    if existing_bot_reply:
+                        existing_bot_reply.text = encrypted_bot_msg
+                        existing_bot_reply.conflict_stage = new_conflict_stage
+                        if client_message_id:
+                            existing_bot_reply.client_message_id = client_message_id
+                        existing_bot_reply.response_metadata = response_metadata
+                        existing_bot_reply.save(update_fields=["text", "conflict_stage", "client_message_id", "response_metadata"])
+                        bot_msg_id = str(existing_bot_reply.id)
+                        logger.info(
+                            "Updated existing bot response for edited message namespace=%s bot_msg_id=%s",
+                            namespace,
+                            bot_msg_id,
+                        )
+                    else:
+                        bot_msg_record = PersonaChatMessage.objects.create(
+                            user=user_obj,
+                            user_identifier=str(user_id),
+                            persona=persona_obj,
+                            persona_identifier=str(persona_id),
+                            namespace=namespace,
+                            sender="bot",
+                            text=encrypted_bot_msg,
+                            conflict_stage=new_conflict_stage,
+                            client_message_id=client_message_id,
+                            response_metadata=response_metadata,
+                        )
+                        bot_msg_id = str(bot_msg_record.id)
+                        logger.info(
+                            "Persisted conversation turn namespace=%s bot_msg_id=%s",
+                            namespace,
+                            bot_msg_id,
+                        )
 
                     # Publish the completed exchange to Reeve after PostgreSQL transaction commits
                     def store_committed_exchange():
@@ -463,6 +575,11 @@ class ChatMemoryView(APIView):
 
             except Exception as e:
                 logger.exception("Failed to commit conversation turn in PostgreSQL: %s", e)
+                if newly_created_user_msg and user_msg_record:
+                    try:
+                        user_msg_record.delete()
+                    except Exception:
+                        pass
                 return Response(
                     {
                         "error": f"Failed to persist conversation turn: {str(e)}",

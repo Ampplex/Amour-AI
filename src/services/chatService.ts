@@ -38,6 +38,7 @@ export interface ChatHistoryResponse {
 
 export interface SendMessagePayload {
   client_message_id?: string;
+  edit_message_id?: string;
   message: string;
   persona_id: string;
   persona_name: string;

@@ -14,6 +14,7 @@ import {
   Keyboard,
   Dimensions,
   Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -170,11 +171,47 @@ function TypingDotsAnimation({ color = '#A1A1AA' }: { color?: string }) {
   );
 }
 
+function RetryIcon({ size = 12, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+        stroke={color}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M3 3v5h5"
+        stroke={color}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function EditIcon({ size = 12, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"
+        stroke={color}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 interface ChatMessage {
   id: string;
   sender: 'user' | 'bot';
   text: string;
   timestamp: string;
+  isFailed?: boolean;
 }
 
 interface CompanionChatModalProps {
@@ -215,7 +252,59 @@ export default function CompanionChatModal({
   const [historyPage, setHistoryPage] = useState<number>(1);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
   const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const chatInputRef = useRef<any>(null);
+  const spinAnim = useRef(new Animated.Value(0)).current;
+
+  const handleStartEdit = (item: ChatMessage) => {
+    setEditingMessageId(item.id);
+    setInputText(item.text);
+    setTimeout(() => {
+      chatInputRef.current?.focus();
+    }, 60);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setInputText('');
+  };
+
+  // Spin animation for retry icon during message sending
+  useEffect(() => {
+    if (isTyping) {
+      const loop = Animated.loop(
+        Animated.timing(spinAnim, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        })
+      );
+      loop.start();
+      return () => {
+        loop.stop();
+        spinAnim.setValue(0);
+      };
+    } else {
+      spinAnim.setValue(0);
+    }
+  }, [isTyping, spinAnim]);
+
+  const spinInterpolate = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  // Identify the most recent message sent by the user for retry button attachment
+  const lastUserMessageId = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].sender === 'user') {
+        return messages[i].id;
+      }
+    }
+    return null;
+  }, [messages]);
 
   // Dynamic keyboard tracker that elevates the input box perfectly above the keyboard
   useEffect(() => {
@@ -256,6 +345,7 @@ export default function CompanionChatModal({
           timestamp: item.created_at
             ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isFailed: false,
         }));
         setMessages(loaded);
         setHasMoreHistory(Boolean(data.has_more));
@@ -276,11 +366,13 @@ export default function CompanionChatModal({
   useEffect(() => {
     if (!visible || !persona) {
       setMessages([]);
+      setEditingMessageId(null);
       return;
     }
 
     setActivePersona(persona);
     setMessages([]);
+    setEditingMessageId(null);
     setHistoryPage(1);
     setHasMoreHistory(false);
     loadHistory();
@@ -301,6 +393,7 @@ export default function CompanionChatModal({
           timestamp: item.created_at
             ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isFailed: false,
         }));
         setMessages((prev) => [...older, ...prev]);
         setHistoryPage(nextPage);
@@ -315,9 +408,17 @@ export default function CompanionChatModal({
     }
   };
 
-  const handleSend = async () => {
-    const text = inputText.trim();
+  const handleSend = async (messageTextOverride?: string) => {
+    const text = (messageTextOverride !== undefined ? messageTextOverride : inputText).trim();
     if (!text || !activePersona || isTyping) return;
+
+    const wasEditing = editingMessageId !== null;
+    const editingId = editingMessageId;
+
+    if (messageTextOverride === undefined) {
+      setInputText('');
+      setEditingMessageId(null);
+    }
 
     const clientMsgId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
@@ -326,10 +427,29 @@ export default function CompanionChatModal({
       sender: 'user',
       text,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      isFailed: false,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
-    setInputText('');
+    setMessages((prev) => {
+      if (wasEditing && editingId) {
+        const editIdx = prev.findIndex((m) => m.id === editingId);
+        if (editIdx !== -1) {
+          // Update the message being edited in-place with the new text, and remove any bot reply after it while generating
+          const updatedMsg: ChatMessage = {
+            ...prev[editIdx],
+            text,
+            isFailed: false,
+          };
+          return [...prev.slice(0, editIdx), updatedMsg];
+        }
+      }
+      // If retrying a message that failed at the tail of messages, replace the failed entry with the new attempt
+      if (prev.length > 0 && prev[prev.length - 1].isFailed && prev[prev.length - 1].text === text) {
+        return [...prev.slice(0, prev.length - 1), userMsg];
+      }
+      return [...prev, userMsg];
+    });
+
     setIsTyping(true);
 
     setTimeout(() => {
@@ -353,6 +473,7 @@ export default function CompanionChatModal({
       const data = await sendChatMessage(
         {
           client_message_id: clientMsgId,
+          edit_message_id: wasEditing && editingId ? editingId : undefined,
           message: text,
           persona_id: activePersona.id,
           persona_name: activePersona.name,
@@ -375,6 +496,9 @@ export default function CompanionChatModal({
         };
         setMessages((prev) => [...prev, botReply]);
       } else {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === (wasEditing && editingId ? editingId : clientMsgId) ? { ...m, isFailed: true } : m))
+        );
         showAlert(
           'Response Unavailable',
           'Could not receive a response from companion. Please try again.',
@@ -384,6 +508,9 @@ export default function CompanionChatModal({
       }
     } catch (err) {
       console.warn('[CompanionChat] Send error:', err);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === (wasEditing && editingId ? editingId : clientMsgId) ? { ...m, isFailed: true } : m))
+      );
       showAlert(
         'Connection Issue',
         'Failed to deliver message. Please check your network connection.',
@@ -468,6 +595,7 @@ export default function CompanionChatModal({
         <FlatList
           ref={flatListRef}
           data={messages}
+          extraData={{ lastUserMessageId, isTyping }}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[
             styles.messagesList,
@@ -543,6 +671,7 @@ export default function CompanionChatModal({
           }
           renderItem={({ item }) => {
             const isUser = item.sender === 'user';
+            const isLastUserMsg = isUser && item.id === lastUserMessageId;
             return (
               <View
                 style={[
@@ -563,14 +692,68 @@ export default function CompanionChatModal({
                     style={isUser ? styles.userBubbleText : styles.botBubbleText}
                     actionStyle={isUser ? styles.userActionText : styles.botActionText}
                   />
-                  <Text
+                  <View
                     style={[
-                      styles.bubbleTimestamp,
-                      isUser ? styles.userTimestampText : styles.botTimestampText,
+                      styles.bubbleFooterRow,
+                      isLastUserMsg ? styles.bubbleFooterRowWithAction : styles.bubbleFooterRowDefault,
                     ]}
                   >
-                    {item.timestamp}
-                  </Text>
+                    {isLastUserMsg && (
+                      <View style={styles.bubbleActionButtonsRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.retryButton,
+                            isTyping && styles.retryButtonDisabled,
+                          ]}
+                          onPress={() => handleStartEdit(item)}
+                          disabled={isTyping}
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                          accessibilityLabel="Edit message"
+                        >
+                          <EditIcon size={11} color="#FFFFFF" />
+                          <Text style={styles.retryButtonText}>Edit</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.retryButton,
+                            item.isFailed && styles.retryButtonFailed,
+                            isTyping && styles.retryButtonDisabled,
+                          ]}
+                          onPress={() => handleSend(item.text)}
+                          disabled={isTyping}
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                          accessibilityLabel={item.isFailed ? 'Retry sending message' : 'Resend message'}
+                        >
+                          <Animated.View
+                            style={[
+                              styles.retryIconWrapper,
+                              isTyping && { transform: [{ rotate: spinInterpolate }] },
+                            ]}
+                          >
+                            <RetryIcon size={11} color="#FFFFFF" />
+                          </Animated.View>
+                          <Text style={styles.retryButtonText}>
+                            {isTyping
+                              ? 'Sending...'
+                              : item.isFailed
+                              ? 'Failed · Retry'
+                              : 'Resend'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    <Text
+                      style={[
+                        styles.bubbleTimestamp,
+                        isUser ? styles.userTimestampText : styles.botTimestampText,
+                      ]}
+                    >
+                      {item.timestamp}
+                    </Text>
+                  </View>
                 </View>
               </View>
             );
@@ -598,10 +781,28 @@ export default function CompanionChatModal({
             },
           ]}
         >
+          {editingMessageId && (
+            <View style={styles.editingBanner}>
+              <View style={styles.editingBannerLeft}>
+                <EditIcon size={12} color={borderColor} />
+                <Text style={styles.editingBannerText}>Editing message</Text>
+              </View>
+              <TouchableOpacity
+                onPress={handleCancelEdit}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={styles.cancelEditBtn}
+                accessibilityLabel="Cancel editing"
+              >
+                <CloseIcon size={14} color="#9CA3AF" />
+              </TouchableOpacity>
+            </View>
+          )}
+
           <View style={styles.inputCapsule}>
             <TextInput
+              ref={chatInputRef}
               style={styles.chatTextInput}
-              placeholder={`Message ${activePersona.name}...`}
+              placeholder={editingMessageId ? 'Edit your message...' : `Message ${activePersona.name}...`}
               placeholderTextColor="#6B7280"
               value={inputText}
               onChangeText={setInputText}
@@ -616,7 +817,7 @@ export default function CompanionChatModal({
                   backgroundColor: inputText.trim() ? borderColor : '#1E1E28',
                 },
               ]}
-              onPress={handleSend}
+              onPress={() => handleSend()}
               disabled={!inputText.trim() || isTyping}
               activeOpacity={0.8}
             >
@@ -877,10 +1078,79 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     color: '#94A3B8',
   },
+  bubbleFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  bubbleFooterRowDefault: {
+    justifyContent: 'flex-end',
+  },
+  bubbleFooterRowWithAction: {
+    justifyContent: 'space-between',
+    minWidth: 180,
+    gap: 8,
+  },
+  bubbleActionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7.5,
+    paddingVertical: 3.5,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+  },
+  retryButtonFailed: {
+    backgroundColor: 'rgba(220, 38, 38, 0.45)',
+    borderColor: 'rgba(254, 202, 202, 0.5)',
+  },
+  retryButtonDisabled: {
+    opacity: 0.65,
+  },
+  retryIconWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryButtonText: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+  },
   bubbleTimestamp: {
     fontSize: 10,
-    alignSelf: 'flex-end',
-    marginTop: 4,
+  },
+  editingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    marginBottom: 6,
+    backgroundColor: '#12121A',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#242434',
+  },
+  editingBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  editingBannerText: {
+    fontSize: 12,
+    color: '#D1D5DB',
+    fontWeight: '500',
+  },
+  cancelEditBtn: {
+    padding: 2,
   },
   userTimestampText: {
     color: 'rgba(255, 255, 255, 0.75)',
