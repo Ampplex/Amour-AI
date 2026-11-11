@@ -321,12 +321,12 @@ class ChatMemoryView(APIView):
         )
         current_conflict_stage = rel_state.conflict_stage
 
-        # Fetch recent dialogue history (last 6 turns) for fast, low-latency conversation context
+        # Fetch the last six exchanges for immediate conversational continuity.
         recent_turns_qs = list(
             PersonaChatMessage.objects.filter(
                 user_identifier=str(user_id),
                 persona_identifier=str(persona_id),
-            ).order_by("-created_at")[:6]
+            ).order_by("-created_at")[:12]
         )
         recent_turns_qs.reverse()
         conversation_history = [
@@ -1373,7 +1373,6 @@ class UserConversationsListView(APIView):
             })
 
         return Response({"conversations": conversations}, status=status.HTTP_200_OK)
-
 
 
 

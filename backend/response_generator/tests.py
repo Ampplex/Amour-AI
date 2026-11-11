@@ -245,8 +245,16 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
             STORY_DIRECTOR_PROMPT,
         )
         self.assertIn(
+            "Treat a clear\nanswer as resolving that question",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertIn(
             "Flesh out the specified observations, readings, deductions, and\n"
             "recommendations naturally",
+            RESPONSE_GENERATOR_PROMPT,
+        )
+        self.assertIn(
+            "A brief or negative answer can\nstill be a complete answer.",
             RESPONSE_GENERATOR_PROMPT,
         )
         self.assertIn(

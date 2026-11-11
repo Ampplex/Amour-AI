@@ -183,6 +183,20 @@ interface CompanionChatModalProps {
   onClose: () => void;
 }
 
+async function resolveConversationUserId(userId?: string): Promise<string> {
+  if (userId) return userId;
+
+  try {
+    const raw = await AsyncStorage.getItem('@amour_user_session');
+    const storedUser = raw ? JSON.parse(raw) : null;
+    if (storedUser?.id) return String(storedUser.id);
+  } catch (err) {
+    console.warn('[CompanionChat] Saved session lookup failed:', err);
+  }
+
+  return 'guest';
+}
+
 export default function CompanionChatModal({
   visible,
   persona,
@@ -230,17 +244,7 @@ export default function CompanionChatModal({
     setIsLoadingHistory(true);
     setHistoryLoadError(false);
     try {
-      let uId = user?.id;
-      if (!uId) {
-        try {
-          const raw = await AsyncStorage.getItem('@amour_user_session');
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed?.id) uId = parsed.id;
-          }
-        } catch {}
-      }
-      uId = uId || 'guest';
+      const uId = await resolveConversationUserId(user?.id);
 
       const data = await fetchChatHistory(persona.id, uId, 1, 30, user?.token);
 
@@ -287,7 +291,7 @@ export default function CompanionChatModal({
     setIsLoadingMore(true);
     const nextPage = historyPage + 1;
     try {
-      const uId = user?.id || 'guest';
+      const uId = await resolveConversationUserId(user?.id);
       const data = await fetchChatHistory(activePersona.id, uId, nextPage, 30, user?.token);
       if (data?.results && Array.isArray(data.results) && data.results.length > 0) {
         const older: ChatMessage[] = data.results.map((item) => ({
@@ -345,6 +349,7 @@ export default function CompanionChatModal({
     const userDisplayName = (user?.name ? user.name.trim().split(' ')[0] : '') || user?.given_name || user?.name || '';
 
     try {
+      const conversationUserId = await resolveConversationUserId(user?.id);
       const data = await sendChatMessage(
         {
           client_message_id: clientMsgId,
@@ -355,7 +360,7 @@ export default function CompanionChatModal({
           memory_prompt: activePersona.memory_prompt,
           client_time: clientTime,
           client_timezone: clientTimezone,
-          user_id: user?.id,
+          user_id: conversationUserId,
           user_name: userDisplayName,
         },
         user?.token

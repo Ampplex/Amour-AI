@@ -1,8 +1,11 @@
+from datetime import timedelta
 from unittest.mock import patch
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
+from .crypto import encrypt_chat_message
 from .models import CompanionStoryState, Persona, PersonaChatMessage
 from response_generator.story_director import StoryState
 
@@ -260,6 +263,65 @@ class ChatMemoryEndpointTests(TestCase):
         bot_result = [r for r in response.data["results"] if r["sender"] == "bot"][0]
         self.assertIn("response_metadata", bot_result)
         self.assertIn("story_state", bot_result["response_metadata"])
+
+    @patch("memory.views.generate_companion_reply")
+    def test_chat_generation_receives_recent_question_and_short_answer(self, mock_reply):
+        mock_reply.return_value = {
+            "success": True,
+            "reply": "Fair enough. Want to talk about something else?",
+            "conflict_stage": 0,
+            "decision": "CONTINUE",
+            "updated_story_state": self.initial_story_state,
+            "context": "",
+        }
+        prior_messages = [
+            ("user", "Doraemon"),
+            ("bot", "What books are you reading?"),
+            ("user", "I was reading Doraemon."),
+            ("bot", "What did you like about it?"),
+            ("user", "Nothing."),
+            ("bot", "Oh, really? What did you like about it?"),
+        ]
+        base_time = timezone.now() - timedelta(minutes=1)
+        records = [
+            PersonaChatMessage.objects.create(
+                user_identifier=self.user_id,
+                persona_identifier=str(self.persona.id),
+                namespace=self.namespace,
+                sender=sender,
+                text=encrypt_chat_message(text, user_id=self.user_id),
+            )
+            for sender, text in prior_messages
+        ]
+        for offset, record in enumerate(records):
+            PersonaChatMessage.objects.filter(pk=record.pk).update(
+                created_at=base_time + timedelta(seconds=offset)
+            )
+
+        response = self.client.post(
+            "/api/memory/chat/",
+            {
+                "message": "I liked nothing.",
+                "client_message_id": "short-answer-follow-up-001",
+                "persona_id": str(self.persona.id),
+                "user_id": self.user_id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        history = mock_reply.call_args.kwargs["conversation_history"]
+        self.assertEqual(
+            history,
+            [
+                {"role": sender if sender == "user" else "assistant", "content": text}
+                for sender, text in prior_messages
+            ],
+        )
+        self.assertEqual(
+            mock_reply.call_args.kwargs["message"],
+            "I liked nothing.",
+        )
 
     @patch("memory.views.generate_companion_reply")
     def test_idempotent_replay_returns_decrypted_reply_and_saved_metadata(self, mock_reply):
