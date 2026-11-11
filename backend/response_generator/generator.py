@@ -74,6 +74,7 @@ def generate_companion_reply(
         client_time=client_time,
         client_timezone=client_timezone,
         memory_context=memory_context,
+        has_history=bool(conversation_history),
     )
 
     # 3. Assemble messages: system prompt + last 6 messages from PostgreSQL + current message
