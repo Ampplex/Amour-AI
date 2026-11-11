@@ -1,5 +1,6 @@
 import logging
 import time
+from django.db import transaction
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,7 +20,9 @@ from .reeve_service import (
 from response_generator import (
     generate_companion_reply,
     initialize_story_state,
-    retrieve_story_state,
+    retrieve_story_state_snapshot,
+    persist_story_state,
+    StoryStateRevisionConflict,
     strip_emojis,
 )
 
@@ -216,29 +219,63 @@ class ChatMemoryView(APIView):
         # Client Message ID Idempotency Check
         if client_message_id:
             existing_msg = PersonaChatMessage.objects.filter(
-                client_message_id=client_message_id
+                client_message_id=client_message_id,
+                user_identifier=str(user_id),
+                persona_identifier=str(persona_id),
+                sender="user",
             ).first()
             if existing_msg:
-                logger.info(f"Idempotency hit for client_message_id={client_message_id}")
+                logger.info(
+                    "Idempotency hit for client_message_id=%s",
+                    client_message_id,
+                )
+                # New records: exact user-to-bot request ID association.
                 bot_reply = PersonaChatMessage.objects.filter(
+                    client_message_id=client_message_id,
                     user_identifier=str(user_id),
                     persona_identifier=str(persona_id),
                     sender="bot",
-                    created_at__gte=existing_msg.created_at,
                 ).order_by("created_at").first()
 
+                # Backward compatibility for older bot messages that did not
+                # store client_message_id.
+                if bot_reply is None:
+                    bot_reply = PersonaChatMessage.objects.filter(
+                        user_identifier=str(user_id),
+                        persona_identifier=str(persona_id),
+                        sender="bot",
+                        client_message_id="",
+                        created_at__gte=existing_msg.created_at,
+                    ).order_by("created_at").first()
+
                 if bot_reply:
+                    replay_reply = decrypt_chat_message(
+                        bot_reply.text,
+                        user_id=str(user_id),
+                        client_key=user_key,
+                    )
                     return Response(
                         {
                             "id": str(bot_reply.id),
                             "client_message_id": client_message_id,
-                            "reply": bot_reply.text,
+                            "reply": replay_reply,
+                            "conflict_stage": bot_reply.conflict_stage,
+                            "conflict_level": bot_reply.conflict_stage,
                             "context": "",
                             "namespace": namespace,
                             "persona_id": persona_id,
                             "user_id": str(user_id),
+                            "metadata": bot_reply.response_metadata or {},
                         },
                         status=status.HTTP_200_OK,
+                    )
+                else:
+                    return Response(
+                        {
+                            "error": "Previous request with this client_message_id was incomplete. Please retry with a new client_message_id.",
+                            "code": "INCOMPLETE_CHAT_TURN",
+                        },
+                        status=status.HTTP_409_CONFLICT,
                     )
 
         # Resolve persona from database if persona_id is provided
@@ -326,6 +363,7 @@ class ChatMemoryView(APIView):
 
         # Initialize the canonical fictional world once per user-persona namespace.
         # This reuses existing state and never blocks normal chat on failure.
+        initialized_story_state = None
         try:
             initialized_story_state = initialize_story_state(
                 namespace=namespace,
@@ -351,26 +389,27 @@ class ChatMemoryView(APIView):
             )
 
         # ============================================================
-        # FEATURE 3: STORYSTATE RETRIEVAL
+        # FEATURE 3 & 7: STORYSTATE SNAPSHOT RETRIEVAL
         # ============================================================
 
-        # Retrieve the canonical world after ensuring initialization.
-        # This operation is read-only and does not invoke an LLM.
+        # Retrieve the canonical world and revision after ensuring initialization.
         story_state = None
+        story_state_revision = None
 
         try:
-            story_state = retrieve_story_state(
+            story_state_snapshot = retrieve_story_state_snapshot(
                 namespace=namespace,
             )
-
-            if story_state is None:
-                logger.warning(
-                    "No valid StoryState available for namespace %s.",
+            if story_state_snapshot is not None:
+                story_state, story_state_revision = story_state_snapshot
+                logger.info(
+                    "StoryState snapshot retrieved successfully for namespace %s (revision=%s).",
                     namespace,
+                    story_state_revision,
                 )
             else:
-                logger.info(
-                    "StoryState retrieved successfully for namespace %s.",
+                logger.warning(
+                    "No valid StoryState available for namespace %s.",
                     namespace,
                 )
 
@@ -378,6 +417,17 @@ class ChatMemoryView(APIView):
             logger.exception(
                 "Unexpected StoryState retrieval error for namespace %s.",
                 namespace,
+            )
+
+        # If initialization succeeded but its stored state cannot be retrieved,
+        # do not silently continue with a missing canonical world.
+        if initialized_story_state is not None and story_state is None:
+            return Response(
+                {
+                    "error": "Canonical StoryState could not be retrieved.",
+                    "code": "STORY_STATE_RETRIEVAL_FAILED",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
         # 2. Generate companion reply (Reeve memory graph storage, recall, dialogue context, and Groq LLM)
@@ -433,28 +483,84 @@ class ChatMemoryView(APIView):
                 current_conflict_stage,
             )
 
-            # Persist updated conflict stage only after a usable reply exists.
-            if rel_state.conflict_stage != new_conflict_stage:
-                rel_state.conflict_stage = new_conflict_stage
-                rel_state.save(update_fields=["conflict_stage", "updated_at"])
+            updated_story_state = result.get("updated_story_state")
+            state_revision = story_state_revision
+            state_updated = False
 
-            # 3. Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
             try:
-                encrypted_bot_msg = encrypt_chat_message(reply_text, user_id=str(user_id), client_key=user_key)
-                bot_msg_record = PersonaChatMessage.objects.create(
-                    user=user_obj,
-                    user_identifier=str(user_id),
-                    persona=persona_obj,
-                    persona_identifier=str(persona_id),
-                    namespace=namespace,
-                    sender="bot",
-                    text=encrypted_bot_msg,
-                    conflict_stage=new_conflict_stage,
+                # StoryState, relationship stage and bot message must succeed
+                # together as one PostgreSQL transaction.
+                with transaction.atomic():
+                    if story_state is not None:
+                        if updated_story_state is None:
+                            raise RuntimeError(
+                                "Generator did not return updated_story_state "
+                                "for an initialized canonical StoryState."
+                            )
+                        state_revision, state_updated = persist_story_state(
+                            namespace=namespace,
+                            expected_revision=story_state_revision,
+                            previous_state=story_state,
+                            updated_state=updated_story_state,
+                        )
+
+                    # Persist updated conflict stage only after a usable reply exists.
+                    if rel_state.conflict_stage != new_conflict_stage:
+                        rel_state.conflict_stage = new_conflict_stage
+                        rel_state.save(update_fields=["conflict_stage", "updated_at"])
+
+                    response_metadata = {
+                        "narrative_decision": result.get("decision"),
+                        "story_state": {
+                            "available": story_state is not None,
+                            "schema_version": (
+                                updated_story_state.schema_version
+                                if updated_story_state is not None
+                                else None
+                            ),
+                            "revision": state_revision,
+                            "updated": state_updated,
+                        },
+                    }
+
+                    # Store bot response in PostgreSQL (Encrypted with client key if provided, else server shield)
+                    encrypted_bot_msg = encrypt_chat_message(
+                        reply_text,
+                        user_id=str(user_id),
+                        client_key=user_key,
+                    )
+                    bot_msg_record = PersonaChatMessage.objects.create(
+                        user=user_obj,
+                        user_identifier=str(user_id),
+                        persona=persona_obj,
+                        persona_identifier=str(persona_id),
+                        namespace=namespace,
+                        sender="bot",
+                        text=encrypted_bot_msg,
+                        conflict_stage=new_conflict_stage,
+                        client_message_id=client_message_id,
+                        response_metadata=response_metadata,
+                    )
+                    bot_msg_id = str(bot_msg_record.id)
+
+            except StoryStateRevisionConflict as conf_exc:
+                logger.warning("StoryState revision conflict: %s", conf_exc)
+                return Response(
+                    {
+                        "error": "State revision conflict. Please retry your message.",
+                        "code": "STORY_STATE_REVISION_CONFLICT",
+                    },
+                    status=status.HTTP_409_CONFLICT,
                 )
-                bot_msg_id = str(bot_msg_record.id)
             except Exception as e:
-                logger.warning(f"Could not persist bot message to DB: {e}")
-                bot_msg_id = f"bot-{int(time.time() * 1000)}"
+                logger.exception("Failed to commit conversation turn in PostgreSQL: %s", e)
+                return Response(
+                    {
+                        "error": f"Failed to persist conversation turn: {str(e)}",
+                        "code": "CONVERSATION_PERSISTENCE_FAILED",
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
             return Response(
                 {
@@ -467,6 +573,7 @@ class ChatMemoryView(APIView):
                     "namespace": namespace,
                     "persona_id": persona_id,
                     "user_id": str(user_id),
+                    "metadata": response_metadata,
                 },
                 status=status.HTTP_200_OK,
             )

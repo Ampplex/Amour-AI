@@ -17,9 +17,14 @@ class PersonaChatMessageSerializer(serializers.ModelSerializer):
             "sender",
             "text",
             "conflict_stage",
+            "response_metadata",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "response_metadata",
+        ]
 
 
 class PersonaSerializer(serializers.ModelSerializer):

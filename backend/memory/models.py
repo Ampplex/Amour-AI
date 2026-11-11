@@ -112,6 +112,10 @@ class PersonaChatMessage(models.Model):
     text = models.TextField()
     conflict_stage = models.IntegerField(default=0, db_index=True)
     client_message_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    response_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:

@@ -17,6 +17,9 @@ from response_generator import (
     get_bucketed_time_str,
     initialize_story_state,
     retrieve_story_state,
+    retrieve_story_state_snapshot,
+    persist_story_state,
+    StoryStateRevisionConflict,
     sanitize_companion_reply,
     strip_emojis,
 )
@@ -231,6 +234,26 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         bucketed = get_bucketed_time_str()
         self.assertTrue(bucketed)
         self.assertTrue(":00" in bucketed or ":30" in bucketed)
+
+    def test_story_prompts_assign_concrete_worldbuilding_to_planner(self):
+        self.assertIn(
+            "Do not treat\n  \"preserve established facts\" as a ban on creating new scene facts.",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertIn(
+            "include the concrete result and its\n  relevant implication in the plan",
+            STORY_DIRECTOR_PROMPT,
+        )
+        self.assertIn(
+            "Flesh out the specified observations, readings, deductions, and\n"
+            "recommendations naturally",
+            RESPONSE_GENERATOR_PROMPT,
+        )
+        self.assertIn(
+            "do not use that\nfreedom to invent user actions, contradict established facts, or add\n"
+            "unapproved persistent developments",
+            RESPONSE_GENERATOR_PROMPT,
+        )
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
@@ -913,6 +936,197 @@ class StoryStateRetrievalTests(DjangoTestCase):
     def test_empty_namespace_returns_none(self):
         result = retrieve_story_state("")
         self.assertIsNone(result)
+
+
+class StoryStatePersistenceTests(DjangoTestCase):
+    def setUp(self):
+        self.namespace = f"usr_test-user_persona_{TEST_PERSONA_ID}"
+        self.base_state = StoryState.model_validate(VALID_INITIAL_STORY_STATE)
+        CompanionStoryState.objects.create(
+            namespace=self.namespace,
+            state=self.base_state.model_dump(mode="json"),
+            schema_version=1,
+            revision=1,
+        )
+
+    def test_retrieve_story_state_snapshot_returns_state_and_revision(self):
+        snapshot = retrieve_story_state_snapshot(self.namespace)
+        self.assertIsNotNone(snapshot)
+        state, revision = snapshot
+        self.assertIsInstance(state, StoryState)
+        self.assertEqual(revision, 1)
+        self.assertEqual(state.characters[TEST_PERSONA_CHARACTER_ID].name, "Maya")
+
+    def test_new_character_is_persisted(self):
+        updated_data = self.base_state.model_dump(mode="json")
+        updated_data["characters"]["leo"] = {
+            "name": "Leo",
+            "role": "Maya's university friend",
+            "current_emotional_state": "Curious",
+            "current_physical_state": "Standing nearby",
+            "current_goal": "Talk to Maya",
+            "current_location": "University",
+            "important_knowledge": ["Knows Maya from university"],
+        }
+        updated_state = StoryState.model_validate(updated_data)
+
+        revision, changed = persist_story_state(
+            namespace=self.namespace,
+            expected_revision=1,
+            previous_state=self.base_state,
+            updated_state=updated_state,
+        )
+
+        self.assertEqual(revision, 2)
+        self.assertTrue(changed)
+
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(record.revision, 2)
+        self.assertIn("leo", record.state["characters"])
+        self.assertEqual(record.state["characters"]["leo"]["name"], "Leo")
+
+    def test_update_existing_character_emotion(self):
+        updated_data = self.base_state.model_dump(mode="json")
+        updated_data["characters"][TEST_PERSONA_CHARACTER_ID]["current_emotional_state"] = "Excited and energized"
+        updated_state = StoryState.model_validate(updated_data)
+
+        revision, changed = persist_story_state(
+            namespace=self.namespace,
+            expected_revision=1,
+            previous_state=self.base_state,
+            updated_state=updated_state,
+        )
+
+        self.assertEqual(revision, 2)
+        self.assertTrue(changed)
+
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(
+            record.state["characters"][TEST_PERSONA_CHARACTER_ID]["current_emotional_state"],
+            "Excited and energized",
+        )
+
+    def test_add_relationship_to_character(self):
+        updated_data = self.base_state.model_dump(mode="json")
+        updated_data["characters"]["leo"] = {
+            "name": "Leo",
+            "role": "Maya's university friend",
+            "current_emotional_state": "Friendly",
+            "current_physical_state": "Sitting",
+            "current_goal": "Study",
+            "current_location": "University",
+            "important_knowledge": [],
+        }
+        updated_data["relationships"].append({
+            "characters": [TEST_PERSONA_CHARACTER_ID, "leo"],
+            "relationship": "Classmates",
+            "current_dynamic": "Casual acquaintances",
+        })
+        updated_state = StoryState.model_validate(updated_data)
+
+        revision, changed = persist_story_state(
+            namespace=self.namespace,
+            expected_revision=1,
+            previous_state=self.base_state,
+            updated_state=updated_state,
+        )
+
+        self.assertEqual(revision, 2)
+        self.assertTrue(changed)
+
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(len(record.state["relationships"]), 2)
+        self.assertEqual(record.state["relationships"][1]["characters"], [TEST_PERSONA_CHARACTER_ID, "leo"])
+
+    def test_update_current_scene(self):
+        updated_data = self.base_state.model_dump(mode="json")
+        updated_data["current_scene"]["location"] = "Campus Coffee Shop"
+        updated_data["current_scene"]["atmosphere"] = "Buzzing with energy"
+        updated_state = StoryState.model_validate(updated_data)
+
+        revision, changed = persist_story_state(
+            namespace=self.namespace,
+            expected_revision=1,
+            previous_state=self.base_state,
+            updated_state=updated_state,
+        )
+
+        self.assertEqual(revision, 2)
+        self.assertTrue(changed)
+
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(record.state["current_scene"]["location"], "Campus Coffee Shop")
+
+    def test_update_plot_thread(self):
+        updated_data = self.base_state.model_dump(mode="json")
+        updated_data["plot_threads"].append({
+            "id": "art_exhibition_prep",
+            "status": "active",
+            "description": "Maya needs to finalize her paintings for the exhibition.",
+        })
+        updated_state = StoryState.model_validate(updated_data)
+
+        revision, changed = persist_story_state(
+            namespace=self.namespace,
+            expected_revision=1,
+            previous_state=self.base_state,
+            updated_state=updated_state,
+        )
+
+        self.assertEqual(revision, 2)
+        self.assertTrue(changed)
+
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(len(record.state["plot_threads"]), 1)
+        self.assertEqual(record.state["plot_threads"][0]["id"], "art_exhibition_prep")
+
+    def test_empty_patch_state_unchanged_revision_does_not_increment(self):
+        # Passing identical state
+        same_state = StoryState.model_validate(self.base_state.model_dump(mode="json"))
+
+        revision, changed = persist_story_state(
+            namespace=self.namespace,
+            expected_revision=1,
+            previous_state=self.base_state,
+            updated_state=same_state,
+        )
+
+        self.assertEqual(revision, 1)
+        self.assertFalse(changed)
+
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(record.revision, 1)
+
+    def test_stale_revision_raises_revision_conflict(self):
+        updated_data = self.base_state.model_dump(mode="json")
+        updated_data["characters"][TEST_PERSONA_CHARACTER_ID]["current_emotional_state"] = "Curious"
+        updated_state = StoryState.model_validate(updated_data)
+
+        # Expected revision is 1, but we pass stale expected_revision=0
+        with self.assertRaises(StoryStateRevisionConflict) as ctx:
+            persist_story_state(
+                namespace=self.namespace,
+                expected_revision=0,
+                previous_state=self.base_state,
+                updated_state=updated_state,
+            )
+
+        self.assertEqual(ctx.exception.expected_revision, 0)
+        self.assertEqual(ctx.exception.current_revision, 1)
+
+        # Confirm DB was not modified
+        record = CompanionStoryState.objects.get(namespace=self.namespace)
+        self.assertEqual(record.revision, 1)
+        self.assertEqual(record.state["characters"][TEST_PERSONA_CHARACTER_ID]["current_emotional_state"], self.base_state.characters[TEST_PERSONA_CHARACTER_ID].current_emotional_state)
+
+    def test_invalid_story_state_rejected(self):
+        with self.assertRaises(ValueError):
+            persist_story_state(
+                namespace=self.namespace,
+                expected_revision=1,
+                previous_state=self.base_state,
+                updated_state="not_a_story_state",  # type: ignore
+            )
 
 
 

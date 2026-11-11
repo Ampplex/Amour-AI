@@ -11,17 +11,24 @@ and does not require a Django test database.
 
 Run explicitly:
 
-    AMOUR_RUN_LIVE_LLM_TESTS=1 python manage.py test response_generator.tests_live_llm
+    AMOUR_RUN_LIVE_LLM_TESTS=1 python manage.py test \
+      --settings=amour_backend.live_test_settings \
+      response_generator.tests_live_llm.LiveChatEndpointLLMIntegrationTests
 
 The regular deterministic suite does not make paid LLM calls.
 """
 
 import os
+import re
 import unittest
 from unittest.mock import patch
 
 from django.conf import settings
+from django.test import TestCase as DjangoTestCase
+from rest_framework.test import APIClient
 
+from memory.crypto import decrypt_chat_message
+from memory.models import CompanionStoryState, Persona, PersonaChatMessage
 from response_generator import generator as response_generator_module
 from response_generator.generator import generate_companion_reply
 from response_generator.state_patch_validator import validate_story_state_patch
@@ -163,13 +170,32 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
             for model in models
         )
 
-    def _run_live_turn(self, message: str) -> dict:
+    def _run_live_turn(
+        self,
+        message: str,
+        *,
+        persona_name: str = "Maya",
+        persona_age: int = 24,
+        greeting: str = (
+            "Maya is sitting with John in the university cafeteria."
+        ),
+        memory_prompt: str = (
+            "Maya and John have been close friends for several years. "
+            "Yesterday's disagreement left their friendship strained. Maya "
+            "has also been receiving anonymous messages."
+        ),
+        user_name: str = "John",
+        story_state: StoryState | None = None,
+    ) -> dict:
         """
         Execute the real two-stage LLM pipeline.
 
         Reeve is isolated, but requests.post is deliberately untouched.
         Therefore Story Director and Response Generator are real model calls.
         """
+        effective_story_state = (
+            story_state if story_state is not None else self.story_state
+        )
         with (
             patch(
                 "response_generator.generator.store_memory_for_user"
@@ -181,21 +207,15 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
         ):
             result = generate_companion_reply(
                 message=message,
-                namespace="live_llm_test_user_persona_maya",
-                persona_name="Maya",
-                persona_age=24,
-                greeting=(
-                    "Maya is sitting with John in the university cafeteria."
-                ),
-                memory_prompt=(
-                    "Maya is thoughtful, emotionally expressive, and values "
-                    "honesty. She has her own motivations and does not agree "
-                    "with the user automatically."
-                ),
-                user_name="John",
+                namespace=f"live_llm_test_user_persona_{persona_name.casefold()}",
+                persona_name=persona_name,
+                persona_age=persona_age,
+                greeting=greeting,
+                memory_prompt=memory_prompt,
+                user_name=user_name,
                 conversation_history=[],
                 current_conflict_stage=1,
-                story_state=self.story_state,
+                story_state=effective_story_state,
             )
 
             # Both Reeve writes are isolated. No Reeve network request is made.
@@ -231,7 +251,7 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
         # inside the Story Director's approved scope.
         validated_patch = validate_story_state_patch(
             patch=result["state_patch"],
-            story_state=self.story_state,
+            story_state=effective_story_state,
             planner_patch=result["planner_state_patch"],
         )
         self.assertEqual(validated_patch, result["state_patch"])
@@ -245,6 +265,144 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
             f"\nFinal patch: {result.get('state_patch')!r}"
             f"\nUpdated state: "
             f"{result.get('updated_story_state').model_dump(mode='json')!r}"
+        )
+
+    def test_live_llm_authors_concrete_readings_and_takes_action(self):
+        """A persona's background should ground specific readings and action."""
+        persona = {
+            "name": "Valerie",
+            "age": 31,
+            "tagline": "Submersible systems engineer and expedition co-pilot",
+            "greeting": (
+                "Valerie is at the controls of a research submersible with "
+                "Ankesh during a deep-water survey."
+            ),
+            "memory_prompt": (
+                "Valerie grew up in Halifax, where her father repaired "
+                "commercial fishing boats. She studied marine engineering "
+                "and has spent eight years maintaining deep-water research "
+                "submersibles. On her last expedition, a faulty temperature "
+                "probe produced a false alarm, so she learned to compare "
+                "independent sensors before drawing conclusions. She and "
+                "Ankesh are experienced crewmates on their first survey "
+                "together."
+            ),
+        }
+        story_state = StoryState.model_validate(
+            {
+                "schema_version": 1,
+                "story_summary": (
+                    "Valerie and Ankesh are operating a research submersible "
+                    "during a deep-water survey."
+                ),
+                "characters": {
+                    "valerie": {
+                        "name": "Valerie",
+                        "role": (
+                            "Submersible systems engineer and co-pilot"
+                        ),
+                        "current_emotional_state": "Focused",
+                        "current_physical_state": "Healthy",
+                        "current_goal": (
+                            "Monitor the submersible and keep the crew safe"
+                        ),
+                        "current_location": "Submersible control room",
+                        "important_knowledge": [],
+                    },
+                    "user": {
+                        "name": "Ankesh",
+                        "role": "Pilot",
+                        "current_emotional_state": "Focused",
+                        "current_physical_state": "Healthy",
+                        "current_goal": "Complete the deep-water survey",
+                        "current_location": "Submersible control room",
+                        "important_knowledge": [],
+                    },
+                },
+                "relationships": [
+                    {
+                        "characters": ["valerie", "user"],
+                        "relationship": "Crewmates",
+                        "current_dynamic": "Professional and collaborative",
+                    }
+                ],
+                "plot_threads": [],
+                "current_scene": {
+                    "location": "Research submersible control room",
+                    "time": "During a deep-water survey",
+                    "participants": ["valerie", "user"],
+                    "situation": (
+                        "Valerie and Ankesh are monitoring the submersible "
+                        "during its descent."
+                    ),
+                    "atmosphere": "Quiet and focused",
+                    "continuity_details": [
+                        "Thermal telemetry and depth sensors are active"
+                    ],
+                },
+            }
+        )
+        question = (
+            "What do the thermal telemetry and depth sensors show on your "
+            "console?"
+        )
+
+        result = self._run_live_turn(
+            question,
+            persona_name=persona["name"],
+            persona_age=persona["age"],
+            greeting=persona["greeting"],
+            memory_prompt=persona["memory_prompt"],
+            user_name="Ankesh",
+            story_state=story_state,
+        )
+
+        plan = result["next_beat"]
+        planned_dialogue = plan["dialogue_direction"]
+        planned_details = " ".join(
+            (
+                plan["narrative_development"],
+                planned_dialogue,
+                *plan["character_actions"],
+            )
+        )
+        reply = result["reply"]
+        diagnostic = self._diagnostic(result)
+
+        self.assertRegex(
+            planned_details,
+            r"(?i)(temperature|thermal).*\d|\d.*(temperature|thermal)",
+            "The plan should provide a concrete temperature reading."
+            + diagnostic,
+        )
+        self.assertRegex(
+            planned_details,
+            r"(?i)(depth|meters?|metres?).*\d|\d.*(depth|meters?|metres?)",
+            "The plan should provide a concrete depth reading." + diagnostic,
+        )
+        self.assertRegex(
+            planned_dialogue,
+            r"(?i)(because|so|which means|indicat|suggest|therefore|"
+            r"my read|I think|I suspect)",
+            "Dialogue direction should include an interpretation, not a "
+            "placeholder." + diagnostic,
+        )
+        self.assertGreaterEqual(
+            len(re.findall(r"\d+(?:\.\d+)?", reply)),
+            2,
+            "The reply should convey concrete sensor readings." + diagnostic,
+        )
+        self.assertRegex(
+            reply,
+            r"(?i)\b(check|compare|cross-check|adjust|switch|reroute|"
+            r"inspect|trace|stabilize|monitor|run|verify|take)\w*\b",
+            "Valerie should take a purposeful action, not only report data."
+            + diagnostic,
+        )
+        self.assertNotIn(
+            question.casefold(),
+            reply.casefold(),
+            "The reply should not repeat the user's question." + diagnostic,
         )
 
     def test_live_llm_selects_character_state_for_emotional_change(self):
@@ -409,4 +567,215 @@ class LiveStoryStateLLMIntegrationTests(unittest.TestCase):
         self.assertEqual(
             result["updated_story_state"].model_dump(mode="json"),
             self.story_state.model_dump(mode="json"),
+        )
+
+
+@unittest.skipUnless(
+    os.environ.get("AMOUR_RUN_LIVE_LLM_TESTS") == "1",
+    (
+        "Live LLM tests are opt-in. Set AMOUR_RUN_LIVE_LLM_TESTS=1 "
+        "to make real model calls."
+    ),
+)
+class LiveChatEndpointLLMIntegrationTests(DjangoTestCase):
+    """Exercise the client-shaped chat request through the real API pipeline."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        provider = (
+            getattr(settings, "LLM_PROVIDER", "")
+            or os.environ.get("LLM_PROVIDER", "bedrock")
+        ).strip().lower()
+        api_key, _, models = response_generator_module._get_llm_configuration()
+        if not models:
+            raise unittest.SkipTest(
+                "No models are configured for the selected LLM provider."
+            )
+        if provider != "bedrock" and not api_key:
+            raise unittest.SkipTest(
+                "The API key for the selected non-Bedrock provider is not configured."
+            )
+
+    def test_live_chat_endpoint_runs_persona_pipeline_end_to_end(self):
+        from response_generator.generator import generate_companion_reply
+
+        persona = Persona.objects.create(
+            name="Valerie",
+            age=31,
+            tagline="Submersible systems engineer and expedition co-pilot",
+            greeting=(
+                "Valerie is at the controls of a research submersible with "
+                "Ankesh during a deep-water survey."
+            ),
+            memory_prompt=(
+                "Valerie grew up in Halifax, where her father repaired "
+                "commercial fishing boats. She studied marine engineering "
+                "and has spent eight years maintaining deep-water research "
+                "submersibles. On her last expedition, a faulty temperature "
+                "probe produced a false alarm, so she learned to compare "
+                "independent sensors before drawing conclusions. She and "
+                "Ankesh are experienced crewmates on their first survey "
+                "together."
+            ),
+        )
+        user_id = "live-e2e-ankesh"
+        user_key = "live-e2e-memory-key"
+        client_message_id = "live-e2e-valerie-sensors-001"
+        question = (
+            "What do the thermal telemetry and depth sensors show on your "
+            "console?"
+        )
+        payload = {
+            "client_message_id": client_message_id,
+            "message": question,
+            "persona_id": str(persona.id),
+            "persona_name": persona.name,
+            "greeting": persona.greeting,
+            "memory_prompt": persona.memory_prompt,
+            "client_time": "Wednesday, November 11, 2026, 6:40 PM",
+            "client_timezone": "Asia/Kolkata",
+            "user_id": user_id,
+            "user_name": "Ankesh",
+            "user_key": user_key,
+        }
+        generation_results = []
+
+        def capture_live_generation(*args, **kwargs):
+            result = generate_companion_reply(*args, **kwargs)
+            generation_results.append(result)
+            return result
+
+        with (
+            patch(
+                "response_generator.generator.store_memory_for_user"
+            ) as mock_store,
+            patch(
+                "response_generator.generator.retrieve_context_for_user",
+                return_value="",
+            ) as mock_retrieve,
+            patch(
+                "memory.views.generate_companion_reply",
+                side_effect=capture_live_generation,
+            ),
+        ):
+            response = APIClient().post(
+                "/api/memory/chat/",
+                payload,
+                format="json",
+                HTTP_X_MEMORY_USER_KEY=user_key,
+            )
+
+        diagnostic = (
+            f"\nHTTP status: {response.status_code}"
+            f"\nHTTP response: {getattr(response, 'data', response.content)!r}"
+            f"\nGeneration: {generation_results!r}"
+        )
+        self.assertEqual(response.status_code, 200, diagnostic)
+        self.assertEqual(len(generation_results), 1, diagnostic)
+        self.assertGreaterEqual(mock_store.call_count, 2)
+        mock_retrieve.assert_called_once()
+
+        result = generation_results[0]
+        self.assertTrue(result.get("success"), diagnostic)
+        self.assertEqual(response.data["reply"], result["reply"], diagnostic)
+        self.assertEqual(
+            response.data["client_message_id"],
+            client_message_id,
+            diagnostic,
+        )
+
+        state_record = CompanionStoryState.objects.get(
+            namespace=response.data["namespace"]
+        )
+        self.assertEqual(state_record.revision, response.data["metadata"]["story_state"]["revision"])
+        self.assertGreaterEqual(state_record.revision, 1, diagnostic)
+        state = state_record.state
+        persona_character_id = f"persona_{str(persona.id).replace('-', '_')}"
+        self.assertIn(persona_character_id, state["characters"], diagnostic)
+        self.assertEqual(
+            state["characters"][persona_character_id]["name"],
+            persona.name,
+        )
+
+        messages = list(
+            PersonaChatMessage.objects.filter(
+                user_identifier=user_id,
+                persona_identifier=str(persona.id),
+            ).order_by("created_at")
+        )
+        self.assertEqual([item.sender for item in messages], ["user", "bot"])
+        self.assertEqual(messages[0].client_message_id, client_message_id)
+        self.assertEqual(messages[1].client_message_id, client_message_id)
+        self.assertEqual(
+            decrypt_chat_message(
+                messages[0].text,
+                user_id=user_id,
+                client_key=user_key,
+            ),
+            question,
+        )
+        self.assertEqual(
+            decrypt_chat_message(
+                messages[1].text,
+                user_id=user_id,
+                client_key=user_key,
+            ),
+            response.data["reply"],
+        )
+
+        plan = result["next_beat"]
+        planned_dialogue = plan["dialogue_direction"]
+        planned_details = " ".join(
+            (
+                plan["narrative_development"],
+                planned_dialogue,
+                *plan["character_actions"],
+            )
+        )
+        reply = response.data["reply"]
+        behavior_diagnostic = (
+            f"\nPlanner next_beat: {plan!r}"
+            f"\nReply: {reply!r}"
+            f"\nPersona memory profile: {persona.memory_prompt!r}"
+        )
+        print(f"\nLIVE_CHAT_PLAN: {plan!r}")
+        print(f"LIVE_CHAT_REPLY: {reply}")
+        self.assertRegex(
+            planned_details,
+            r"(?i)(temperature|thermal).*\d|\d.*(temperature|thermal)",
+            "The live plan must author a concrete thermal reading."
+            + behavior_diagnostic,
+        )
+        self.assertRegex(
+            planned_details,
+            r"(?i)(depth|meters?|metres?).*\d|\d.*(depth|meters?|metres?)",
+            "The live plan must author a concrete depth reading."
+            + behavior_diagnostic,
+        )
+        self.assertRegex(
+            planned_dialogue,
+            r"(?i)(because|so|which means|indicat|suggest|therefore|"
+            r"my read|I think|I suspect)",
+            "The dialogue direction must state a concrete interpretation."
+            + behavior_diagnostic,
+        )
+        self.assertGreaterEqual(
+            len(re.findall(r"\d+(?:\.\d+)?", reply)),
+            2,
+            "The live reply must communicate both sensor readings."
+            + behavior_diagnostic,
+        )
+        self.assertRegex(
+            reply,
+            r"(?i)\b(check|compare|cross-check|adjust|switch|reroute|"
+            r"inspect|trace|stabilize|monitor|run|verify|take)\w*\b",
+            "The persona must take a purposeful next action."
+            + behavior_diagnostic,
+        )
+        self.assertNotIn(
+            question.casefold(),
+            reply.casefold(),
+            "The reply must not echo the user's question."
+            + behavior_diagnostic,
         )

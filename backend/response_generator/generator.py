@@ -1263,88 +1263,151 @@ def initialize_story_state(
         return None
 
 
-def retrieve_story_state(namespace: str) -> StoryState | None:
+def retrieve_story_state_snapshot(
+    namespace: str,
+) -> tuple[StoryState, int] | None:
     """
-    Retrieve and validate the current canonical StoryState
-    for a user-persona namespace.
-
-    This function is strictly read-only.
-
-    Returns:
-        StoryState: Validated canonical world.
-        None: If the namespace is missing, the state is not
-              initialized, or stored data is invalid.
+    Return the validated canonical StoryState and the exact DB revision
+    from which that state was read.
     """
     from memory.models import CompanionStoryState
 
     if not namespace:
-        logger.error(
-            "StoryState retrieval requires a namespace."
-        )
         return None
 
-    # 1. Retrieve the namespace-specific database record.
     try:
         record = CompanionStoryState.objects.filter(
             namespace=namespace
         ).first()
-    except Exception:
-        logger.exception(
-            "Database error while retrieving StoryState for %s.",
-            namespace,
-        )
-        return None
 
-    # 2. No record means initialization has not happened.
-    if record is None:
-        logger.info(
-            "No StoryState record exists for namespace %s.",
-            namespace,
-        )
-        return None
+        if record is None or record.state is None:
+            return None
 
-    # 3. A record with NULL state is not initialized.
-    if record.state is None:
-        logger.info(
-            "StoryState exists but is not initialized for %s.",
-            namespace,
-        )
-        return None
+        if record.schema_version != 1:
+            logger.error(
+                "Unsupported StoryState schema version %s for %s.",
+                record.schema_version,
+                namespace,
+            )
+            return None
 
-    # 4. Verify the database schema version.
-    if record.schema_version != 1:
-        logger.error(
-            "Unsupported StoryState database schema version %s "
-            "for namespace %s.",
-            record.schema_version,
-            namespace,
-        )
-        return None
-
-    # 5. Validate the stored JSONB using the canonical Pydantic model.
-    try:
         story_state = StoryState.model_validate(record.state)
 
         if story_state.schema_version != record.schema_version:
-            raise ValueError(
-                "Stored StoryState document version does not match "
-                "the database schema_version."
-            )
+            raise ValueError("Database and document schema versions differ.")
 
         logger.info(
-            "Successfully retrieved StoryState for namespace %s "
-            "(revision=%s).",
+            "Successfully retrieved StoryState snapshot for namespace %s (revision=%s).",
             namespace,
             record.revision,
         )
-        return story_state
+        return story_state, record.revision
 
     except Exception:
         logger.exception(
-            "Stored StoryState failed validation for namespace %s.",
+            "Could not retrieve StoryState snapshot for %s.",
             namespace,
         )
         return None
+
+
+def retrieve_story_state(namespace: str) -> StoryState | None:
+    """Backward-compatible read-only StoryState retrieval."""
+    snapshot = retrieve_story_state_snapshot(namespace)
+    return snapshot[0] if snapshot is not None else None
+
+
+class StoryStateRevisionConflict(RuntimeError):
+    """Raised when the canonical StoryState changed during generation."""
+
+    def __init__(
+        self,
+        expected_revision: int,
+        current_revision: int | None,
+    ):
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+        super().__init__(
+            "StoryState revision conflict: "
+            f"expected {expected_revision}, "
+            f"found {current_revision}."
+        )
+
+
+def persist_story_state(
+    namespace: str,
+    expected_revision: int,
+    previous_state: StoryState,
+    updated_state: StoryState,
+) -> tuple[int, bool]:
+    """
+    Persist a validated StoryState using optimistic concurrency control.
+
+    Returns:
+        (resulting_revision, state_changed)
+
+    Revision advances only if the canonical state actually changes.
+    """
+    from django.db.models import F
+    from memory.models import CompanionStoryState
+
+    if not namespace:
+        raise ValueError("Namespace is required for StoryState persistence.")
+
+    if not isinstance(previous_state, StoryState):
+        raise ValueError("previous_state must be a valid StoryState instance.")
+
+    if not isinstance(updated_state, StoryState):
+        raise ValueError("updated_state must be a valid StoryState instance.")
+
+    if updated_state.schema_version != 1:
+        raise ValueError(
+            f"Unsupported StoryState schema version {updated_state.schema_version}."
+        )
+
+    # Compare serializations to detect if the state actually changed.
+    previous_data = previous_state.model_dump(mode="json")
+    updated_data = updated_state.model_dump(mode="json")
+
+    if previous_data == updated_data:
+        logger.info(
+            "StoryState unchanged for namespace %s; revision remains %s.",
+            namespace,
+            expected_revision,
+        )
+        return expected_revision, False
+
+    # Compare-and-set: update only if current revision matches expected_revision.
+    updated_rows = CompanionStoryState.objects.filter(
+        namespace=namespace,
+        revision=expected_revision,
+    ).update(
+        state=updated_data,
+        schema_version=updated_state.schema_version,
+        revision=F("revision") + 1,
+        updated_at=timezone.now(),
+    )
+
+    if updated_rows == 0:
+        current_record = CompanionStoryState.objects.filter(
+            namespace=namespace
+        ).first()
+        current_revision = (
+            current_record.revision if current_record is not None else None
+        )
+        raise StoryStateRevisionConflict(
+            expected_revision=expected_revision,
+            current_revision=current_revision,
+        )
+
+    new_revision = expected_revision + 1
+    logger.info(
+        "Successfully persisted StoryState for namespace %s (revision: %s -> %s).",
+        namespace,
+        expected_revision,
+        new_revision,
+    )
+    return new_revision, True
 
 
 def _build_llm_messages(
