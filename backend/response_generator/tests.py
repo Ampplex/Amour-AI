@@ -237,7 +237,10 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertTrue(":00" in bucketed or ":30" in bucketed)
 
     def test_story_prompts_assign_concrete_worldbuilding_to_planner(self):
-        self.assertIn("Never contradict established facts", STORY_DIRECTOR_PROMPT)
+        self.assertIn(
+            "Never treat the current user message as an isolated interaction.",
+            STORY_DIRECTOR_PROMPT,
+        )
         self.assertIn(
             "supply concrete plausible facts in the plan",
             STORY_DIRECTOR_PROMPT,
