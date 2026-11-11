@@ -8,8 +8,8 @@ schemas, and structured output validation for the two-stage
 companion response pipeline.
 
 Architecture:
-    - Story Director produces a validated five-field narrative plan.
-    - Response Generator turns that plan into the final reply.
+    - Story Director produces the complete validated narrative decision plan.
+    - Prose renderer uses every plan field to write the final reply; it makes no decisions.
     - Reeve remains responsible for historical memory.
     - StoryState represents the current canonical story state.
 
