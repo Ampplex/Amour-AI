@@ -279,6 +279,7 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
             message="Hey, are you free tonight?",
             namespace="user_123_companion_456",
             persona_name="Aria",
+            greeting="Aria opens the studio door and welcomes John inside.",
             user_name="John Doe",
             conversation_history=[
                 {"role": "user", "content": "We met yesterday."},
@@ -313,6 +314,11 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
         self.assertIn("Past user memory", writer_system_prompt)
         self.assertIn("PERSONA IDENTITY", writer_system_prompt)
         self.assertIn(GLOBAL_COMPANION_DIRECTIVES, writer_system_prompt)
+        self.assertIn("one-time scene entry", writer_system_prompt)
+        self.assertNotIn(
+            "Aria opens the studio door and welcomes John inside.",
+            writer_system_prompt,
+        )
         self.assertIn("We met yesterday.", [m["content"] for m in writer_messages])
         self.assertIn("Hey, are you free tonight?", [m["content"] for m in writer_messages])
 
@@ -329,6 +335,38 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
             "user_123_companion_456",
             user_key="user-123",
         )
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_opening_greeting_is_used_to_seed_first_turn(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="Hey.",
+            namespace="user_123_companion_456",
+            persona_name="Aria",
+            greeting="Aria opens the studio door and welcomes John inside.",
+            conversation_history=[],
+            story_state=make_patch_test_story_state(),
+        )
+
+        self.assertTrue(result["success"])
+        planner_messages = mock_post.call_args_list[0].kwargs["json"]["messages"]
+        shared_context = "\n".join(
+            item["content"] for item in planner_messages if item["role"] == "system"
+        )
+        self.assertIn(
+            "Aria opens the studio door and welcomes John inside.",
+            shared_context,
+        )
+        self.assertIn("Use this only to establish the opening scene.", shared_context)
 
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")

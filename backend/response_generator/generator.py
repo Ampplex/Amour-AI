@@ -1535,10 +1535,20 @@ def generate_companion_reply(
     persona_block += ".\n"
     if memory_prompt and memory_prompt.strip():
         persona_block += f"Character Story & Core Mind:\n{memory_prompt.strip()}\n"
-    if first_message_script:
+    if first_message_script and not conversation_history:
         persona_block += (
             f"Opening Scenario Premise: \"{first_message_script}\"\n"
-            f"As conversation progresses, your relationship dynamically evolves based on what happens between you and the user.\n"
+            "Use this only to establish the opening scene. Once conversation "
+            "history exists, continue from its latest exchange and the current "
+            "StoryState; do not replay the opening scene or greeting.\n"
+            "As conversation progresses, your relationship dynamically evolves "
+            "based on what happens between you and the user.\n"
+        )
+    elif first_message_script:
+        persona_block += (
+            "The opening greeting is a one-time scene entry, not the current "
+            "beat. Continue from the latest conversation exchange and current "
+            "StoryState; do not restart its scene, actions, or dialogue.\n"
         )
     persona_block += "------------------------"
 
