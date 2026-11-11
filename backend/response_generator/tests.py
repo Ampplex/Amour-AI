@@ -238,7 +238,10 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
 
     def test_story_prompts_assign_concrete_worldbuilding_to_planner(self):
         self.assertIn("preserve established facts", STORY_DIRECTOR_PROMPT)
-        self.assertIn("include the concrete result", STORY_DIRECTOR_PROMPT)
+        self.assertIn(
+            "supply concrete plausible facts in the plan",
+            STORY_DIRECTOR_PROMPT,
+        )
         self.assertIn("Treat a clear", STORY_DIRECTOR_PROMPT)
         self.assertIn("Read and use ALL of", RESPONSE_GENERATOR_PROMPT)
         self.assertIn(
