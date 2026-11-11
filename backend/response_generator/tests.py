@@ -333,6 +333,91 @@ class ResponseGeneratorUnitTests(SimpleTestCase):
     @patch("response_generator.generator.requests.post")
     @patch("response_generator.generator.store_memory_for_user")
     @patch("response_generator.generator.retrieve_context_for_user")
+    def test_repeated_recent_reply_is_regenerated_with_continuity_guidance(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        replacement_output = {
+            **VALID_WRITER_OUTPUT,
+            "reply": "Fair enough. What else has been on your mind today?",
+        }
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+            make_mock_response(replacement_output),
+        ]
+        repeated_reply = VALID_WRITER_OUTPUT["reply"]
+
+        result = generate_companion_reply(
+            message="Nothing, I just remembered it.",
+            namespace="user_123_companion_456",
+            persona_name="Aria",
+            conversation_history=[
+                {"role": "user", "content": "I saw Doraemon."},
+                {
+                    "role": "assistant",
+                    "content": "Why did you mention Doraemon? Tell me what you remember about it.",
+                },
+                {"role": "user", "content": "Nothing, I just remembered it."},
+                {"role": "assistant", "content": repeated_reply},
+            ],
+            story_state=make_patch_test_story_state(),
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["reply"], replacement_output["reply"])
+        self.assertEqual(mock_post.call_count, 3)
+        retry_messages = mock_post.call_args_list[2].kwargs["json"]["messages"]
+        retry_prompt = "\n".join(
+            item["content"] for item in retry_messages if item["role"] == "system"
+        )
+        self.assertIn("CONTINUITY RETRY", retry_prompt)
+        self.assertIn("Nothing, I just remembered it.", [
+            item["content"] for item in retry_messages
+        ])
+        mock_store.assert_any_call(
+            "User: Nothing, I just remembered it.\nAssistant: "
+            + replacement_output["reply"],
+            "user_123_companion_456",
+            user_key=None,
+        )
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
+    def test_repeated_reply_after_retry_fails_without_storing_turn(
+        self, mock_retrieve, mock_store, mock_post
+    ):
+        mock_retrieve.return_value = ""
+        repeated_reply = VALID_WRITER_OUTPUT["reply"]
+        mock_post.side_effect = [
+            make_mock_response(VALID_STORY_PLAN),
+            make_mock_response(VALID_WRITER_OUTPUT),
+            make_mock_response(VALID_WRITER_OUTPUT),
+        ]
+
+        result = generate_companion_reply(
+            message="Nothing, I just remembered it.",
+            namespace="user_123_companion_456",
+            persona_name="Aria",
+            conversation_history=[
+                {"role": "assistant", "content": repeated_reply},
+            ],
+            story_state=make_patch_test_story_state(),
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "RESPONSE_CONTINUITY_FAILED")
+        self.assertEqual(mock_post.call_count, 3)
+        mock_store.assert_called_once_with(
+            "User: Nothing, I just remembered it.",
+            "user_123_companion_456",
+            user_key=None,
+        )
+
+    @patch("response_generator.generator.requests.post")
+    @patch("response_generator.generator.store_memory_for_user")
+    @patch("response_generator.generator.retrieve_context_for_user")
     def test_story_state_is_injected_into_story_director(
         self, mock_retrieve, mock_store, mock_post
     ):

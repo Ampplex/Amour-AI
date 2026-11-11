@@ -13,6 +13,7 @@ import time
 import json
 import logging
 import threading
+import unicodedata
 from copy import deepcopy
 from datetime import datetime, timezone as datetime_timezone
 from email.utils import parsedate_to_datetime
@@ -519,6 +520,7 @@ def _call_structured_llm(
             token_budgets = {
                 "story_director": 2048,
                 "response_generator": 1024,
+                "response_generator_continuity_retry": 1024,
                 "story_state_initialization": 2048,
                 "story_director_patch_repair": 2048,
                 "response_generator_patch_repair": 1024,
@@ -1433,6 +1435,29 @@ def _build_llm_messages(
     return messages
 
 
+def _normalized_reply_for_continuity(text: str) -> str:
+    cleaned = sanitize_companion_reply(text)
+    return " ".join(
+        re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", cleaned).casefold()).split()
+    )
+
+
+def _repeats_recent_assistant_reply(
+    reply: str,
+    conversation_history: list | None,
+) -> bool:
+    normalized_reply = _normalized_reply_for_continuity(reply)
+    if len(normalized_reply) < 32 or not conversation_history:
+        return False
+
+    return any(
+        turn.get("role") == "assistant"
+        and _normalized_reply_for_continuity(turn.get("content") or "") == normalized_reply
+        for turn in conversation_history
+        if isinstance(turn, dict)
+    )
+
+
 def generate_companion_reply(
     message: str,
     namespace: str,
@@ -1703,6 +1728,59 @@ def generate_companion_reply(
             current_conflict_stage=current_conflict_stage,
             story_plan=story_plan,
         )
+
+    if _repeats_recent_assistant_reply(
+        writer_output["reply"],
+        conversation_history,
+    ):
+        logger.warning(
+            "Response Generator repeated a recent assistant turn; retrying with continuity guidance."
+        )
+        retry_messages = deepcopy(writer_messages)
+        retry_messages[1]["content"] += (
+            "\n\nCONTINUITY RETRY:\n"
+            "Your previous draft exactly repeated a recent assistant reply, "
+            "so it was rejected. Do not repeat that reply or ask its question "
+            "again. Use the latest user message and the immediately preceding "
+            "exchange to make a distinct, natural next response. If the user "
+            "answered a question, respond to that answer and continue from it. "
+            "Keep the validated plan and state_patch consistent. Return the "
+            "complete required JSON object."
+        )
+        writer_output, writer_model = _call_structured_llm(
+            messages=retry_messages,
+            output_model=CompanionReplyOutput,
+            stage_name="response_generator_continuity_retry",
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            models_to_try=models_to_try,
+        )
+
+        if writer_output is None:
+            return _build_generation_error_result(
+                code="RESPONSE_CONTINUITY_RETRY_FAILED",
+                stage="response_generator",
+                namespace=namespace,
+                memory_context=memory_context,
+                current_conflict_stage=current_conflict_stage,
+                story_plan=story_plan,
+            )
+
+        if _repeats_recent_assistant_reply(
+            writer_output["reply"],
+            conversation_history,
+        ):
+            logger.error(
+                "Response Generator repeated a recent assistant turn after continuity retry."
+            )
+            return _build_generation_error_result(
+                code="RESPONSE_CONTINUITY_FAILED",
+                stage="response_generator",
+                namespace=namespace,
+                memory_context=memory_context,
+                current_conflict_stage=current_conflict_stage,
+                story_plan=story_plan,
+            )
 
     # FEATURE 5: Validate the writer's final patch against both canonical
     # StoryState and the patch scope approved by Story Director.
