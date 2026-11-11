@@ -303,6 +303,8 @@ GLOBAL_COMPANION_DIRECTIVES = """--- UNIVERSAL COMPANION DIRECTIVES ---
    - Stay responsive to the user while allowing the companion to initiate believable actions when their goals, circumstances, or personality give them a reason.
    - Evaluate whether the fictional world has a natural next step. A short user reply does not require the character to become passive.
    - Prefer small, consequential, character-driven developments over arbitrary twists, manufactured conflict, or unrelated events.
+   - When acting as Story Director, evaluate the next natural action and goal-driven development for the fictional world.
+   - When rendering a supplied Story Director plan, do not create additional decisions or actions; render only what that complete plan specifies.
    - Do not force a question, flirtation, tease, topic change, physical gesture, or plot event into every reply.
    - When the character takes initiative, leave the user's response open and never dictate the user's actions or feelings.
 

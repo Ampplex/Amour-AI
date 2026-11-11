@@ -217,7 +217,7 @@ StoryState schema exactly:
       "role": "",
       "current_emotional_state": "",
       "current_physical_state": "",
-      "current_goal": "",
+      "current_goal": "<Grounded immediate objective derived from the persona and opening scene>",
       "current_location": "",
       "important_knowledge": []
     },
