@@ -59,13 +59,6 @@ def generate_companion_reply(
             user_key=user_key,
         ) or ""
         memory_context = deduplicate_context(str(raw_memory_context))
-        logger.info(
-            "Reeve memory retrieved for namespace=%s query=%r (raw_len=%d, dedup_len=%d)",
-            namespace,
-            message.strip()[:60],
-            len(raw_memory_context),
-            len(memory_context),
-        )
     except Exception as exc:
         logger.warning("Error retrieving memory context from Reeve: %s", exc)
         memory_context = ""
@@ -95,39 +88,12 @@ def generate_companion_reply(
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # --- SERVER LOGGING: FULL PROMPT & REEVE RETRIEVAL OBSERVABILITY ---
-    log_banner = "=" * 80
-    prompt_log_lines = [
-        "",
-        log_banner,
-        "[LLM PROMPT & RETRIEVAL DUMP]",
-        f"Namespace: {namespace} | Persona: {persona_name} | User: {user_clean_name or '(anonymous)'}",
-        f"Reeve Memory Retrieved ({len(memory_context)} chars):",
-        memory_context.strip() if memory_context.strip() else "(None / No relevant chunks retrieved)",
-        "-" * 80,
-        f"Full Assembled Messages ({len(messages)} items being sent to LLM):",
-    ]
-    for idx, msg in enumerate(messages):
-        role_label = msg.get("role", "unknown").upper()
-        content_text = msg.get("content", "")
-        prompt_log_lines.append(f"\n--- [MESSAGE {idx} | ROLE: {role_label}] ---\n{content_text}")
-    prompt_log_lines.append(log_banner)
-    logger.info("\n".join(prompt_log_lines))
-
     # 4. Direct LLM call with fallback model chain
     raw_text, successful_model = call_llm(
         messages=messages,
         max_tokens=1024,
         temperature=0.88,
     )
-
-    if raw_text:
-        logger.info(
-            "LLM Reply generated successfully with %s (%d chars): %s",
-            successful_model,
-            len(raw_text),
-            raw_text[:200] + ("..." if len(raw_text) > 200 else ""),
-        )
 
     if not raw_text:
         logger.error("Failed to generate companion reply from all configured models.")

@@ -2,9 +2,12 @@
 Prompt construction for single-prompt AI persona roleplay.
 """
 
+import logging
 from datetime import datetime, timezone as datetime_timezone
 from zoneinfo import ZoneInfo
 from django.utils import timezone
+
+logger = logging.getLogger("amour.prompt_builder")
 
 
 def get_bucketed_time_str(client_time: str = None, client_timezone: str = None) -> str:
@@ -108,4 +111,6 @@ def build_roleplay_system_prompt(
    - STRICT ZERO EMOJIS: Absolutely DO NOT use ANY emojis under any circumstances. No smileys, no hearts, no icons, zero emojis. Let your words, actions, and personality convey all the emotion."""
 
     sections.append(directives.strip())
-    return "\n\n".join(sections)
+    final_prompt = "\n\n".join(sections)
+    logger.info("ROLEPLAY SYSTEM PROMPT:\n%s", final_prompt)
+    return final_prompt
