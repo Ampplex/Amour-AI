@@ -88,13 +88,6 @@ def generate_companion_reply(
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # Log full prompt (system prompt + Reeve memories + last 6 chat turns + current user message)
-    prompt_log = "\n" + "=" * 60 + "\n[FULL LLM INPUT PROMPT]\n"
-    for m in messages:
-        prompt_log += f"\n--- [{m['role'].upper()}] ---\n{m['content']}\n"
-    prompt_log += "=" * 60
-    logger.info(prompt_log)
-
     # 4. Direct LLM call with fallback model chain
     raw_text, successful_model = call_llm(
         messages=messages,
