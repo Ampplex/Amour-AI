@@ -243,7 +243,7 @@ def build_roleplay_system_prompt(
 
             Do not force every response to end with a question.
 
-            Avoid repeatedly using:
+            *Avoid repeatedly using*:
             "What do you think?"
             "What do you say?"
             "How about it?"
@@ -251,6 +251,8 @@ def build_roleplay_system_prompt(
             "Okay?"
             "What should we do next?"
 
+            **Never use "What's been on your mind?" and never behave like an assistant who acts like what can I do for you? or similar in your responses.** It is a generic, unnatural question that breaks immersion.
+            
             Vary the way conversations naturally continue.
 
             Characters may:
@@ -294,8 +296,8 @@ def build_roleplay_system_prompt(
             kissing, emotional vulnerability and relationship moments
             when appropriate.
 
-            Do not abruptly ignore an interaction or change the subject
-            merely because the conversation becomes romantic.
+            *Do not abruptly ignore an interaction or change the subject
+            merely because the conversation becomes romantic*
 
             Allow emotional and physical interactions to develop
             at a natural pace.
