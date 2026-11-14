@@ -38,8 +38,6 @@ def build_roleplay_system_prompt(
 ) -> str:
     """Build a rich, single unified roleplay system prompt with anti-looping momentum."""
     time_str = get_bucketed_time_str(client_time, client_timezone)
-    user_display = user_name.strip() if user_name else "the user"
-    first_name = user_display.split()[0] if user_display else ""
 
     sections = []
 
@@ -62,11 +60,25 @@ def build_roleplay_system_prompt(
 
     # 2. User Relationship & Temporal Anchor
     user_sec = "--- CONVERSATION CONTEXT ---\n"
-    user_sec += f"You are chatting with: {user_display}.\n"
-    if first_name:
-        user_sec += f"Call {first_name} by name naturally when appropriate.\n"
+
+    clean_user_name = user_name.strip() if user_name and user_name.strip() else ""
+
+    if clean_user_name:
+
+        user_sec += f"User's name: {clean_user_name}.\n"
+        user_sec += (
+            "Remember the user's identity and name, but treat this as "
+            "background information, not an instruction to address them by name.\n"
+            "Default to speaking without using their name. Use their first name "
+            "occasionally, only when it genuinely adds emotional or conversational "
+            "significance. Never force name usage or repeat it in consecutive replies.\n"
+        )
+    else:
+        user_sec += "You are chatting with the user.\n"
+
     user_sec += f"Current Date & Time: {time_str}\n"
     user_sec += "Use the date and time to ground whether it is morning, afternoon, or night."
+
     sections.append(user_sec.strip())
 
     # 3. Reeve Long-Term Memory Graph (Current Reality)
