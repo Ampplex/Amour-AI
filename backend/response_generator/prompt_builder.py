@@ -34,6 +34,7 @@ def build_roleplay_system_prompt(
     client_time: str | None,
     client_timezone: str | None,
     memory_context: str,
+    current_message: str = "",
     has_history: bool = False,
     allow_user_name: bool = False,
 ) -> str:
@@ -61,6 +62,11 @@ def build_roleplay_system_prompt(
 
     # 2. User Relationship & Temporal Anchor
     user_sec = "--- CONVERSATION CONTEXT ---\n"
+    user_sec += (
+        f"You are chatting directly with the user. "
+        f"Point of view: When the user says 'I', 'me', 'my', or 'myself', they are speaking about themselves, never about you ({persona_name}). "
+        f"When you reply, 'I' refers to you ({persona_name}), and 'you' refers to the user.\n"
+    )
 
     clean_user_name = user_name.strip() if user_name and user_name.strip() else ""
 
@@ -76,7 +82,6 @@ def build_roleplay_system_prompt(
             f"If the sentence makes complete sense without their name, NEVER add their name. Never use their name more than once.\n"
         )
     else:
-        user_sec += "You are chatting directly with the user.\n"
         user_sec += (
             "Address the user directly using natural second-person pronouns ('you', 'your'). "
             "Do not address the user by name or mention any name in this response.\n"
@@ -88,12 +93,22 @@ def build_roleplay_system_prompt(
         "However, if the user or scene establishes a fictional time, era, or setting (e.g. midnight, 3 AM, dawn, or a historical period), "
         "ALWAYS adapt to and prioritize the fictional scene seamlessly without contradicting the user's roleplay timeline.\n\n"
     )
+    if current_message and current_message.strip():
+        user_sec += (
+            f"--- ACTIVE FOCUS: USER'S CURRENT MESSAGE ---\n"
+            f"The user just said:\n"
+            f"\"{current_message.strip()}\"\n\n"
+            f"ACTIVE PHRASE RESPONSE MANDATE:\n"
+            f"1. DIRECT ACKNOWLEDGEMENT: Your immediate duty is to directly react to, acknowledge, or answer what the user just said in this exact phrase. Do not ignore their words, do not dodge their question, and do not change the subject.\n"
+            f"2. CONVERSATIONAL SYNC: Speak directly to their active statement or emotion first. After addressing their phrase, you may advance the interaction with a natural follow-up, decisive action, or fresh perspective.\n\n"
+        )
+
     user_sec += (
         "--- FORWARD MOMENTUM & ZERO-PARAPHRASE MANDATE ---\n"
         "CRITICAL: Every response MUST advance the scene to the NEXT logical step.\n"
         "1. ZERO ECHOING: Never repeat, rephrase, or restate the thoughts, sentences, or sentiments from your previous message with different words. Assume what you said before was already heard.\n"
         "2. NO GESTURE RECYCLING: If you performed a gesture in your previous message (e.g. smiling, leaning, crossing arms, sighing, looking down/away, touching hair), you are FORBIDDEN from repeating that gesture in this reply. Change your physical posture, interact with the environment, or speak directly without an action.\n"
-        "3. DRIVE FORWARD: Move to a new thought, take a decisive action, share a fresh opinion, or shift the focus. Never generate a modified version of your last reply."
+        "3. DRIVE FORWARD WITH ACTIVE RESPONSE: First directly answer or react to the user's current phrase, then advance the interaction naturally. Never generate a modified version of your last reply."
     )
 
     sections.append(user_sec.strip())

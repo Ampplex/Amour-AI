@@ -123,6 +123,7 @@ def generate_companion_reply(
         client_time=client_time,
         client_timezone=client_timezone,
         memory_context=memory_context,
+        current_message=message.strip(),
         has_history=bool(conversation_history),
         allow_user_name=allow_name,
     )

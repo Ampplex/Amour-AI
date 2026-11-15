@@ -301,6 +301,7 @@ class ChatMemoryView(APIView):
                     return Response(
                         {
                             "id": str(bot_reply.id),
+                            "user_message_id": str(existing_msg.id) if existing_msg else None,
                             "client_message_id": client_message_id,
                             "reply": replay_reply,
                             "conflict_stage": bot_reply.conflict_stage,
@@ -595,6 +596,7 @@ class ChatMemoryView(APIView):
             return Response(
                 {
                     "id": bot_msg_id,
+                    "user_message_id": str(user_msg_record.id) if user_msg_record else None,
                     "client_message_id": client_message_id,
                     "reply": reply_text,
                     "conflict_stage": new_conflict_stage,
@@ -613,6 +615,60 @@ class ChatMemoryView(APIView):
                 {"error": "Companion chat service encountered an error."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    def delete(self, request):
+        """
+        Permanently delete an individual chat message from PostgreSQL.
+        Strictly verifies ownership: user can only delete messages from their own conversation.
+        """
+        message_id = (request.query_params.get("message_id") or request.data.get("message_id", "")).strip()
+        user_id = (request.user.id if request.user.is_authenticated else (request.query_params.get("user_id") or request.data.get("user_id", ""))).strip()
+
+        if not message_id:
+            return Response({"error": "message_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not user_id:
+            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        import uuid as uuid_pkg
+        from django.db import transaction
+        from .models import PersonaChatMessage
+
+        parsed_uuid = None
+        try:
+            parsed_uuid = uuid_pkg.UUID(message_id)
+        except (ValueError, TypeError):
+            pass
+
+        if parsed_uuid:
+            msg_qs = PersonaChatMessage.objects.filter(id=parsed_uuid, user_identifier=str(user_id))
+        else:
+            msg_qs = PersonaChatMessage.objects.filter(
+                client_message_id=message_id,
+                user_identifier=str(user_id),
+                sender="user",
+            )
+            if not msg_qs.exists():
+                msg_qs = PersonaChatMessage.objects.filter(
+                    client_message_id=message_id,
+                    user_identifier=str(user_id),
+                )
+
+        target_msg = msg_qs.first()
+        if not target_msg:
+            return Response(
+                {"error": "Message not found or unauthorized to delete"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        deleted_id = str(target_msg.id)
+        with transaction.atomic():
+            target_msg.delete()
+
+        logger.info("Deleted chat message id=%s for user=%s", deleted_id, user_id)
+        return Response(
+            {"success": True, "deleted_id": deleted_id},
+            status=status.HTTP_200_OK,
+        )
 
 class StoreMemoryView(APIView):
     permission_classes = [IsAuthenticated]
