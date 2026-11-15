@@ -82,8 +82,12 @@ def build_roleplay_system_prompt(
             "Do not address the user by name or mention any name in this response.\n"
         )
 
-    user_sec += f"Current Date & Time: {time_str}\n"
-    user_sec += "Use the date and time to ground whether it is morning, afternoon, or night.\n\n"
+    user_sec += f"Real-World Reference Time: {time_str}\n"
+    user_sec += (
+        "By default, use this reference time to naturally ground whether it is morning, afternoon, or night in casual chat. "
+        "However, if the user or scene establishes a fictional time, era, or setting (e.g. midnight, 3 AM, dawn, or a historical period), "
+        "ALWAYS adapt to and prioritize the fictional scene seamlessly without contradicting the user's roleplay timeline.\n\n"
+    )
     user_sec += (
         "--- FORWARD MOMENTUM & ZERO-PARAPHRASE MANDATE ---\n"
         "CRITICAL: Every response MUST advance the scene to the NEXT logical step.\n"
