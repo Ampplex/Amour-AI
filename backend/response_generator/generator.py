@@ -8,6 +8,8 @@ atmosphere, initiative, and conversational momentum.
 """
 
 import logging
+import random
+import re
 
 from memory.reeve_service import (
     store_memory_for_user,
@@ -26,6 +28,52 @@ from .sanitizer import (
 )
 
 logger = logging.getLogger("amour.response_generator")
+
+MIN_NAME_COOLDOWN_TURNS = 4
+NAME_TRIGGER_PROBABILITY = 0.20
+MAX_SILENCE_TURNS = 10
+
+
+def should_allow_name_in_turn(
+    user_name: str,
+    conversation_history: list = None,
+    min_cooldown: int = MIN_NAME_COOLDOWN_TURNS,
+    probability: float = NAME_TRIGGER_PROBABILITY,
+    max_silence: int = MAX_SILENCE_TURNS,
+) -> bool:
+    """
+    Cadence controller: ensures the persona uses the user's name only occasionally
+    and never in consecutive replies. Enforces a minimum cooldown of 4 assistant messages.
+    """
+    if not user_name:
+        return False
+    first_name = user_name.strip().split()[0]
+    if not first_name or first_name.lower() in ("guest", "user", "anonymous"):
+        return False
+
+    bot_turns = [
+        turn.get("content", "")
+        for turn in (conversation_history or [])
+        if turn.get("role") == "assistant"
+    ]
+    name_pat = re.compile(rf"\b{re.escape(first_name)}\b", re.IGNORECASE)
+
+    turns_since_mention = None
+    for idx, content in enumerate(reversed(bot_turns)):
+        if name_pat.search(content):
+            turns_since_mention = idx
+            break
+
+    # 1. Mandatory Cooldown: if bot used name in last `min_cooldown` assistant turns, strictly disallow
+    if turns_since_mention is not None and turns_since_mention < min_cooldown:
+        return False
+
+    # 2. Maximum Silence: if 10+ assistant turns passed without name, allow eligibility
+    if turns_since_mention is not None and turns_since_mention >= max_silence:
+        return True
+
+    # 3. Outside cooldown: roll natural probability (~20% chance)
+    return random.random() < probability
 
 
 def generate_companion_reply(
@@ -50,6 +98,7 @@ def generate_companion_reply(
     and calls the LLM directly for rich, forward-moving roleplay.
     """
     user_clean_name = user_name.strip() if user_name else ""
+    allow_name = should_allow_name_in_turn(user_clean_name, conversation_history)
 
     # 1. Retrieve historical memory context from Reeve
     try:
@@ -75,12 +124,13 @@ def generate_companion_reply(
         client_timezone=client_timezone,
         memory_context=memory_context,
         has_history=bool(conversation_history),
+        allow_user_name=allow_name,
     )
 
-    # 3. Assemble messages: system prompt + last 6 messages from PostgreSQL + current message
+    # 3. Assemble messages: system prompt + last 4 messages as context + current message
     messages = [{"role": "system", "content": system_prompt}]
 
-    for turn in (conversation_history or [])[-6:]:
+    for turn in (conversation_history or [])[-4:]:
         role = turn.get("role")
         content = turn.get("content")
         if role in ("user", "assistant") and content and isinstance(content, str) and content.strip():
@@ -104,8 +154,12 @@ def generate_companion_reply(
             "namespace": namespace,
         }
 
-    # 5. Sanitize reply (zero emojis, remove accidental code blocks)
-    reply = sanitize_companion_reply(raw_text)
+    # 5. Sanitize reply (zero emojis, remove accidental code blocks, clean name vocatives)
+    reply = sanitize_companion_reply(
+        raw_text,
+        user_name=user_clean_name,
+        allow_name=allow_name,
+    )
 
     # 6. Optionally persist exchange to Reeve
     if reply and persist_exchange_to_memory:

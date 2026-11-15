@@ -35,6 +35,7 @@ def build_roleplay_system_prompt(
     client_timezone: str | None,
     memory_context: str,
     has_history: bool = False,
+    allow_user_name: bool = False,
 ) -> str:
     """Build a rich, single unified roleplay system prompt with anti-looping momentum."""
     time_str = get_bucketed_time_str(client_time, client_timezone)
@@ -63,18 +64,23 @@ def build_roleplay_system_prompt(
 
     clean_user_name = user_name.strip() if user_name and user_name.strip() else ""
 
-    if clean_user_name:
-
-        user_sec += f"User's name: {clean_user_name}.\n"
+    if clean_user_name and allow_user_name:
+        first_name = clean_user_name.split()[0]
+        user_sec += f"User's name: {first_name}.\n"
         user_sec += (
-            "Remember the user's identity and name, but treat this as "
-            "background information, not an instruction to address them by name.\n"
-            "Default to speaking without using their name. Use their first name "
-            "occasionally, only when it genuinely adds emotional or conversational "
-            "significance. Never force name usage or repeat it in consecutive replies.\n"
+            f"Strict address rule: Default to direct speech ('you') without using their name. "
+            f"Even when expressing care, comforting, affection, or asking questions (e.g. 'Are you okay?', 'I'm here for you'), "
+            f"natural dialogue does NOT append their name. "
+            f"Address them by '{first_name}' ONLY if this exact moment genuinely demands it (such as a deep emotional confession, "
+            f"intense turning point, or calling out to them across a distance). "
+            f"If the sentence makes complete sense without their name, NEVER add their name. Never use their name more than once.\n"
         )
     else:
-        user_sec += "You are chatting with the user.\n"
+        user_sec += "You are chatting directly with the user.\n"
+        user_sec += (
+            "Address the user directly using natural second-person pronouns ('you', 'your'). "
+            "Do not address the user by name or mention any name in this response.\n"
+        )
 
     user_sec += f"Current Date & Time: {time_str}\n"
     user_sec += "Use the date and time to ground whether it is morning, afternoon, or night."

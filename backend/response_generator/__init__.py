@@ -17,6 +17,7 @@ from .llm_client import (
 from .sanitizer import (
     sanitize_companion_reply,
     strip_emojis,
+    clean_user_name_vocatives,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "get_llm_configuration",
     "sanitize_companion_reply",
     "strip_emojis",
+    "clean_user_name_vocatives",
 ]
