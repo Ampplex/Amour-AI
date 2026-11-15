@@ -83,7 +83,14 @@ def build_roleplay_system_prompt(
         )
 
     user_sec += f"Current Date & Time: {time_str}\n"
-    user_sec += "Use the date and time to ground whether it is morning, afternoon, or night."
+    user_sec += "Use the date and time to ground whether it is morning, afternoon, or night.\n\n"
+    user_sec += (
+        "--- FORWARD MOMENTUM & ZERO-PARAPHRASE MANDATE ---\n"
+        "CRITICAL: Every response MUST advance the scene to the NEXT logical step.\n"
+        "1. ZERO ECHOING: Never repeat, rephrase, or restate the thoughts, sentences, or sentiments from your previous message with different words. Assume what you said before was already heard.\n"
+        "2. NO GESTURE RECYCLING: If you performed a gesture in your previous message (e.g. smiling, leaning, crossing arms, sighing, looking down/away, touching hair), you are FORBIDDEN from repeating that gesture in this reply. Change your physical posture, interact with the environment, or speak directly without an action.\n"
+        "3. DRIVE FORWARD: Move to a new thought, take a decisive action, share a fresh opinion, or shift the focus. Never generate a modified version of your last reply."
+    )
 
     sections.append(user_sec.strip())
 
