@@ -661,12 +661,33 @@ class ChatMemoryView(APIView):
             )
 
         deleted_id = str(target_msg.id)
+        namespace = target_msg.namespace
+        sender = target_msg.sender
+        user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or request.data.get("user_key") or "").strip() or None
+
+        # Decrypt message content before deleting row from PostgreSQL
+        from .crypto import decrypt_chat_message
+        deleted_text = decrypt_chat_message(target_msg.text, user_id=str(user_id), client_key=user_key)
+
         with transaction.atomic():
             target_msg.delete()
 
-        logger.info("Deleted chat message id=%s for user=%s", deleted_id, user_id)
+        # Level 2 Deletion: Prune Reeve Memory Graph and WriteBuffer
+        reeve_pruned = 0
+        try:
+            from .reeve_service import delete_memory_for_message
+            reeve_pruned = delete_memory_for_message(
+                deleted_text,
+                namespace=namespace,
+                sender=sender,
+                user_key=user_key,
+            )
+        except Exception as exc:
+            logger.warning("Could not prune Reeve memory for message id=%s: %s", deleted_id, exc)
+
+        logger.info("Deleted chat message id=%s (Reeve episodes pruned: %d) for user=%s", deleted_id, reeve_pruned, user_id)
         return Response(
-            {"success": True, "deleted_id": deleted_id},
+            {"success": True, "deleted_id": deleted_id, "reeve_episodes_pruned": reeve_pruned},
             status=status.HTTP_200_OK,
         )
 

@@ -210,6 +210,162 @@ def clear_user_memories(namespace: str):
     raise RuntimeError("clear_memory not supported in current mode")
 
 
+def _matches_turn_content(clean_text: str, raw_text: str, summary: str, sender: str = "user") -> bool:
+    """
+    Deterministic turn matcher that avoids false positives on short messages
+    while accurately identifying the target episode across encrypted and plaintext payloads.
+    """
+    if not clean_text or (not raw_text and not summary):
+        return False
+
+    raw_clean = raw_text.strip()
+    if raw_clean == clean_text:
+        return True
+
+    if sender == "user":
+        if f"User: {clean_text}" in raw_text:
+            return True
+        user_segment = raw_text.split("\nAssistant:")[0]
+        if user_segment.replace("User:", "").strip() == clean_text:
+            return True
+    elif sender == "bot":
+        if f"Assistant: {clean_text}" in raw_text:
+            return True
+        if "\nAssistant:" in raw_text:
+            bot_segment = raw_text.split("\nAssistant:", 1)[1]
+            if bot_segment.strip() == clean_text:
+                return True
+
+    # For multi-word / substantial messages, allow substring match in raw_text or summary
+    if len(clean_text) >= 8 and (clean_text in raw_text or clean_text in summary):
+        return True
+
+    return False
+
+
+def delete_memory_for_message(text: str, namespace: str, sender: str = "user", user_key: str = None) -> int:
+    """
+    Level 2 Deletion: Permanently prune Reeve memory graph and write buffer for a deleted chat message.
+    1. Evicts matching unpersisted writes from the in-memory write buffer (and drops mid-flight writes).
+    2. Queries Neo4j Episode nodes strictly scoped to `speaker = namespace`.
+    3. Deterministically matches the target turn content (handling zero-knowledge AES encryption).
+    4. Detach-deletes the matching Episode, State, Action, and Relation nodes.
+    5. Cleans up orphaned Entity and Location nodes left with no remaining episodes.
+    Returns the count of pruned memory entries/episodes.
+    """
+    if not text or not text.strip() or not namespace:
+        return 0
+
+    clean_text = text.strip()
+    deleted_count = 0
+    from threelane_memory.crypto import decrypt_field, is_encrypted
+
+    # 1. Evict matching pending items from the in-memory WriteBuffer
+    try:
+        from threelane_memory.write_buffer import get_write_buffer
+        wb = get_write_buffer()
+        with wb._lock:
+            doomed = []
+            for pid, entry in list(wb._entries.items()):
+                if entry.speaker != namespace:
+                    continue
+                raw = getattr(entry, "raw_text", "") or ""
+                if is_encrypted(raw):
+                    raw = decrypt_field(raw, user_key or getattr(entry, "user_key", None)) or raw
+                summ = getattr(entry, "summary", "") or ""
+                if _matches_turn_content(clean_text, raw, summ, sender=sender):
+                    doomed.append((pid, entry))
+
+            for pid, entry in doomed:
+                # If entry was already persisted to Neo4j, keep track of its episode_id
+                if entry.episode_id:
+                    try:
+                        tools, _ = _get_memory_tools()
+                        tools.run_query(
+                            """
+                            MATCH (ep:Episode {id: $ep_id})
+                            OPTIONAL MATCH (ep)-[:HAS_STATE]->(s:State)
+                            OPTIONAL MATCH (ep)-[:HAS_ACTION]->(a:Action)
+                            OPTIONAL MATCH (ep)-[:HAS_RELATION]->(rel:Relation)
+                            DETACH DELETE s, a, rel, ep
+                            """,
+                            {"ep_id": entry.episode_id},
+                        )
+                    except Exception:
+                        pass
+                del wb._entries[pid]
+                deleted_count += 1
+
+        if doomed:
+            logger.info("WriteBuffer: dropped %d queued write(s) for deleted message in namespace %s", len(doomed), namespace)
+    except Exception as exc:
+        logger.warning("Could not evict from Reeve write buffer: %s", exc)
+
+    # 2. Prune from Neo4j Graph
+    try:
+        tools, _ = _get_memory_tools()
+
+        episodes = tools.run_query(
+            "MATCH (ep:Episode {speaker: $speaker}) RETURN ep.id AS id, ep.raw_text AS raw_text, ep.summary AS summary",
+            {"speaker": namespace},
+        )
+
+        for ep in episodes:
+            ep_id = ep.get("id")
+            raw_text = ep.get("raw_text") or ""
+            summary = ep.get("summary") or ""
+
+            # Decrypt fields if encrypted with client/user key
+            if is_encrypted(raw_text) and user_key:
+                raw_text = decrypt_field(raw_text, user_key) or raw_text
+            if is_encrypted(summary) and user_key:
+                summary = decrypt_field(summary, user_key) or summary
+
+            if _matches_turn_content(clean_text, raw_text, summary, sender=sender) and ep_id:
+                tools.run_query(
+                    """
+                    MATCH (ep:Episode {id: $ep_id})
+                    OPTIONAL MATCH (ep)-[:HAS_STATE]->(s:State)
+                    OPTIONAL MATCH (ep)-[:HAS_ACTION]->(a:Action)
+                    OPTIONAL MATCH (ep)-[:HAS_RELATION]->(rel:Relation)
+                    DETACH DELETE s, a, rel, ep
+                    """,
+                    {"ep_id": ep_id},
+                )
+                deleted_count += 1
+                logger.info("Level 2: Pruned Reeve episode %s for namespace %s", ep_id, namespace)
+
+        # 3. Clean up orphaned Entity and Location nodes for this namespace
+        if deleted_count > 0:
+            tools.run_query(
+                """
+                MATCH (e:Entity {speaker: $speaker})
+                WHERE NOT (e)<-[:INVOLVES]-(:Episode)
+                  AND NOT (e)<-[:OF_ENTITY|BY_ENTITY|ON_ENTITY|FROM_ENTITY|TO_ENTITY]-()
+                DETACH DELETE e
+                """,
+                {"speaker": namespace},
+            )
+            tools.run_query(
+                """
+                MATCH (l:Location {speaker: $speaker})
+                WHERE NOT (l)<-[:AT_LOCATION]-(:Episode)
+                DETACH DELETE l
+                """,
+                {"speaker": namespace},
+            )
+            try:
+                from threelane_memory.retriever import forget_image_probe
+                forget_image_probe(namespace)
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.warning("Reeve Neo4j episode pruning error: %s", exc)
+
+    return deleted_count
+
+
 def __getattr__(name: str):
     """
     Backward-compatibility proxy (PEP 562).
