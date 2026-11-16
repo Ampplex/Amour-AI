@@ -1,6 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import { API_CONFIG } from '../constants/authConfig';
 import { getOrCreateUserKey } from './keyService';
+import { getReplyLengthPreference, ReplyLengthOption } from './settingsService';
 
 export interface ChatResponseMetadata {
   narrative_decision: string | null;
@@ -51,6 +52,7 @@ export interface SendMessagePayload {
   client_timezone: string;
   user_id?: string;
   user_name?: string;
+  reply_length?: ReplyLengthOption;
 }
 
 export interface SendMessageResponse {
@@ -168,6 +170,7 @@ export async function sendChatMessage(
 
   try {
     const userKey = await getOrCreateUserKey();
+    const replyLength = payload.reply_length || (await getReplyLengthPreference());
     const baseUrl = await resolveActiveBaseUrl();
     const res = await fetch(`${baseUrl}/memory/chat/`, {
       method: 'POST',
@@ -178,6 +181,7 @@ export async function sendChatMessage(
       },
       body: JSON.stringify({
         ...payload,
+        reply_length: replyLength,
         client_message_id: clientMessageId,
         user_key: userKey,
       }),

@@ -19,6 +19,27 @@ import { router } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import { showAlert } from '../../context/AlertContext';
 import { MemorySecurityModal } from '../../components/MemorySecurityModal';
+import { getReplyLengthPreference, setReplyLengthPreference, ReplyLengthOption } from '../../services/settingsService';
+
+function MessageLengthIcon({ size = 16, color = '#EC4899' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M8 10h8M8 14h4"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
 
 function ShieldLockIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
@@ -126,6 +147,27 @@ export default function ProfileScreen() {
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [replyLength, setReplyLength] = useState<ReplyLengthOption>('default');
+
+  useEffect(() => {
+    getReplyLengthPreference().then((stored) => {
+      setReplyLength(stored);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (user?.reply_length) {
+      setReplyLength(user.reply_length);
+    }
+  }, [user?.reply_length]);
+
+  const handleSelectReplyLength = async (option: ReplyLengthOption) => {
+    setReplyLength(option);
+    await setReplyLengthPreference(option);
+    if (user?.id) {
+      updateProfile({ reply_length: option }).catch(() => {});
+    }
+  };
 
   useEffect(() => {
     if (user?.id) {
@@ -364,6 +406,108 @@ export default function ProfileScreen() {
           </View>
           <Text style={styles.editButtonArrow}>›</Text>
         </TouchableOpacity>
+
+        {/* Persona Response Length Settings Card */}
+        <View style={styles.replyLengthCard}>
+          <View style={styles.replyLengthHeader}>
+            <View style={[styles.editIconCircle, { backgroundColor: 'rgba(236, 72, 153, 0.15)', borderColor: '#EC4899' }]}>
+              <MessageLengthIcon size={18} color="#EC4899" />
+            </View>
+            <View style={styles.replyLengthHeaderTextContainer}>
+              <Text style={styles.replyLengthCardTitle}>Response Length</Text>
+              <Text style={styles.replyLengthCardSubtitle}>Choose conversational depth of companion replies</Text>
+            </View>
+          </View>
+
+          <View style={styles.replyLengthOptionsList}>
+            {/* Short Option */}
+            <TouchableOpacity
+              style={[
+                styles.replyLengthOption,
+                replyLength === 'short' && styles.replyLengthOptionActive,
+              ]}
+              onPress={() => handleSelectReplyLength('short')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.replyLengthOptionTopRow}>
+                <View style={styles.replyLengthRadioContainer}>
+                  <View style={[styles.replyLengthRadioOuter, replyLength === 'short' && styles.replyLengthRadioOuterActive]}>
+                    {replyLength === 'short' && <View style={styles.replyLengthRadioInner} />}
+                  </View>
+                  <Text style={[styles.replyLengthOptionLabel, replyLength === 'short' && styles.replyLengthOptionLabelActive]}>
+                    Short
+                  </Text>
+                </View>
+                <View style={[styles.replyLengthBadge, replyLength === 'short' && styles.replyLengthBadgeActive]}>
+                  <Text style={[styles.replyLengthBadgeText, replyLength === 'short' && styles.replyLengthBadgeTextActive]}>
+                    1–2 Sentences
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.replyLengthOptionDesc}>
+                Brief, punchy replies like casual texting. Minimal narration.
+              </Text>
+            </TouchableOpacity>
+
+            {/* Default Option */}
+            <TouchableOpacity
+              style={[
+                styles.replyLengthOption,
+                replyLength === 'default' && styles.replyLengthOptionActive,
+              ]}
+              onPress={() => handleSelectReplyLength('default')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.replyLengthOptionTopRow}>
+                <View style={styles.replyLengthRadioContainer}>
+                  <View style={[styles.replyLengthRadioOuter, replyLength === 'default' && styles.replyLengthRadioOuterActive]}>
+                    {replyLength === 'default' && <View style={styles.replyLengthRadioInner} />}
+                  </View>
+                  <Text style={[styles.replyLengthOptionLabel, replyLength === 'default' && styles.replyLengthOptionLabelActive]}>
+                    Default
+                  </Text>
+                </View>
+                <View style={[styles.replyLengthBadge, replyLength === 'default' && styles.replyLengthBadgeActive]}>
+                  <Text style={[styles.replyLengthBadgeText, replyLength === 'default' && styles.replyLengthBadgeTextActive]}>
+                    Adaptive
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.replyLengthOptionDesc}>
+                Standard natural dialogue & narration. Adapts to scene context.
+              </Text>
+            </TouchableOpacity>
+
+            {/* Long Option */}
+            <TouchableOpacity
+              style={[
+                styles.replyLengthOption,
+                replyLength === 'long' && styles.replyLengthOptionActive,
+              ]}
+              onPress={() => handleSelectReplyLength('long')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.replyLengthOptionTopRow}>
+                <View style={styles.replyLengthRadioContainer}>
+                  <View style={[styles.replyLengthRadioOuter, replyLength === 'long' && styles.replyLengthRadioOuterActive]}>
+                    {replyLength === 'long' && <View style={styles.replyLengthRadioInner} />}
+                  </View>
+                  <Text style={[styles.replyLengthOptionLabel, replyLength === 'long' && styles.replyLengthOptionLabelActive]}>
+                    Long
+                  </Text>
+                </View>
+                <View style={[styles.replyLengthBadge, replyLength === 'long' && styles.replyLengthBadgeActive]}>
+                  <Text style={[styles.replyLengthBadgeText, replyLength === 'long' && styles.replyLengthBadgeTextActive]}>
+                    Multi-Paragraph
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.replyLengthOptionDesc}>
+                Expansive, multi-paragraph roleplay with rich sensory detail & thoughts.
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {/* Sign Out */}
         <TouchableOpacity
@@ -688,6 +832,113 @@ const styles = StyleSheet.create({
     color: '#71717A',
     fontSize: 22,
     fontWeight: '300',
+  },
+  replyLengthCard: {
+    backgroundColor: '#141418',
+    borderColor: '#27272A',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 16,
+    gap: 14,
+  },
+  replyLengthHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  replyLengthHeaderTextContainer: {
+    flex: 1,
+    gap: 2,
+  },
+  replyLengthCardTitle: {
+    color: '#FFFFFF',
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 16,
+  },
+  replyLengthCardSubtitle: {
+    color: '#8E8E93',
+    fontSize: 12,
+  },
+  replyLengthOptionsList: {
+    gap: 10,
+    marginTop: 2,
+  },
+  replyLengthOption: {
+    backgroundColor: '#0F0F12',
+    borderColor: '#27272A',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    gap: 6,
+  },
+  replyLengthOptionActive: {
+    backgroundColor: 'rgba(236, 72, 153, 0.08)',
+    borderColor: '#EC4899',
+    borderWidth: 1.5,
+  },
+  replyLengthOptionTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  replyLengthRadioContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  replyLengthRadioOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: '#555555',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  replyLengthRadioOuterActive: {
+    borderColor: '#EC4899',
+  },
+  replyLengthRadioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EC4899',
+  },
+  replyLengthOptionLabel: {
+    color: '#E4E4E7',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  replyLengthOptionLabelActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  replyLengthBadge: {
+    backgroundColor: '#1C1C20',
+    borderColor: '#2D2D33',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  replyLengthBadgeActive: {
+    backgroundColor: 'rgba(236, 72, 153, 0.2)',
+    borderColor: '#EC4899',
+  },
+  replyLengthBadgeText: {
+    color: '#8E8E93',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  replyLengthBadgeTextActive: {
+    color: '#EC4899',
+    fontWeight: '600',
+  },
+  replyLengthOptionDesc: {
+    color: '#A1A1AA',
+    fontSize: 12,
+    lineHeight: 16,
+    paddingLeft: 28,
   },
   signOutButton: {
     backgroundColor: '#181212',

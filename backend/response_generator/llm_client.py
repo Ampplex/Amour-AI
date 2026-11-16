@@ -63,16 +63,21 @@ def record_model_rate_limit(
 def get_llm_configuration() -> tuple[str, str, list[str]]:
     """
     Resolve API key, endpoint, and fallback model chain.
-    Defaults to Bedrock Mistral Large v1.
+    Defaults to Groq with qwen/qwen3.8-27b.
     """
     provider = (
-        getattr(settings, "LLM_PROVIDER", "")
-        or os.environ.get("LLM_PROVIDER", "bedrock")
+        getattr(settings, "RESPONSE_LLM_PROVIDER", "")
+        or os.environ.get("RESPONSE_LLM_PROVIDER", "")
+        or getattr(settings, "LLM_PROVIDER", "")
+        or os.environ.get("LLM_PROVIDER", "groq")
     ).strip().lower()
 
     if provider == "groq":
         api_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
-        base_url = "https://api.groq.com/openai/v1"
+        base_url = (
+            getattr(settings, "LLM_BASE_URL", "")
+            or os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
+        ).strip().rstrip("/")
         configured_models = (
             getattr(settings, "GROQ_CHAT_MODELS", None)
             or os.environ.get("GROQ_CHAT_MODELS", "")
@@ -85,9 +90,14 @@ def get_llm_configuration() -> tuple[str, str, list[str]]:
         else:
             primary = (
                 getattr(settings, "GROQ_CHAT_MODEL", "")
-                or os.environ.get("GROQ_CHAT_MODEL", "llama-3.3-70b-versatile")
+                or os.environ.get("GROQ_CHAT_MODEL", "")
+                or getattr(settings, "LLM_MODEL", "")
+                or os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
             ).strip()
-            models_to_try = [primary] if primary else ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+            models_to_try = [primary] if primary else ["qwen/qwen3.8-27b"]
+            for fallback in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+                if fallback not in models_to_try:
+                    models_to_try.append(fallback)
 
     elif provider in ("openai", "openai_compatible"):
         api_key = getattr(settings, "OPENAI_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
@@ -237,7 +247,7 @@ def call_llm(
                     "model": current_model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": min(max_tokens, 768 if "groq" in llm_base_url else max_tokens),
+                    "max_tokens": min(max_tokens, 3072),
                     "frequency_penalty": 0.5,
                     "presence_penalty": 0.5,
                     "top_p": 0.9,
@@ -289,5 +299,33 @@ def call_llm(
         except Exception as exc:
             logger.exception("Unexpected error calling LLM model %s: %s", current_model, type(exc).__name__)
             continue
+
+    # Safety net fallback: Bedrock if primary provider models are rate-limited or fail
+    if not is_bedrock and (os.environ.get("AWS_ACCESS_KEY_ID") or getattr(settings, "AWS_ACCESS_KEY_ID", None)):
+        try:
+            logger.info("Primary provider models exhausted; attempting Bedrock safety net fallback")
+            region = getattr(settings, "AWS_REGION", "") or os.environ.get("AWS_REGION", "us-west-2")
+            bedrock_model = getattr(settings, "BEDROCK_MODEL_ID", "") or os.environ.get("BEDROCK_MODEL_ID", "mistral.mistral-large-2407-v1:0")
+            client = boto3.client("bedrock-runtime", region_name=region)
+            system_blocks, conversation = prepare_bedrock_converse_messages(messages)
+            start_time = time.time()
+            response = client.converse(
+                modelId=bedrock_model,
+                system=system_blocks,
+                messages=conversation,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": temperature, "topP": 0.9},
+            )
+            duration = time.time() - start_time
+            content_blocks = response.get("output", {}).get("message", {}).get("content", [])
+            raw_text = "".join(
+                block.get("text", "")
+                for block in content_blocks
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ).strip()
+            logger.info("Bedrock safety net model %s responded in %.2fs (%s chars)", bedrock_model, duration, len(raw_text))
+            if raw_text:
+                return raw_text, bedrock_model
+        except Exception as exc:
+            logger.warning("Bedrock safety net fallback failed: %s", exc)
 
     return None, None

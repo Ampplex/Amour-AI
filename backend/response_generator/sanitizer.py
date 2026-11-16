@@ -107,8 +107,29 @@ def clean_user_name_vocatives(
     return re.sub(r"  +", " ", text).strip()
 
 
+def ensure_clean_completion(text: str) -> str:
+    """
+    Ensure the generated text doesn't end in an unclosed delimiter or truncated dangling fragment.
+    - Closes dangling unclosed action asterisks (*).
+    - Closes dangling unclosed double quotes (").
+    """
+    if not text:
+        return ""
+    cleaned = text.strip()
+
+    # If odd number of asterisks, close the open action
+    if cleaned.count("*") % 2 == 1:
+        cleaned += "*"
+
+    # If odd number of double quotes, close the open quote
+    if cleaned.count('"') % 2 == 1:
+        cleaned += '"'
+
+    return cleaned
+
+
 def sanitize_companion_reply(text: str, user_name: str = "", allow_name: bool = False) -> str:
-    """Sanitize reply: strip emojis, remove markdown code blocks, clean artifacts, and clean name vocatives."""
+    """Sanitize reply: strip emojis, remove markdown code blocks, clean artifacts, clean name vocatives, and guarantee closure."""
     if not text:
         return ""
     cleaned = strip_emojis(text)
@@ -121,4 +142,5 @@ def sanitize_companion_reply(text: str, user_name: str = "", allow_name: bool = 
         cleaned,
         flags=re.IGNORECASE,
     ).strip()
-    return clean_user_name_vocatives(cleaned, user_name=user_name, allow_name=allow_name)
+    cleaned = clean_user_name_vocatives(cleaned, user_name=user_name, allow_name=allow_name)
+    return ensure_clean_completion(cleaned)

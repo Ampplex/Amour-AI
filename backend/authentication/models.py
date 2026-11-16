@@ -45,6 +45,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     auth_provider = models.CharField(max_length=32, default="local")  # 'google' or 'local'
     google_sub = models.CharField(max_length=128, blank=True, default="", db_index=True)
     verified_email = models.BooleanField(default=False)
+    reply_length = models.CharField(max_length=16, default="default", blank=True)
     
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)

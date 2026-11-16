@@ -494,6 +494,16 @@ class ChatMemoryView(APIView):
                 logger.warning(f"Could not persist user message to DB: {e}")
 
         # 2. Generate companion reply (single-prompt roleplay engine with Reeve memory and Postgres history)
+        reply_length = (
+            request.data.get("reply_length")
+            or (getattr(user_obj, "reply_length", None) if user_obj else None)
+            or "default"
+        )
+        if isinstance(reply_length, str):
+            reply_length = reply_length.strip().lower()
+        if reply_length not in ("default", "short", "long"):
+            reply_length = "default"
+
         try:
             result = generate_companion_reply(
                 message=message,
@@ -510,6 +520,7 @@ class ChatMemoryView(APIView):
                 current_conflict_stage=current_conflict_stage,
                 user_key=user_key,
                 persist_exchange_to_memory=False,
+                reply_length=reply_length,
             )
 
             if result.get("success") is False:
@@ -582,6 +593,7 @@ class ChatMemoryView(APIView):
                         resp_meta["model"] = result.get("model", "")
                         resp_meta["variants"] = raw_variants
                         resp_meta["active_variant_index"] = active_variant_idx
+                        resp_meta["reply_length"] = reply_length
 
                         existing_bot_reply.text = encrypted_bot_msg
                         existing_bot_reply.conflict_stage = new_conflict_stage
@@ -608,6 +620,7 @@ class ChatMemoryView(APIView):
                             "model": result.get("model", ""),
                             "variants": [encrypted_bot_msg],
                             "active_variant_index": 0,
+                            "reply_length": reply_length,
                         }
                         bot_msg_record = PersonaChatMessage.objects.create(
                             user=user_obj,
@@ -680,6 +693,7 @@ class ChatMemoryView(APIView):
                     "namespace": namespace,
                     "persona_id": persona_id,
                     "user_id": str(user_id),
+                    "reply_length": reply_length,
                     "metadata": response_metadata,
                 },
                 status=status.HTTP_200_OK,

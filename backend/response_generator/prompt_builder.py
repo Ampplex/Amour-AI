@@ -37,9 +37,14 @@ def build_roleplay_system_prompt(
     current_message: str = "",
     has_history: bool = False,
     allow_user_name: bool = False,
+    reply_length: str = "default",
 ) -> str:
     """Build a rich, single unified roleplay system prompt with anti-looping momentum."""
     time_str = get_bucketed_time_str(client_time, client_timezone)
+
+    clean_reply_length = (reply_length or "default").strip().lower()
+    if clean_reply_length not in ("default", "short", "long"):
+        clean_reply_length = "default"
 
     sections = []
 
@@ -125,8 +130,67 @@ def build_roleplay_system_prompt(
         )
         sections.append(mem_sec.strip())
 
-    # 4. Core Roleplay, Initiative & Physical Presence Directives
-    directives = """--- CORE ROLEPLAY & CONVERSATION DIRECTIVES ---
+    # 4. User Reply Length Preference Banner (if customized)
+    if clean_reply_length == "short":
+        sections.append(
+            "--- USER PREFERENCE: SHORT MESSAGES ACTIVE ---\n"
+            "The user has explicitly set their preference for SHORT, CONCISE messages.\n"
+            "MANDATE: Keep your response brief, crisp, and punchy (1 to 2 short sentences, or a quick reaction and a single line of dialogue). "
+            "Do not write long paragraphs or extensive narrative exposition. Modern casual texting pace."
+        )
+    elif clean_reply_length == "long":
+        sections.append(
+            "--- USER PREFERENCE: LONG-FORM RESPONSES ACTIVE ---\n"
+            "The user has explicitly set their preference for LONG-FORM, IN-DEPTH roleplay.\n"
+            "MANDATE: Provide rich, multi-paragraph roleplay (typically 2 to 4 substantial paragraphs). "
+            "Deepen atmospheric details, sensory reactions, internal emotions, and comprehensive dialogue without rushing."
+        )
+
+    # 5. Core Roleplay, Initiative & Physical Presence Directives
+    if clean_reply_length == "short":
+        length_directive = """3. ROLEPLAY & RESPONSE LENGTH (USER PREFERENCE: SHORT & CONCISE)
+
+            The user has explicitly chosen SHORT, BRIEF MESSAGES.
+
+            Strict reply length requirements for this conversation:
+            - Keep your response brief, crisp, and punchy: strictly 1 to 2 short sentences, or a quick reaction and a single line of natural dialogue.
+            - Modern casual texting pace: get straight to the point without fluff, filler, or long monologues.
+            - Minimal actions: avoid multi-paragraph descriptions or long environmental setup. Keep physical actions to a brief gesture or expression, or use dialogue directly.
+            - Never write long essays, extensive world-building, or multiple paragraphs when short mode is active."""
+    elif clean_reply_length == "long":
+        length_directive = """3. ROLEPLAY & RESPONSE LENGTH (USER PREFERENCE: LONG-FORM & IN-DEPTH)
+
+            The user has explicitly chosen LONG-FORM, DETAILED RESPONSES.
+
+            Strict reply length requirements for this conversation:
+            - Provide expansive, immersive roleplay responses with multiple well-developed paragraphs (typically 2 to 4 rich paragraphs).
+            - Deepen the sensory experience: describe internal sensations, body language, facial micro-expressions, pacing, and environmental atmosphere.
+            - Offer meaningful, multi-layered dialogue combined with thorough character thought processes.
+            - Develop the scene fully: do not rush through emotional moments or truncate interactions into quick summaries. Give the narrative room to breathe with rich novelistic immersion."""
+    else:
+        length_directive = """3. ADAPTIVE ROLEPLAY & RESPONSE LENGTH
+
+            Balance dialogue, narration and storytelling naturally.
+
+            Responses should adapt to the current interaction:
+
+            - Casual conversations can be short and direct.
+            - Ordinary roleplay should naturally combine dialogue
+            with occasional actions and expressions.
+            - Emotional or significant scenes can have more detailed
+            narration and meaningful dialogue.
+            - Important moments should not be rushed or reduced
+            to one generic sentence.
+
+            Do not force every reply into a fixed sentence count,
+            paragraph count or word limit.
+
+            Do not produce long descriptions when a short reaction
+            is more natural.
+
+            Do not produce dialogue-only responses by default."""
+
+    directives = f"""--- CORE ROLEPLAY & CONVERSATION DIRECTIVES ---
 
             1. CHARACTER IDENTITY & IMMERSION
 
@@ -170,27 +234,7 @@ def build_roleplay_system_prompt(
             not different versions of the same chatbot.
 
 
-            3. ADAPTIVE ROLEPLAY & RESPONSE LENGTH
-
-            Balance dialogue, narration and storytelling naturally.
-
-            Responses should adapt to the current interaction:
-
-            - Casual conversations can be short and direct.
-            - Ordinary roleplay should naturally combine dialogue
-            with occasional actions and expressions.
-            - Emotional or significant scenes can have more detailed
-            narration and meaningful dialogue.
-            - Important moments should not be rushed or reduced
-            to one generic sentence.
-
-            Do not force every reply into a fixed sentence count,
-            paragraph count or word limit.
-
-            Do not produce long descriptions when a short reaction
-            is more natural.
-
-            Do not produce dialogue-only responses by default.
+            {length_directive}
 
 
             4. IMMERSIVE NARRATION & PHYSICAL PRESENCE

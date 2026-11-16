@@ -23,6 +23,16 @@ services:
         sync: false
       - key: AWS_S3_BUCKET_NAME
         value: "reeve-devpilot-downloads-309490998255"
+      - key: LLM_PROVIDER
+        value: "bedrock"
+      - key: RESPONSE_LLM_PROVIDER
+        value: "groq"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: "qwen/qwen3.8-27b"
+      - key: GROQ_CHAT_MODEL
+        value: "qwen/qwen3.8-27b"
       - key: NEON_AUTH_BASE_URL
         value: "https://ep-quiet-bonus-a11t1nym.neonauth.ap-southeast-1.aws.neon.tech/neondb/auth"
       - key: NEON_AUTH_JWKS_URL

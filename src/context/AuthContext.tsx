@@ -7,6 +7,7 @@ import * as Linking from 'expo-linking';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { GOOGLE_CONFIG, API_CONFIG } from '../constants/authConfig';
 import { clearFeedMemoryCache } from '../services/feedService';
+import { setReplyLengthPreference } from '../services/settingsService';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -23,6 +24,7 @@ export interface GoogleUser {
   verified_email?: boolean;
   namespace?: string;
   token?: string;
+  reply_length?: 'default' | 'short' | 'long';
 }
 
 interface AuthContextType {
@@ -46,7 +48,7 @@ interface AuthContextType {
   clearError: () => void;
   fetchGoogleUserInfo: (token: string) => Promise<GoogleUser | null>;
   setUser: (user: GoogleUser | null) => void;
-  updateProfile: (data: { username?: string; name?: string; picture?: string }) => Promise<{ success: boolean; error?: string; user?: GoogleUser }>;
+  updateProfile: (data: { username?: string; name?: string; picture?: string; reply_length?: 'default' | 'short' | 'long' }) => Promise<{ success: boolean; error?: string; user?: GoogleUser }>;
   uploadProfilePicture: (options: { base64?: string }) => Promise<{ success: boolean; url?: string; error?: string }>;
   refreshProfile: () => Promise<void>;
   deleteAccount: () => Promise<{ success: boolean; error?: string }>;
@@ -452,8 +454,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     username?: string;
     name?: string;
     picture?: string;
+    reply_length?: 'default' | 'short' | 'long';
   }): Promise<{ success: boolean; error?: string; user?: GoogleUser }> => {
     if (!user) return { success: false, error: 'No authenticated user' };
+
+    if (data.reply_length) {
+      await setReplyLengthPreference(data.reply_length);
+    }
 
     let lastError = 'Network request failed';
     for (const base of CANDIDATE_URLS) {
@@ -469,6 +476,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             username: data.username,
             name: data.name,
             picture: data.picture,
+            reply_length: data.reply_length,
           }),
         });
 
@@ -481,6 +489,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             name: resolvedName,
             given_name: (resolvedName ? resolvedName.trim().split(' ')[0] : '') || resData.given_name || user.given_name,
             picture: resData.picture ?? user.picture,
+            reply_length: resData.reply_length ?? data.reply_length ?? user.reply_length,
           };
           setUser(updatedUser);
           AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(updatedUser)).catch(() => {});
@@ -549,6 +558,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const res = await fetch(`${base}/auth/profile/?user_id=${user.id}`);
         if (res.ok) {
           const profile = await res.json();
+          if (profile.reply_length) {
+            setReplyLengthPreference(profile.reply_length).catch(() => {});
+          }
           setUser((prev) => {
             if (!prev) return null;
             const updated = {
@@ -556,6 +568,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               username: profile.username || prev.username,
               name: profile.name || prev.name,
               picture: profile.picture || prev.picture,
+              reply_length: profile.reply_length || prev.reply_length,
             };
             AsyncStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(updated)).catch(() => {});
             return updated;

@@ -1059,6 +1059,12 @@ class ProfileView(APIView):
         new_username = request.data.get("username")
         new_name = request.data.get("name")
         new_picture = request.data.get("picture")
+        new_reply_length = request.data.get("reply_length")
+
+        if new_reply_length is not None:
+            clean_length = str(new_reply_length).strip().lower()
+            if clean_length in ("default", "short", "long"):
+                user.reply_length = clean_length
 
         if new_username is not None:
             clean_username = re.sub(r"[^a-zA-Z0-9_]", "", new_username.strip().lower())

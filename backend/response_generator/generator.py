@@ -91,6 +91,7 @@ def generate_companion_reply(
     current_conflict_stage: int = 0,
     user_key: str = None,
     persist_exchange_to_memory: bool = True,
+    reply_length: str = "default",
 ) -> dict:
     """
     Single-prompt AI persona response generation.
@@ -126,6 +127,7 @@ def generate_companion_reply(
         current_message=message.strip(),
         has_history=bool(conversation_history),
         allow_user_name=allow_name,
+        reply_length=reply_length,
     )
 
     # 3. Assemble messages: system prompt + last 4 messages as context + current message
@@ -139,10 +141,21 @@ def generate_companion_reply(
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # 4. Direct LLM call with fallback model chain
+    # 4. Direct LLM call with fallback model chain & generous token runways to eliminate truncation
+    clean_length = (reply_length or "default").strip().lower()
+    if clean_length == "short":
+        # 768 tokens: prompt strictly mandates 1-2 sentences, generous headroom guarantees zero truncation
+        target_max_tokens = 768
+    elif clean_length == "long":
+        # 3072 tokens: abundant headroom allows full 3-4 rich paragraphs to complete naturally
+        target_max_tokens = 3072
+    else:
+        # 2048 tokens: 2x original headroom so adaptive scenes never get cut off mid-thought
+        target_max_tokens = 2048
+
     raw_text, successful_model = call_llm(
         messages=messages,
-        max_tokens=1024,
+        max_tokens=target_max_tokens,
         temperature=0.88,
     )
 
