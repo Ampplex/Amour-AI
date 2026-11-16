@@ -22,7 +22,9 @@ export interface ChatHistoryItem {
   text: string;
   conflict_stage?: number;
   conflict_level?: number;
-  response_metadata?: ChatResponseMetadata;
+  response_metadata?: any;
+  variants?: string[];
+  active_variant_index?: number;
   created_at: string;
 }
 
@@ -39,6 +41,7 @@ export interface ChatHistoryResponse {
 export interface SendMessagePayload {
   client_message_id?: string;
   edit_message_id?: string;
+  regenerate_bot_message_id?: string;
   message: string;
   persona_id: string;
   persona_name: string;
@@ -62,6 +65,8 @@ export interface SendMessageResponse {
   persona_id: string;
   user_id: string;
   metadata?: ChatResponseMetadata;
+  variants?: string[];
+  active_variant_index?: number;
 }
 
 const CANDIDATE_URLS = [
@@ -213,6 +218,57 @@ export async function deleteChatMessage(
         'X-Memory-User-Key': userKey,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData?.error || `HTTP ${res.status}` };
+    }
+
+    return await res.json();
+  } catch (err: any) {
+    clearTimeout(timer);
+    return { success: false, error: err?.message || 'Network error' };
+  }
+}
+
+/**
+ * Switch active variant for a regenerated bot response.
+ * Updates PostgreSQL DB so that message id reply is set to the current selected one.
+ */
+export async function switchChatMessageVariant(
+  messageId: string,
+  variantIndex: number,
+  userId: string,
+  token?: string
+): Promise<{
+  success: boolean;
+  message_id?: string;
+  text?: string;
+  active_variant_index?: number;
+  variants?: string[];
+  error?: string;
+}> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const userKey = await getOrCreateUserKey();
+    const baseUrl = await resolveActiveBaseUrl();
+    const res = await fetch(`${baseUrl}/memory/chat/`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Memory-User-Key': userKey,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        message_id: messageId,
+        variant_index: variantIndex,
+        user_id: userId,
+      }),
       signal: controller.signal,
     });
     clearTimeout(timer);

@@ -158,6 +158,14 @@ class ChatMemoryView(APIView):
         for item in serializer.data:
             item_copy = dict(item)
             item_copy["text"] = decrypt_chat_message(item_copy.get("text", ""), user_id=str(user_id), client_key=user_key)
+            resp_meta = item_copy.get("response_metadata") or {}
+            raw_variants = resp_meta.get("variants") or []
+            if raw_variants and len(raw_variants) > 1:
+                item_copy["variants"] = [
+                    decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)
+                    for v in raw_variants
+                ]
+                item_copy["active_variant_index"] = resp_meta.get("active_variant_index", len(raw_variants) - 1)
             decrypted_results.append(item_copy)
 
         from .models import PersonaRelationshipState
@@ -190,6 +198,7 @@ class ChatMemoryView(APIView):
 
         client_message_id = request.data.get("client_message_id", "").strip()
         edit_message_id = request.data.get("edit_message_id", "").strip()
+        regenerate_bot_message_id = request.data.get("regenerate_bot_message_id", "").strip()
         persona_id = request.data.get("persona_id", "").strip()
         persona_name = request.data.get("persona_name", "")
         greeting = request.data.get("greeting", "")
@@ -259,9 +268,38 @@ class ChatMemoryView(APIView):
                     created_at__gte=user_msg_to_edit.created_at,
                 ).order_by("created_at").first()
 
-        # Client Message ID Idempotency Check (bypassed if editing an existing message)
+        if regenerate_bot_message_id and not existing_bot_reply:
+            import uuid as uuid_pkg
+            try:
+                parsed_bot_uuid = uuid_pkg.UUID(regenerate_bot_message_id)
+                existing_bot_reply = PersonaChatMessage.objects.filter(
+                    id=parsed_bot_uuid,
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="bot",
+                ).first()
+            except (ValueError, TypeError):
+                pass
+
+            if not existing_bot_reply:
+                existing_bot_reply = PersonaChatMessage.objects.filter(
+                    client_message_id=regenerate_bot_message_id,
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="bot",
+                ).first()
+
+            if existing_bot_reply and not user_msg_to_edit:
+                user_msg_to_edit = PersonaChatMessage.objects.filter(
+                    user_identifier=str(user_id),
+                    persona_identifier=str(persona_id),
+                    sender="user",
+                    created_at__lte=existing_bot_reply.created_at,
+                ).order_by("-created_at").first()
+
+        # Client Message ID Idempotency Check (bypassed if editing or regenerating an existing message)
         existing_msg = None
-        if client_message_id and not user_msg_to_edit:
+        if client_message_id and not user_msg_to_edit and not regenerate_bot_message_id:
             existing_msg = PersonaChatMessage.objects.filter(
                 client_message_id=client_message_id,
                 user_identifier=str(user_id),
@@ -402,13 +440,14 @@ class ChatMemoryView(APIView):
         newly_created_user_msg = False
         if user_msg_to_edit:
             try:
-                encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
-                user_msg_to_edit.text = encrypted_user_msg
-                if client_message_id:
-                    user_msg_to_edit.client_message_id = client_message_id
-                user_msg_to_edit.save(update_fields=["text", "client_message_id"])
+                if not regenerate_bot_message_id:
+                    encrypted_user_msg = encrypt_chat_message(message, user_id=str(user_id), client_key=user_key)
+                    user_msg_to_edit.text = encrypted_user_msg
+                    if client_message_id:
+                        user_msg_to_edit.client_message_id = client_message_id
+                    user_msg_to_edit.save(update_fields=["text", "client_message_id"])
+                    logger.info("Updated edited message in PostgreSQL id=%s", user_msg_to_edit.id)
                 user_msg_record = user_msg_to_edit
-                logger.info("Updated edited message in PostgreSQL id=%s", user_msg_to_edit.id)
             except Exception as e:
                 logger.warning(f"Could not update edited user message in DB: {e}")
         elif existing_msg:
@@ -530,19 +569,45 @@ class ChatMemoryView(APIView):
                         client_key=user_key,
                     )
                     if existing_bot_reply:
+                        resp_meta = dict(existing_bot_reply.response_metadata or {})
+                        raw_variants = list(resp_meta.get("variants") or [])
+                        if not raw_variants:
+                            raw_variants = [existing_bot_reply.text]
+
+                        raw_variants.append(encrypted_bot_msg)
+                        active_variant_idx = len(raw_variants) - 1
+
+                        resp_meta["engine"] = "single_prompt_roleplay"
+                        resp_meta["model"] = result.get("model", "")
+                        resp_meta["variants"] = raw_variants
+                        resp_meta["active_variant_index"] = active_variant_idx
+
                         existing_bot_reply.text = encrypted_bot_msg
                         existing_bot_reply.conflict_stage = new_conflict_stage
                         if client_message_id:
                             existing_bot_reply.client_message_id = client_message_id
-                        existing_bot_reply.response_metadata = response_metadata
+                        existing_bot_reply.response_metadata = resp_meta
                         existing_bot_reply.save(update_fields=["text", "conflict_stage", "client_message_id", "response_metadata"])
                         bot_msg_id = str(existing_bot_reply.id)
+                        response_metadata = resp_meta
+
+                        decrypted_variants = [
+                            decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)
+                            for v in raw_variants
+                        ]
                         logger.info(
-                            "Updated existing bot response for edited message namespace=%s bot_msg_id=%s",
-                            namespace,
+                            "Appended variant %d to bot response id=%s namespace=%s",
+                            len(raw_variants),
                             bot_msg_id,
+                            namespace,
                         )
                     else:
+                        response_metadata = {
+                            "engine": "single_prompt_roleplay",
+                            "model": result.get("model", ""),
+                            "variants": [encrypted_bot_msg],
+                            "active_variant_index": 0,
+                        }
                         bot_msg_record = PersonaChatMessage.objects.create(
                             user=user_obj,
                             user_identifier=str(user_id),
@@ -556,6 +621,8 @@ class ChatMemoryView(APIView):
                             response_metadata=response_metadata,
                         )
                         bot_msg_id = str(bot_msg_record.id)
+                        active_variant_idx = 0
+                        decrypted_variants = [reply_text]
                         logger.info(
                             "Persisted conversation turn namespace=%s bot_msg_id=%s",
                             namespace,
@@ -599,6 +666,8 @@ class ChatMemoryView(APIView):
                     "user_message_id": str(user_msg_record.id) if user_msg_record else None,
                     "client_message_id": client_message_id,
                     "reply": reply_text,
+                    "variants": decrypted_variants,
+                    "active_variant_index": active_variant_idx,
                     "conflict_stage": new_conflict_stage,
                     "conflict_level": new_conflict_stage,
                     "context": result.get("context", ""),
@@ -688,6 +757,95 @@ class ChatMemoryView(APIView):
         logger.info("Deleted chat message id=%s (Reeve episodes pruned: %d) for user=%s", deleted_id, reeve_pruned, user_id)
         return Response(
             {"success": True, "deleted_id": deleted_id, "reeve_episodes_pruned": reeve_pruned},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        """
+        Switch active response variant for a regenerated bot message.
+        Updates PostgreSQL `text` column to the chosen variant so future inferences
+        and chat history lookups immediately reflect the user's selected response.
+        """
+        message_id = (request.data.get("message_id") or request.query_params.get("message_id", "")).strip()
+        user_id = (request.user.id if request.user.is_authenticated else (request.data.get("user_id") or request.query_params.get("user_id", ""))).strip()
+        variant_index = request.data.get("variant_index")
+
+        if not message_id:
+            return Response({"error": "message_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not user_id:
+            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if variant_index is None:
+            return Response({"error": "variant_index is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            variant_index = int(variant_index)
+        except (ValueError, TypeError):
+            return Response({"error": "variant_index must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+
+        import uuid as uuid_pkg
+        from .models import PersonaChatMessage
+
+        target_msg = None
+        try:
+            parsed_uuid = uuid_pkg.UUID(message_id)
+            target_msg = PersonaChatMessage.objects.filter(
+                id=parsed_uuid,
+                user_identifier=str(user_id),
+                sender="bot",
+            ).first()
+        except (ValueError, TypeError):
+            pass
+
+        if not target_msg:
+            target_msg = PersonaChatMessage.objects.filter(
+                client_message_id=message_id,
+                user_identifier=str(user_id),
+                sender="bot",
+            ).first()
+
+        if not target_msg:
+            return Response({"error": "Bot message not found or unauthorized"}, status=status.HTTP_404_NOT_FOUND)
+
+        resp_meta = dict(target_msg.response_metadata or {})
+        variants = resp_meta.get("variants") or []
+
+        if not variants:
+            return Response({"error": "Message has no variants to switch"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if variant_index < 0 or variant_index >= len(variants):
+            return Response({"error": f"variant_index out of range (0..{len(variants)-1})"}, status=status.HTTP_400_BAD_REQUEST)
+
+        chosen_variant_encrypted = variants[variant_index]
+        target_msg.text = chosen_variant_encrypted
+        resp_meta["active_variant_index"] = variant_index
+        target_msg.response_metadata = resp_meta
+        target_msg.save(update_fields=["text", "response_metadata"])
+
+        user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or request.data.get("user_key") or "").strip() or None
+        from .crypto import decrypt_chat_message
+        decrypted_text = decrypt_chat_message(chosen_variant_encrypted, user_id=str(user_id), client_key=user_key)
+        decrypted_variants = [
+            decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)
+            for v in variants
+        ]
+
+        logger.info(
+            "Switched bot message id=%s to variant %d/%d in PostgreSQL for user=%s",
+            target_msg.id,
+            variant_index + 1,
+            len(variants),
+            user_id,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message_id": str(target_msg.id),
+                "text": decrypted_text,
+                "active_variant_index": variant_index,
+                "variants": decrypted_variants,
+                "variants_count": len(variants),
+            },
             status=status.HTTP_200_OK,
         )
 

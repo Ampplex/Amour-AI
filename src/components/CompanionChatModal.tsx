@@ -23,7 +23,7 @@ import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem } from '../services/personaService';
-import { fetchChatHistory, sendChatMessage, deleteChatMessage } from '../services/chatService';
+import { fetchChatHistory, sendChatMessage, deleteChatMessage, switchChatMessageVariant } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 import { showAlert } from '../context/AlertContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -227,6 +227,8 @@ interface ChatMessage {
   text: string;
   timestamp: string;
   isFailed?: boolean;
+  variants?: string[];
+  activeVariantIndex?: number;
 }
 
 interface CompanionChatModalProps {
@@ -333,6 +335,127 @@ export default function CompanionChatModal({
     );
   };
 
+  const handleSwitchVariant = async (messageId: string, targetIndex: number) => {
+    const targetMsg = messages.find((m) => m.id === messageId);
+    if (!targetMsg || !targetMsg.variants || targetIndex < 0 || targetIndex >= targetMsg.variants.length) {
+      return;
+    }
+
+    try {
+      Vibration.vibrate(15);
+    } catch {}
+
+    const selectedText = targetMsg.variants[targetIndex];
+
+    // Optimistic UI update: switch immediately on screen
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id === messageId) {
+          return {
+            ...m,
+            text: selectedText,
+            activeVariantIndex: targetIndex,
+          };
+        }
+        return m;
+      })
+    );
+
+    // Persist selected response to PostgreSQL backend
+    try {
+      const uId = await resolveConversationUserId(user?.id);
+      await switchChatMessageVariant(messageId, targetIndex, uId, user?.token);
+    } catch (err) {
+      console.warn('[CompanionChat] switchChatMessageVariant network error:', err);
+    }
+  };
+
+  const handleRegenerateBotReply = async (botMsg: ChatMessage) => {
+    if (isTyping || !activePersona) return;
+
+    const botIdx = messages.findIndex((m) => m.id === botMsg.id);
+    if (botIdx === -1) return;
+
+    let precedingUserMsg: ChatMessage | null = null;
+    for (let i = botIdx - 1; i >= 0; i--) {
+      if (messages[i].sender === 'user') {
+        precedingUserMsg = messages[i];
+        break;
+      }
+    }
+
+    const textToPrompt = precedingUserMsg ? precedingUserMsg.text : activePersona.greeting;
+    const userMsgId = precedingUserMsg ? precedingUserMsg.id : undefined;
+
+    setIsTyping(true);
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 80);
+
+    const clientTime = new Date().toLocaleString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
+    const userDisplayName = (user?.name ? user.name.trim().split(' ')[0] : '') || user?.given_name || user?.name || '';
+
+    try {
+      const conversationUserId = await resolveConversationUserId(user?.id);
+      const data = await sendChatMessage(
+        {
+          client_message_id: `regen-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          regenerate_bot_message_id: botMsg.id,
+          edit_message_id: userMsgId,
+          message: textToPrompt,
+          persona_id: activePersona.id,
+          persona_name: activePersona.name,
+          greeting: activePersona.greeting,
+          memory_prompt: activePersona.memory_prompt,
+          client_time: clientTime,
+          client_timezone: clientTimezone,
+          user_id: conversationUserId,
+          user_name: userDisplayName,
+        },
+        user?.token
+      );
+
+      if (data?.reply) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id === botMsg.id) {
+              const prevVariants = m.variants || [m.text];
+              const newVariants = data.variants || [...prevVariants, data.reply];
+              return {
+                ...m,
+                text: data.reply,
+                variants: newVariants,
+                activeVariantIndex: data.active_variant_index ?? newVariants.length - 1,
+              };
+            }
+            return m;
+          })
+        );
+      } else {
+        showAlert(
+          'Regeneration Failed',
+          'Could not regenerate response from companion. Please try again.',
+          [{ text: 'OK', style: 'primary' }],
+          'warning'
+        );
+      }
+    } catch (err) {
+      console.warn('[CompanionChat] Regeneration error:', err);
+      showAlert('Error', 'Network error regenerating response.', [{ text: 'OK' }], 'warning');
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   // Spin animation for retry icon during message sending
   useEffect(() => {
     if (isTyping) {
@@ -409,6 +532,8 @@ export default function CompanionChatModal({
             ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isFailed: false,
+          variants: item.variants || (item.response_metadata?.variants && item.response_metadata.variants.length > 1 ? item.response_metadata.variants : undefined),
+          activeVariantIndex: item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
         }));
         setMessages(loaded);
         setHasMoreHistory(Boolean(data.has_more));
@@ -459,6 +584,8 @@ export default function CompanionChatModal({
             ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isFailed: false,
+          variants: item.variants || (item.response_metadata?.variants && item.response_metadata.variants.length > 1 ? item.response_metadata.variants : undefined),
+          activeVariantIndex: item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
         }));
         setMessages((prev) => [...older, ...prev]);
         setHistoryPage(nextPage);
@@ -553,13 +680,32 @@ export default function CompanionChatModal({
       );
 
       if (data?.reply) {
-        const botReply: ChatMessage = {
-          id: data.id || `bot-${Date.now()}`,
-          sender: 'bot',
-          text: data.reply,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages((prev) => [...prev, botReply]);
+        setMessages((prev) => {
+          const hasBotMatch = prev.some((m) => m.id === data.id);
+          if (hasBotMatch) {
+            return prev.map((m) => {
+              if (m.id === data.id) {
+                const newVariants = data.variants || (m.variants ? [...m.variants, data.reply] : [m.text, data.reply]);
+                return {
+                  ...m,
+                  text: data.reply,
+                  variants: newVariants,
+                  activeVariantIndex: data.active_variant_index ?? newVariants.length - 1,
+                };
+              }
+              return m;
+            });
+          }
+          const botReply: ChatMessage = {
+            id: data.id || `bot-${Date.now()}`,
+            sender: 'bot',
+            text: data.reply,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            variants: data.variants,
+            activeVariantIndex: data.active_variant_index,
+          };
+          return [...prev, botReply];
+        });
       } else {
         setMessages((prev) =>
           prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
@@ -744,52 +890,150 @@ export default function CompanionChatModal({
                   isUser ? styles.userBubbleRow : styles.botBubbleRow,
                 ]}
               >
-                <TouchableOpacity
-                  activeOpacity={0.88}
-                  delayLongPress={260}
-                  onLongPress={() => {
-                    try {
-                      Vibration.vibrate(25);
-                    } catch {}
-                    setActionMenuMessage(item);
-                  }}
-                  onPress={() => {
-                    if (isLastUserMsg && item.isFailed) {
+                {isUser ? (
+                  <TouchableOpacity
+                    activeOpacity={0.88}
+                    delayLongPress={260}
+                    onLongPress={() => {
                       try {
-                        Vibration.vibrate(20);
+                        Vibration.vibrate(25);
                       } catch {}
                       setActionMenuMessage(item);
-                    }
-                  }}
-                  style={[
-                    styles.bubbleContainer,
-                    isUser
-                      ? [styles.userBubble, { backgroundColor: borderColor }]
-                      : styles.botBubble,
-                  ]}
-                >
-                  <MarkdownText
-                    content={item.text}
-                    style={isUser ? styles.userBubbleText : styles.botBubbleText}
-                    actionStyle={isUser ? styles.userActionText : styles.botActionText}
-                  />
-                  <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
-                    {item.isFailed && (
-                      <View style={styles.failedIndicatorRow}>
-                        <View style={styles.failedDot} />
-                        <Text style={styles.failedText}>Failed</Text>
-                      </View>
-                    )}
-                    <Text
+                    }}
+                    onPress={() => {
+                      if (isLastUserMsg && item.isFailed) {
+                        try {
+                          Vibration.vibrate(20);
+                        } catch {}
+                        setActionMenuMessage(item);
+                      }
+                    }}
+                    style={[
+                      styles.bubbleContainer,
+                      styles.userBubble,
+                      { backgroundColor: borderColor },
+                    ]}
+                  >
+                    <MarkdownText
+                      content={item.text}
+                      style={styles.userBubbleText}
+                      actionStyle={styles.userActionText}
+                    />
+                    <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
+                      {item.isFailed && (
+                        <View style={styles.failedIndicatorRow}>
+                          <View style={styles.failedDot} />
+                          <Text style={styles.failedText}>Failed</Text>
+                        </View>
+                      )}
+                      <Text
+                        style={[
+                          styles.bubbleTimestamp,
+                          styles.userTimestampText,
+                        ]}
+                      >
+                        {item.timestamp}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.botMessageWrapper}>
+                    <TouchableOpacity
+                      activeOpacity={0.88}
+                      delayLongPress={260}
+                      onLongPress={() => {
+                        try {
+                          Vibration.vibrate(25);
+                        } catch {}
+                        setActionMenuMessage(item);
+                      }}
                       style={[
-                        styles.bubbleTimestamp,
-                        isUser ? styles.userTimestampText : styles.botTimestampText,
+                        styles.bubbleContainer,
+                        styles.botBubble,
                       ]}
                     >
-                      {item.timestamp}
-                    </Text>
+                      <MarkdownText
+                        content={item.text}
+                        style={styles.botBubbleText}
+                        actionStyle={styles.botActionText}
+                      />
+                      <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
+                        <Text
+                          style={[
+                            styles.bubbleTimestamp,
+                            styles.botTimestampText,
+                          ]}
+                        >
+                          {item.timestamp}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {item.variants && item.variants.length > 1 && (
+                      <View style={styles.variantNavRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.variantRectBtn,
+                            (item.activeVariantIndex ?? item.variants.length - 1) === 0 && styles.variantRectBtnDisabled,
+                          ]}
+                          onPress={() =>
+                            handleSwitchVariant(
+                              item.id,
+                              (item.activeVariantIndex ?? item.variants.length - 1) - 1
+                            )
+                          }
+                          disabled={
+                            (item.activeVariantIndex ?? item.variants.length - 1) === 0 || isTyping
+                          }
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityLabel="Previous response"
+                        >
+                          <Text
+                            style={[
+                              styles.variantArrowText,
+                              (item.activeVariantIndex ?? item.variants.length - 1) === 0 && styles.variantArrowTextDisabled,
+                            ]}
+                          >
+                            {'<'}
+                          </Text>
+                        </TouchableOpacity>
+
+                        <Text style={styles.variantCounterText}>
+                          {(item.activeVariantIndex ?? item.variants.length - 1) + 1} / {item.variants.length}
+                        </Text>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.variantRectBtn,
+                            (item.activeVariantIndex ?? item.variants.length - 1) >= item.variants.length - 1 && styles.variantRectBtnDisabled,
+                          ]}
+                          onPress={() =>
+                            handleSwitchVariant(
+                              item.id,
+                              (item.activeVariantIndex ?? item.variants.length - 1) + 1
+                            )
+                          }
+                          disabled={
+                            (item.activeVariantIndex ?? item.variants.length - 1) >= item.variants.length - 1 || isTyping
+                          }
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityLabel="Next response"
+                        >
+                          <Text
+                            style={[
+                              styles.variantArrowText,
+                              (item.activeVariantIndex ?? item.variants.length - 1) >= item.variants.length - 1 && styles.variantArrowTextDisabled,
+                            ]}
+                          >
+                            {'>'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
-                </TouchableOpacity>
+                )}
               </View>
             );
           }}
@@ -979,6 +1223,30 @@ export default function CompanionChatModal({
                           <Text style={styles.igActionText}>
                             {actionMenuMessage.isFailed ? 'Retry Message' : 'Resend'}
                           </Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={styles.igActionDivider} />
+                    </>
+                  )}
+
+                  {actionMenuMessage.sender === 'bot' && (
+                    <>
+                      <TouchableOpacity
+                        style={styles.igActionRow}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          const botMsg = actionMenuMessage;
+                          setActionMenuMessage(null);
+                          handleRegenerateBotReply(botMsg);
+                        }}
+                        disabled={isTyping}
+                      >
+                        <View style={styles.igActionRowLeft}>
+                          <View style={styles.igActionIconCircle}>
+                            <RetryIcon size={14} color="#FFFFFF" />
+                          </View>
+                          <Text style={styles.igActionText}>Regenerate Response</Text>
                         </View>
                       </TouchableOpacity>
 
@@ -1241,6 +1509,50 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#242436',
     borderBottomLeftRadius: 4,
+  },
+  botMessageWrapper: {
+    maxWidth: '82%',
+    alignItems: 'flex-start',
+  },
+  variantNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+    marginLeft: 2,
+    gap: 6,
+  },
+  variantRectBtn: {
+    width: 26,
+    height: 22,
+    borderRadius: 4,
+    backgroundColor: '#1E1E2C',
+    borderWidth: 1,
+    borderColor: '#303046',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  variantRectBtnDisabled: {
+    backgroundColor: '#14141E',
+    borderColor: '#20202E',
+    opacity: 0.35,
+  },
+  variantArrowText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#D1D5DB',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    lineHeight: 14,
+    textAlign: 'center',
+  },
+  variantArrowTextDisabled: {
+    color: '#6B7280',
+  },
+  variantCounterText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    letterSpacing: 0.5,
+    paddingHorizontal: 2,
   },
   userBubbleText: {
     fontSize: 15,
