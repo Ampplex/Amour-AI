@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.amour.chat",
-      "versionCode": 10,
+      "versionCode": 11,
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#000000",
