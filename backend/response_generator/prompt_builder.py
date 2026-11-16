@@ -74,22 +74,30 @@ def build_roleplay_system_prompt(
     )
 
     clean_user_name = user_name.strip() if user_name and user_name.strip() else ""
+    first_name = clean_user_name.split()[0] if clean_user_name else ""
 
-    if clean_user_name and allow_user_name:
-        first_name = clean_user_name.split()[0]
+    if first_name and first_name.lower() not in ("guest", "user", "anonymous"):
         user_sec += f"User's name: {first_name}.\n"
-        user_sec += (
-            f"Strict address rule: Default to direct speech ('you') without using their name. "
-            f"Even when expressing care, comforting, affection, or asking questions (e.g. 'Are you okay?', 'I'm here for you'), "
-            f"natural dialogue does NOT append their name. "
-            f"Address them by '{first_name}' ONLY if this exact moment genuinely demands it (such as a deep emotional confession, "
-            f"intense turning point, or calling out to them across a distance). "
-            f"If the sentence makes complete sense without their name, NEVER add their name. Never use their name more than once.\n"
-        )
+        if allow_user_name:
+            user_sec += (
+                f"Name Usage Guidance: You have permission to address the user by their name ('{first_name}'), but ONLY when it feels genuinely right in context.\n"
+                f"- WHEN IT FEELS RIGHT TO USE '{first_name}':\n"
+                f"  • Emotional resonance: A moment of tender affection, vulnerability, deep comfort, or reassuring them when they need grounding.\n"
+                f"  • Playful or intimate connection: Playfully teasing, whispering, catching their attention, or emphasizing a special shared bond.\n"
+                f"  • Turning points & direct address: Greeting them after time apart, calling out to them, or directly answering an inquiry about their identity.\n"
+                f"- WHEN TO PREFER 'you' / 'your':\n"
+                f"  • Mundane or casual back-and-forth remarks where appending a name would sound unnatural, forced, or like a customer support bot.\n"
+                f"  • If the sentence already flows smoothly and warmly with direct pronouns ('you'), keep it organic.\n"
+                f"- RULE: Never use their name more than once in this reply. Let the emotional pulse of the scene guide whether this moment truly calls for it.\n"
+            )
+        else:
+            user_sec += (
+                f"Address the user directly using natural second-person pronouns ('you', 'your'). "
+                f"Do not address the user by name in this response, unless they explicitly asked you for their name or identity.\n"
+            )
     else:
         user_sec += (
-            "Address the user directly using natural second-person pronouns ('you', 'your'). "
-            "Do not address the user by name or mention any name in this response.\n"
+            "Address the user directly using natural second-person pronouns ('you', 'your').\n"
         )
 
     user_sec += f"Real-World Reference Time: {time_str}\n"

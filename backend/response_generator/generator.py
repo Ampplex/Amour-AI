@@ -30,26 +30,43 @@ from .sanitizer import (
 logger = logging.getLogger("amour.response_generator")
 
 MIN_NAME_COOLDOWN_TURNS = 4
-NAME_TRIGGER_PROBABILITY = 0.20
-MAX_SILENCE_TURNS = 10
+
+NAME_INTENT_PATTERN = re.compile(
+    r"\b("
+    r"what('s| is) my name|"
+    r"who am i|"
+    r"do you (know|remember) my name|"
+    r"what do you call me|"
+    r"say my name|"
+    r"tell me my name|"
+    r"guess my name|"
+    r"my name is what"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def should_allow_name_in_turn(
     user_name: str,
     conversation_history: list = None,
+    current_message: str = "",
     min_cooldown: int = MIN_NAME_COOLDOWN_TURNS,
-    probability: float = NAME_TRIGGER_PROBABILITY,
-    max_silence: int = MAX_SILENCE_TURNS,
 ) -> bool:
     """
-    Cadence controller: ensures the persona uses the user's name only occasionally
-    and never in consecutive replies. Enforces a minimum cooldown of 4 assistant messages.
+    Cadence controller: enforces a minimum 4-turn cooldown between assistant replies that mention
+    the user's name. Once outside cooldown (or if the user directly asks for their name/identity),
+    returns True, allowing the LLM to decide naturally according to the prompt without artificial
+    probability restrictions.
     """
     if not user_name:
         return False
     first_name = user_name.strip().split()[0]
     if not first_name or first_name.lower() in ("guest", "user", "anonymous"):
         return False
+
+    # 1. Direct inquiry override: if user asks for their name or identity, always allow
+    if current_message and NAME_INTENT_PATTERN.search(current_message):
+        return True
 
     bot_turns = [
         turn.get("content", "")
@@ -64,16 +81,12 @@ def should_allow_name_in_turn(
             turns_since_mention = idx
             break
 
-    # 1. Mandatory Cooldown: if bot used name in last `min_cooldown` assistant turns, strictly disallow
+    # 2. Mandatory Cooldown: if bot used name in last `min_cooldown` (4) assistant turns, disallow
     if turns_since_mention is not None and turns_since_mention < min_cooldown:
         return False
 
-    # 2. Maximum Silence: if 10+ assistant turns passed without name, allow eligibility
-    if turns_since_mention is not None and turns_since_mention >= max_silence:
-        return True
-
-    # 3. Outside cooldown: roll natural probability (~20% chance)
-    return random.random() < probability
+    # 3. Outside cooldown: allow the LLM to decide naturally
+    return True
 
 
 def generate_companion_reply(
@@ -99,7 +112,11 @@ def generate_companion_reply(
     and calls the LLM directly for rich, forward-moving roleplay.
     """
     user_clean_name = user_name.strip() if user_name else ""
-    allow_name = should_allow_name_in_turn(user_clean_name, conversation_history)
+    allow_name = should_allow_name_in_turn(
+        user_clean_name,
+        conversation_history,
+        current_message=message,
+    )
 
     # 1. Retrieve historical memory context from Reeve
     try:
@@ -112,6 +129,10 @@ def generate_companion_reply(
     except Exception as exc:
         logger.warning("Error retrieving memory context from Reeve: %s", exc)
         memory_context = ""
+
+    if memory_context:
+        # Scrub internal engine brand names so the persona never mistakes the technical framework for a person
+        memory_context = re.sub(r"\bReeve\b", "memory", memory_context, flags=re.IGNORECASE)
 
     # 2. Build the single comprehensive roleplay system prompt
     system_prompt = build_roleplay_system_prompt(
