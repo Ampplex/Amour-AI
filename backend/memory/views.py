@@ -563,6 +563,7 @@ class ChatMemoryView(APIView):
                     }
 
                     # Store or update bot response in PostgreSQL
+                    old_reply_encrypted = existing_bot_reply.text if existing_bot_reply else None
                     encrypted_bot_msg = encrypt_chat_message(
                         reply_text,
                         user_id=str(user_id),
@@ -632,6 +633,11 @@ class ChatMemoryView(APIView):
                     # Publish the completed exchange to Reeve after PostgreSQL transaction commits
                     def store_committed_exchange():
                         try:
+                            if old_reply_encrypted and old_reply_encrypted != encrypted_bot_msg:
+                                from .reeve_service import delete_memory_for_message
+                                old_reply_decrypted = decrypt_chat_message(old_reply_encrypted, user_id=str(user_id), client_key=user_key)
+                                delete_memory_for_message(old_reply_decrypted, namespace=namespace, sender="bot", user_key=user_key)
+
                             store_memory_for_user(
                                 f"User: {message.strip()}\nAssistant: {reply_text}",
                                 namespace,
@@ -828,6 +834,32 @@ class ChatMemoryView(APIView):
             decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)
             for v in variants
         ]
+
+        # Synchronize Reeve Long-Term Memory with the selected variant
+        try:
+            user_msg = PersonaChatMessage.objects.filter(
+                user_identifier=str(user_id),
+                persona_identifier=target_msg.persona_identifier,
+                sender="user",
+                created_at__lte=target_msg.created_at,
+            ).order_by("-created_at").first()
+
+            if user_msg:
+                user_text = decrypt_chat_message(user_msg.text, user_id=str(user_id), client_key=user_key)
+                from .reeve_service import delete_memory_for_message, store_memory_for_user
+
+                for i, v in enumerate(variants):
+                    if i != variant_index:
+                        unselected_decrypted = decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)
+                        delete_memory_for_message(unselected_decrypted, namespace=target_msg.namespace, sender="bot", user_key=user_key)
+
+                store_memory_for_user(
+                    f"User: {user_text.strip()}\nAssistant: {decrypted_text}",
+                    target_msg.namespace,
+                    user_key=user_key,
+                )
+        except Exception as exc:
+            logger.warning("Could not sync Reeve memory for switched variant: %s", exc)
 
         logger.info(
             "Switched bot message id=%s to variant %d/%d in PostgreSQL for user=%s",
