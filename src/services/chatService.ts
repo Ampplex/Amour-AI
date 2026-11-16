@@ -53,6 +53,7 @@ export interface SendMessagePayload {
 export interface SendMessageResponse {
   id: string;
   client_message_id?: string;
+  user_message_id?: string;
   reply: string;
   conflict_stage?: number;
   conflict_level?: number;
@@ -187,5 +188,43 @@ export async function sendChatMessage(
     clearTimeout(timer);
     console.warn('[chatService] sendChatMessage error:', err?.message || err);
     return null;
+  }
+}
+
+/**
+ * Permanently delete a chat message from PostgreSQL.
+ */
+export async function deleteChatMessage(
+  messageId: string,
+  userId: string,
+  token?: string
+): Promise<{ success: boolean; deleted_id?: string; error?: string }> {
+  const query = `message_id=${encodeURIComponent(messageId)}&user_id=${encodeURIComponent(userId)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const userKey = await getOrCreateUserKey();
+    const baseUrl = await resolveActiveBaseUrl();
+    const res = await fetch(`${baseUrl}/memory/chat/?${query}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Memory-User-Key': userKey,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData?.error || `HTTP ${res.status}` };
+    }
+
+    return await res.json();
+  } catch (err: any) {
+    clearTimeout(timer);
+    return { success: false, error: err?.message || 'Network error' };
   }
 }

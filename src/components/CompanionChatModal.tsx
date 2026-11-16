@@ -23,7 +23,7 @@ import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem } from '../services/personaService';
-import { fetchChatHistory, sendChatMessage } from '../services/chatService';
+import { fetchChatHistory, sendChatMessage, deleteChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 import { showAlert } from '../context/AlertContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -207,6 +207,20 @@ function EditIcon({ size = 12, color = '#FFFFFF' }: { size?: number; color?: str
   );
 }
 
+function TrashIcon({ size = 14, color = '#EF4444' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"
+        stroke={color}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 interface ChatMessage {
   id: string;
   sender: 'user' | 'bot';
@@ -271,6 +285,52 @@ export default function CompanionChatModal({
   const handleCancelEdit = () => {
     setEditingMessageId(null);
     setInputText('');
+  };
+
+  const handleDeleteMessage = (item: ChatMessage) => {
+    setActionMenuMessage(null);
+
+    showAlert(
+      'Delete Message',
+      'Are you sure you want to delete this message? This action cannot be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const previousMessages = [...messages];
+            setMessages((prev) => prev.filter((m) => m.id !== item.id));
+
+            try {
+              const uId = await resolveConversationUserId(user?.id);
+              const res = await deleteChatMessage(item.id, uId, user?.token);
+              if (!res.success) {
+                setMessages(previousMessages);
+                showAlert(
+                  'Delete Failed',
+                  res.error || 'Could not delete message. Please try again.',
+                  [{ text: 'OK', style: 'primary' }],
+                  'danger'
+                );
+              }
+            } catch (err: any) {
+              setMessages(previousMessages);
+              showAlert(
+                'Delete Failed',
+                err?.message || 'Network error while deleting message.',
+                [{ text: 'OK', style: 'primary' }],
+                'danger'
+              );
+            }
+          },
+        },
+      ],
+      'warning'
+    );
   };
 
   // Spin animation for retry icon during message sending
@@ -685,15 +745,13 @@ export default function CompanionChatModal({
                 ]}
               >
                 <TouchableOpacity
-                  activeOpacity={isLastUserMsg ? 0.88 : 1}
+                  activeOpacity={0.88}
                   delayLongPress={260}
                   onLongPress={() => {
-                    if (isLastUserMsg) {
-                      try {
-                        Vibration.vibrate(25);
-                      } catch {}
-                      setActionMenuMessage(item);
-                    }
+                    try {
+                      Vibration.vibrate(25);
+                    } catch {}
+                    setActionMenuMessage(item);
                   }}
                   onPress={() => {
                     if (isLastUserMsg && item.isFailed) {
@@ -819,22 +877,37 @@ export default function CompanionChatModal({
             activeOpacity={1}
             onPress={() => setActionMenuMessage(null)}
           >
-            <View style={styles.igOverlayContent} onStartShouldSetResponder={() => true}>
+            <View
+              style={[
+                styles.igOverlayContent,
+                actionMenuMessage?.sender === 'bot' && styles.igOverlayContentBot,
+              ]}
+              onStartShouldSetResponder={() => true}
+            >
               {/* Spotlighted bubble preview */}
               {actionMenuMessage && (
                 <View style={styles.igPreviewBubbleWrapper}>
                   <View
                     style={[
                       styles.bubbleContainer,
-                      styles.userBubble,
-                      { backgroundColor: borderColor },
+                      actionMenuMessage.sender === 'user'
+                        ? [styles.userBubble, { backgroundColor: borderColor }]
+                        : styles.botBubble,
                       styles.igElevatedBubble,
                     ]}
                   >
                     <MarkdownText
                       content={actionMenuMessage.text}
-                      style={styles.userBubbleText}
-                      actionStyle={styles.userActionText}
+                      style={
+                        actionMenuMessage.sender === 'user'
+                          ? styles.userBubbleText
+                          : styles.botBubbleText
+                      }
+                      actionStyle={
+                        actionMenuMessage.sender === 'user'
+                          ? styles.userActionText
+                          : styles.botActionText
+                      }
                     />
                     <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
                       {actionMenuMessage.isFailed && (
@@ -843,7 +916,14 @@ export default function CompanionChatModal({
                           <Text style={styles.failedText}>Failed</Text>
                         </View>
                       )}
-                      <Text style={[styles.bubbleTimestamp, styles.userTimestampText]}>
+                      <Text
+                        style={[
+                          styles.bubbleTimestamp,
+                          actionMenuMessage.sender === 'user'
+                            ? styles.userTimestampText
+                            : styles.botTimestampText,
+                        ]}
+                      >
                         {actionMenuMessage.timestamp}
                       </Text>
                     </View>
@@ -854,48 +934,74 @@ export default function CompanionChatModal({
               {/* Floating Instagram Action Menu Card */}
               {actionMenuMessage && (
                 <View style={styles.igActionCard}>
+                  {actionMenuMessage.sender === 'user' && (
+                    <>
+                      <TouchableOpacity
+                        style={styles.igActionRow}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          const msg = actionMenuMessage;
+                          setActionMenuMessage(null);
+                          handleStartEdit(msg);
+                        }}
+                        disabled={isTyping}
+                      >
+                        <View style={styles.igActionRowLeft}>
+                          <View style={styles.igActionIconCircle}>
+                            <EditIcon size={14} color="#FFFFFF" />
+                          </View>
+                          <Text style={styles.igActionText}>Edit</Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={styles.igActionDivider} />
+
+                      <TouchableOpacity
+                        style={styles.igActionRow}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          const textToSend = actionMenuMessage.text;
+                          const msgId = actionMenuMessage.id;
+                          setActionMenuMessage(null);
+                          handleSend(textToSend, msgId);
+                        }}
+                        disabled={isTyping}
+                      >
+                        <View style={styles.igActionRowLeft}>
+                          <View
+                            style={[
+                              styles.igActionIconCircle,
+                              actionMenuMessage.isFailed && styles.igActionIconCircleFailed,
+                            ]}
+                          >
+                            <RetryIcon size={14} color="#FFFFFF" />
+                          </View>
+                          <Text style={styles.igActionText}>
+                            {actionMenuMessage.isFailed ? 'Retry Message' : 'Resend'}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={styles.igActionDivider} />
+                    </>
+                  )}
+
+                  {/* Delete Action (Available for both user and bot messages) */}
                   <TouchableOpacity
                     style={styles.igActionRow}
                     activeOpacity={0.7}
                     onPress={() => {
                       const msg = actionMenuMessage;
-                      setActionMenuMessage(null);
-                      handleStartEdit(msg);
+                      handleDeleteMessage(msg);
                     }}
                     disabled={isTyping}
                   >
                     <View style={styles.igActionRowLeft}>
-                      <View style={styles.igActionIconCircle}>
-                        <EditIcon size={14} color="#FFFFFF" />
+                      <View style={[styles.igActionIconCircle, styles.igActionIconCircleDelete]}>
+                        <TrashIcon size={14} color="#EF4444" />
                       </View>
-                      <Text style={styles.igActionText}>Edit</Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  <View style={styles.igActionDivider} />
-
-                  <TouchableOpacity
-                    style={styles.igActionRow}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      const textToSend = actionMenuMessage.text;
-                      const msgId = actionMenuMessage.id;
-                      setActionMenuMessage(null);
-                      handleSend(textToSend, msgId);
-                    }}
-                    disabled={isTyping}
-                  >
-                    <View style={styles.igActionRowLeft}>
-                      <View
-                        style={[
-                          styles.igActionIconCircle,
-                          actionMenuMessage.isFailed && styles.igActionIconCircleFailed,
-                        ]}
-                      >
-                        <RetryIcon size={14} color="#FFFFFF" />
-                      </View>
-                      <Text style={styles.igActionText}>
-                        {actionMenuMessage.isFailed ? 'Retry Message' : 'Resend'}
+                      <Text style={[styles.igActionText, styles.igActionTextDelete]}>
+                        Delete Message
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -1191,6 +1297,9 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'flex-end',
   },
+  igOverlayContentBot: {
+    alignItems: 'flex-start',
+  },
   igPreviewBubbleWrapper: {
     maxWidth: '85%',
     marginBottom: 10,
@@ -1238,11 +1347,17 @@ const styles = StyleSheet.create({
   igActionIconCircleFailed: {
     backgroundColor: 'rgba(239, 68, 68, 0.2)',
   },
+  igActionIconCircleDelete: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+  },
   igActionText: {
     fontSize: 14.5,
     fontWeight: '600',
     color: '#FFFFFF',
     letterSpacing: 0.2,
+  },
+  igActionTextDelete: {
+    color: '#EF4444',
   },
   igActionDivider: {
     height: 1,
