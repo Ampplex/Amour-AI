@@ -24,9 +24,61 @@ export interface PersonaItem {
 }
 
 const BASE_STORAGE_KEY = '@amour_personas_roster_v4';
+const CUSTOM_STORAGE_KEY = '@amour_persona_user_customizations_v1';
 
 function getStorageKey(userId?: string): string {
   return userId ? `${BASE_STORAGE_KEY}_${userId}` : BASE_STORAGE_KEY;
+}
+
+function getCustomStorageKey(userId?: string): string {
+  return userId ? `${CUSTOM_STORAGE_KEY}_${userId}` : CUSTOM_STORAGE_KEY;
+}
+
+/**
+ * Retrieve all per-user persona customizations (backstory, greeting, etc.).
+ * Ensures that edits to public personas are isolated strictly to this user.
+ */
+export async function getPersonaCustomizations(userId?: string): Promise<Record<string, Partial<PersonaItem>>> {
+  const key = getCustomStorageKey(userId);
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn('[PersonaService] Customization read error:', err);
+  }
+  return {};
+}
+
+/**
+ * Get customization for a specific persona for this user.
+ */
+export async function getPersonaCustomization(personaId: string, userId?: string): Promise<Partial<PersonaItem> | null> {
+  const customs = await getPersonaCustomizations(userId);
+  return customs[personaId] || null;
+}
+
+/**
+ * Persist per-user customization for a specific persona.
+ */
+export async function savePersonaCustomization(
+  personaId: string,
+  updates: Partial<PersonaItem>,
+  userId?: string
+): Promise<void> {
+  const key = getCustomStorageKey(userId);
+  try {
+    const customs = await getPersonaCustomizations(userId);
+    customs[personaId] = {
+      ...(customs[personaId] || {}),
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    await AsyncStorage.setItem(key, JSON.stringify(customs));
+  } catch (err) {
+    console.warn('[PersonaService] Customization save error:', err);
+  }
 }
 
 type PersonaListener = (personas: PersonaItem[]) => void;
@@ -210,6 +262,9 @@ export async function updatePersonaMemory(
   updates: { memory_prompt?: string; greeting?: string; name?: string; tagline?: string },
   userId?: string
 ): Promise<PersonaItem | null> {
+  // 1. Always save to user's private persona customizations so it persists isolated to this user
+  await savePersonaCustomization(id, updates, userId);
+
   const storageKey = getStorageKey(userId);
   const current = await getStoredPersonas(userId);
   let updatedPersona: PersonaItem | null = null;
@@ -244,9 +299,11 @@ export async function updatePersonaMemory(
     if (res && res.ok) {
       const serverUpdated: PersonaItem = await res.json();
       if (serverUpdated && serverUpdated.id) {
-        const finalUpdated = updatedList.map((p) => (p.id === id ? serverUpdated : p));
-        await AsyncStorage.setItem(storageKey, JSON.stringify(finalUpdated));
-        notifyListeners(finalUpdated);
+        if (updatedPersona) {
+          const finalUpdated = updatedList.map((p) => (p.id === id ? serverUpdated : p));
+          await AsyncStorage.setItem(storageKey, JSON.stringify(finalUpdated));
+          notifyListeners(finalUpdated);
+        }
         return serverUpdated;
       }
     }
@@ -254,7 +311,87 @@ export async function updatePersonaMemory(
     console.warn('[PersonaService] Server memory update notice:', err);
   }
 
-  return updatedPersona;
+  return (
+    updatedPersona ||
+    ({
+      id,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    } as any)
+  );
+}
+
+/**
+ * Updates the canonical PUBLIC persona details in PostgreSQL.
+ * Restricted to the owner/creator of the persona.
+ * Propagates changes across the public community feed and all users.
+ */
+export async function updatePublicPersonaDetails(
+  id: string,
+  updates: {
+    name?: string;
+    tagline?: string;
+    greeting?: string;
+    memory_prompt?: string;
+    border_color?: string;
+    age?: number;
+  },
+  userId?: string
+): Promise<{ success: boolean; persona?: PersonaItem; error?: string }> {
+  // 1. Update local storage roster
+  const storageKey = getStorageKey(userId);
+  const current = await getStoredPersonas(userId);
+  let updatedPersona: PersonaItem | null = null;
+  const updatedList = current.map((p) => {
+    if (p.id === id) {
+      updatedPersona = {
+        ...p,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+      return updatedPersona;
+    }
+    return p;
+  });
+  if (updatedPersona) {
+    await AsyncStorage.setItem(storageKey, JSON.stringify(updatedList));
+    notifyListeners(updatedList);
+  }
+
+  // 2. Also update per-user private customization for the owner
+  await savePersonaCustomization(id, updates, userId);
+
+  // 3. Send explicit public edit to backend API
+  try {
+    const res = await tryServerFetch(`/memory/personas/${id}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...updates,
+        user_id: userId,
+        is_public_edit: true,
+      }),
+    });
+    if (res && res.ok) {
+      const serverUpdated: PersonaItem = await res.json();
+      if (serverUpdated && serverUpdated.id) {
+        if (updatedPersona) {
+          const finalUpdated = updatedList.map((p) => (p.id === id ? serverUpdated : p));
+          await AsyncStorage.setItem(storageKey, JSON.stringify(finalUpdated));
+          notifyListeners(finalUpdated);
+        }
+        return { success: true, persona: serverUpdated };
+      }
+    } else if (res) {
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err?.error || `HTTP ${res.status}` };
+    }
+  } catch (err: any) {
+    console.warn('[PersonaService] Server public update error:', err);
+    return { success: false, error: err?.message || 'Network error' };
+  }
+
+  return { success: true, persona: updatedPersona || undefined };
 }
 
 export async function deletePersonaFromRoster(id: string, userId?: string): Promise<void> {

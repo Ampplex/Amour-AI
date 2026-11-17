@@ -189,3 +189,31 @@ class UserMemoryKeyBackup(models.Model):
     def __str__(self):
         return f"MemoryKeyBackup for {self.user_identifier}"
 
+
+class UserPersonaCustomization(models.Model):
+    """
+    Stores per-user customized persona details (backstory, greeting, personality)
+    when a user edits a publicly published or community persona.
+    Ensures that edits reflect ONLY to the user who made them, and never overwrite
+    the public persona for other users.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_identifier = models.CharField(max_length=128, db_index=True)
+    persona_identifier = models.CharField(max_length=128, db_index=True)
+    custom_name = models.CharField(max_length=120, blank=True, default="")
+    custom_tagline = models.CharField(max_length=255, blank=True, default="")
+    custom_greeting = models.TextField(blank=True, default="")
+    custom_memory_prompt = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user_identifier", "persona_identifier")
+        indexes = [
+            models.Index(fields=["user_identifier", "persona_identifier"]),
+        ]
+
+    def __str__(self):
+        return f"UserPersonaCustomization({self.user_identifier} -> {self.persona_identifier})"
+
+

@@ -438,12 +438,30 @@ class ChatMemoryView(APIView):
                 pass
 
         # Fetch relationship conflict state from database for this specific user & persona
-        from .models import PersonaRelationshipState
+        from .models import PersonaRelationshipState, UserPersonaCustomization
         rel_state, _ = PersonaRelationshipState.objects.get_or_create(
             user_identifier=str(user_id),
             persona_identifier=str(persona_id),
         )
         current_conflict_stage = rel_state.conflict_stage
+
+        # Override persona personality & greeting with per-user customization if one exists
+        try:
+            user_custom = UserPersonaCustomization.objects.filter(
+                user_identifier=str(user_id),
+                persona_identifier=str(persona_id),
+            ).first()
+            if user_custom:
+                if user_custom.custom_greeting:
+                    greeting = user_custom.custom_greeting
+                if user_custom.custom_memory_prompt:
+                    memory_prompt = user_custom.custom_memory_prompt
+                if user_custom.custom_name:
+                    persona_name = user_custom.custom_name
+                if user_custom.custom_tagline:
+                    persona_tagline = user_custom.custom_tagline
+        except Exception as exc:
+            logger.warning("Error checking user persona customization: %s", exc)
 
         # Fetch the last six messages from PostgreSQL for immediate conversational continuity.
         exclude_turn_ids = []
@@ -1568,38 +1586,170 @@ class PersonaDetailView(APIView):
     """
     Retrieves, updates, or deletes a single persona from the database.
     When memory_prompt or greeting is edited, the updated memory is stored into Reeve.
+    If a public/community persona is edited by a user other than the original creator,
+    edits are stored per-user in UserPersonaCustomization so they NEVER overwrite
+    the public persona for everyone else.
     """
     permission_classes = [AllowAny]
 
     def get(self, request, persona_id):
-        from .models import Persona
+        from .models import Persona, UserPersonaCustomization
         from .serializers import PersonaSerializer
 
         try:
             persona = Persona.objects.get(id=persona_id)
-            return Response(PersonaSerializer(persona).data)
         except Persona.DoesNotExist:
             return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        data = PersonaSerializer(persona).data
+        user_id = request.query_params.get("user_id") or (str(request.user.id) if (request.user and request.user.is_authenticated) else None)
+        if user_id:
+            custom = UserPersonaCustomization.objects.filter(
+                user_identifier=str(user_id),
+                persona_identifier=str(persona.id),
+            ).first()
+            if custom:
+                if custom.custom_greeting:
+                    data["greeting"] = custom.custom_greeting
+                if custom.custom_memory_prompt:
+                    data["memory_prompt"] = custom.custom_memory_prompt
+                if custom.custom_name:
+                    data["name"] = custom.custom_name
+                if custom.custom_tagline:
+                    data["tagline"] = custom.custom_tagline
+                data["is_customized_by_user"] = True
+
+        return Response(data, status=status.HTTP_200_OK)
 
     def patch(self, request, persona_id):
-        from .models import Persona
+        from .models import Persona, UserPersonaCustomization
         from .serializers import PersonaSerializer
+        from .reeve_service import store_memory_for_user
 
         try:
             persona = Persona.objects.get(id=persona_id)
         except Persona.DoesNotExist:
             return Response({"error": "Persona not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        user_id = (
+            str(request.user.id)
+            if (request.user and request.user.is_authenticated)
+            else (request.data.get("user_id") or request.query_params.get("user_id") or "").strip()
+        )
+        is_creator = False
+        if user_id:
+            if persona.creator and str(persona.creator.id) == str(user_id):
+                is_creator = True
+            elif getattr(persona, "creator_id", None) and str(persona.creator_id) == str(user_id):
+                is_creator = True
+            elif persona.creator is None:
+                # If persona creator was not recorded on creation, treat user as owner
+                is_creator = True
+
+        is_public_or_community = bool(persona.is_community or persona.visibility == "public")
+        is_public_edit = bool(request.data.get("is_public_edit"))
+
+        # ---------------------------------------------------------------------
+        # CASE 1: Explicit edit of the CANONICAL PUBLIC version by the owner
+        # This updates the public Persona record in PostgreSQL visible to all users.
+        # ---------------------------------------------------------------------
+        if is_public_edit:
+            if not is_creator and not (request.user and request.user.is_staff):
+                return Response(
+                    {"error": "Unauthorized: Only the persona creator can edit the public version."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            serializer = PersonaSerializer(persona, data=request.data, partial=True)
+            if serializer.is_valid():
+                updated_persona = serializer.save()
+
+                memory_prompt = request.data.get("memory_prompt")
+                greeting = request.data.get("greeting")
+                if memory_prompt or greeting:
+                    clean_user_id = str(user_id or "creator").strip().replace(":", "_").replace("/", "_")
+                    clean_persona_id = str(persona.id).strip().replace(":", "_").replace("/", "_")
+                    namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+                    user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or request.query_params.get("user_key") or "").strip() or None
+                    try:
+                        summary_text = (
+                            f"Persona Profile for {updated_persona.name}: "
+                            f"Backstory & Memory: {updated_persona.memory_prompt}. "
+                            f"First message script: {updated_persona.greeting}"
+                        )
+                        store_memory_for_user(summary_text, namespace, user_key=user_key)
+                    except Exception:
+                        pass
+
+                logger.info("Updated canonical public Persona id=%s by owner user=%s", persona.id, user_id)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # ---------------------------------------------------------------------
+        # CASE 2: Persona is public/community and user is NOT original creator,
+        # isolate the edit strictly to THIS user using UserPersonaCustomization.
+        # DO NOT modify the global Persona record for other users!
+        # ---------------------------------------------------------------------
+        if is_public_or_community and not is_creator:
+            clean_user_id = str(user_id or "guest").strip().replace(":", "_").replace("/", "_")
+            clean_persona_id = str(persona.id).strip().replace(":", "_").replace("/", "_")
+            namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
+            user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or request.query_params.get("user_key") or "").strip() or None
+
+            custom, _ = UserPersonaCustomization.objects.get_or_create(
+                user_identifier=str(user_id or "guest"),
+                persona_identifier=str(persona.id),
+            )
+            if "greeting" in request.data:
+                custom.custom_greeting = (request.data.get("greeting") or "").strip()
+            if "memory_prompt" in request.data:
+                custom.custom_memory_prompt = (request.data.get("memory_prompt") or "").strip()
+            if "name" in request.data:
+                custom.custom_name = (request.data.get("name") or "").strip()
+            if "tagline" in request.data:
+                custom.custom_tagline = (request.data.get("tagline") or "").strip()
+            custom.save()
+
+            eff_name = custom.custom_name or persona.name
+            eff_memory = custom.custom_memory_prompt or persona.memory_prompt
+            eff_greeting = custom.custom_greeting or persona.greeting
+
+            # Ingest updated memory into Reeve for THIS user's private namespace
+            try:
+                summary_text = (
+                    f"Persona Profile for {eff_name}: "
+                    f"Backstory & Memory: {eff_memory}. "
+                    f"First message script: {eff_greeting}"
+                )
+                store_memory_for_user(summary_text, namespace, user_key=user_key)
+            except Exception as exc:
+                logger.warning("Could not sync Reeve memory for customized persona: %s", exc)
+
+            resp_data = PersonaSerializer(persona).data
+            if custom.custom_greeting:
+                resp_data["greeting"] = custom.custom_greeting
+            if custom.custom_memory_prompt:
+                resp_data["memory_prompt"] = custom.custom_memory_prompt
+            if custom.custom_name:
+                resp_data["name"] = custom.custom_name
+            if custom.custom_tagline:
+                resp_data["tagline"] = custom.custom_tagline
+            resp_data["is_customized_by_user"] = True
+
+            logger.info("Saved user-isolated persona customization for user=%s persona=%s", user_id, persona.id)
+            return Response(resp_data, status=status.HTTP_200_OK)
+
+        # ---------------------------------------------------------------------
+        # CASE 3: Creator editing their own private persona -> updates base Persona record
+        # ---------------------------------------------------------------------
         serializer = PersonaSerializer(persona, data=request.data, partial=True)
         if serializer.is_valid():
             updated_persona = serializer.save()
 
-            # If memory_prompt or greeting was updated, ingest it into Reeve for this user's persona namespace
             memory_prompt = request.data.get("memory_prompt")
             greeting = request.data.get("greeting")
             if memory_prompt or greeting:
-                user_id = request.user.id if (request.user and request.user.is_authenticated) else request.data.get("user_id", "guest")
-                clean_user_id = str(user_id).strip().replace(":", "_").replace("/", "_")
+                clean_user_id = str(user_id or "guest").strip().replace(":", "_").replace("/", "_")
                 clean_persona_id = str(persona.id).strip().replace(":", "_").replace("/", "_")
                 namespace = f"usr_{clean_user_id}_persona_{clean_persona_id}"
                 user_key = (request.headers.get("X-Memory-User-Key") or request.data.get("user_key") or request.query_params.get("user_key") or "").strip() or None

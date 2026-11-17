@@ -18,7 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
-import { PersonaItem, updatePersonaMemory } from '../services/personaService';
+import { PersonaItem, updatePersonaMemory, getPersonaCustomization } from '../services/personaService';
 import { useAuth } from '../context/AuthContext';
 
 const { width, height } = Dimensions.get('window');
@@ -233,12 +233,20 @@ export default function PersonaDetailModal({
 
   useEffect(() => {
     if (persona) {
-      setActivePersona(persona);
-      setGreetingText(persona.greeting || '');
-      setMemoryText(persona.memory_prompt || '');
+      let isMounted = true;
+      getPersonaCustomization(persona.id, user?.id).then((custom) => {
+        if (!isMounted) return;
+        const merged = custom ? { ...persona, ...custom } : persona;
+        setActivePersona(merged);
+        setGreetingText(merged.greeting || '');
+        setMemoryText(merged.memory_prompt || '');
+      });
       setIsEditing(false);
+      return () => {
+        isMounted = false;
+      };
     }
-  }, [persona?.id, visible]);
+  }, [persona?.id, visible, user?.id]);
 
   if (!visible && !modalVisible) return null;
   if (!activePersona) return null;

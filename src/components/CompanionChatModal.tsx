@@ -22,7 +22,7 @@ import Svg, { Path, Circle } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
-import { PersonaItem } from '../services/personaService';
+import { PersonaItem, getPersonaCustomization } from '../services/personaService';
 import { fetchChatHistory, sendChatMessage, deleteChatMessage, switchChatMessageVariant, editBotChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 import { showAlert } from '../context/AlertContext';
@@ -707,6 +707,11 @@ export default function CompanionChatModal({
     }
 
     setActivePersona(persona);
+    getPersonaCustomization(persona.id, user?.id).then((custom) => {
+      if (custom) {
+        setActivePersona((prev) => (prev ? { ...prev, ...custom } : persona));
+      }
+    });
     setMessages([]);
     setEditingMessageId(null);
     setActionMenuMessage(null);

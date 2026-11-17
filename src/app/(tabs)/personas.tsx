@@ -20,6 +20,7 @@ import MarkdownText from '../../components/MarkdownText';
 import { showAlert } from '../../context/AlertContext';
 import PersonaDetailModal from '../../components/PersonaDetailModal';
 import CompanionChatModal from '../../components/CompanionChatModal';
+import EditPublicPersonaModal from '../../components/EditPublicPersonaModal';
 import {
   PersonaItem,
   getStoredPersonas,
@@ -70,10 +71,32 @@ function MessageIcon({ size = 15, color = '#FFFFFF' }: { size?: number; color?: 
   );
 }
 
+function EditIcon({ size = 13, color = '#F43F5E' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 export default function PersonasScreen() {
   const { user } = useAuth();
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [selectedPersona, setSelectedPersona] = useState<PersonaItem | null>(null);
+  const [editingPublicPersona, setEditingPublicPersona] = useState<PersonaItem | null>(null);
   const [activeChatPersona, setActiveChatPersona] = useState<PersonaItem | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -242,6 +265,17 @@ export default function PersonasScreen() {
 
         {/* Action Bar */}
         <View style={styles.cardActions}>
+          {!isPrivate && (
+            <TouchableOpacity
+              style={styles.editPublicBtn}
+              onPress={() => setEditingPublicPersona(item)}
+              activeOpacity={0.8}
+            >
+              <EditIcon size={13} color="#F43F5E" />
+              <Text style={styles.editPublicBtnText}>Edit Public Version</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={styles.detailsBtn}
             onPress={() => setSelectedPersona(item)}
@@ -368,6 +402,18 @@ export default function PersonasScreen() {
         }}
         onDelete={handleDelete}
       />
+
+      {/* Owner Public Persona Editor */}
+      {editingPublicPersona && (
+        <EditPublicPersonaModal
+          visible={Boolean(editingPublicPersona)}
+          persona={editingPublicPersona}
+          onClose={() => setEditingPublicPersona(null)}
+          onSuccess={(updated) => {
+            setPersonas((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+          }}
+        />
+      )}
 
       {/* Real Interactive Chat Modal */}
       <CompanionChatModal
@@ -551,9 +597,29 @@ const styles = StyleSheet.create({
   },
   cardActions: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'flex-end',
+    flexWrap: 'wrap',
     marginTop: 14,
     gap: 8,
+  },
+  editPublicBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: 'rgba(244, 63, 94, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(244, 63, 94, 0.4)',
+    justifyContent: 'center',
+  },
+  editPublicBtnText: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 12.5,
+    color: '#F43F5E',
+    letterSpacing: 0.3,
   },
   detailsBtn: {
     paddingHorizontal: 14,
