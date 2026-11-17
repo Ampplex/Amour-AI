@@ -18,7 +18,8 @@ import {
   Vibration,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path, Circle, Rect } from 'react-native-svg';
+import * as Clipboard from 'expo-clipboard';
 import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
@@ -264,6 +265,28 @@ function TrashIcon({ size = 14, color = '#EF4444' }: { size?: number; color?: st
   );
 }
 
+function CopyIcon({ size = 14, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect
+        x="9"
+        y="9"
+        width="13"
+        height="13"
+        rx="2"
+        ry="2"
+        stroke={color}
+        strokeWidth="2"
+      />
+      <Path
+        d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+        stroke={color}
+        strokeWidth="2"
+      />
+    </Svg>
+  );
+}
+
 interface ChatMessage {
   id: string;
   sender: 'user' | 'bot';
@@ -316,6 +339,7 @@ export default function CompanionChatModal({
   const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [actionMenuMessage, setActionMenuMessage] = useState<ChatMessage | null>(null);
+  const [copiedToast, setCopiedToast] = useState<boolean>(false);
   const flatListRef = useRef<FlatList>(null);
   const chatInputRef = useRef<any>(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
@@ -366,6 +390,22 @@ export default function CompanionChatModal({
   const handleCancelEdit = () => {
     setEditingMessageId(null);
     setInputText('');
+  };
+
+  const handleCopyMessage = async (text: string) => {
+    setActionMenuMessage(null);
+    try {
+      await Clipboard.setStringAsync(text);
+      try {
+        Vibration.vibrate(20);
+      } catch {}
+      setCopiedToast(true);
+      setTimeout(() => {
+        setCopiedToast(false);
+      }, 2000);
+    } catch (err) {
+      console.warn('Failed to copy to clipboard', err);
+    }
   };
 
   const handleSaveEditedBotResponse = async (msgId: string, newText: string) => {
@@ -991,10 +1031,6 @@ export default function CompanionChatModal({
                   <Text style={styles.headerInfoText}>i</Text>
                 </View>
               </View>
-              <View style={styles.statusRow}>
-                <View style={styles.onlineDot} />
-                <Text style={styles.headerStatusText}>Online · Details</Text>
-              </View>
             </TouchableOpacity>
           </View>
 
@@ -1359,7 +1395,14 @@ export default function CompanionChatModal({
           </View>
         </View>
 
-        {/* Instagram-style Message Action Modal */}
+        {/* Copied Toast Banner */}
+        {copiedToast && (
+          <View style={styles.copiedToastBadge}>
+            <Text style={styles.copiedToastText}>Copied to clipboard</Text>
+          </View>
+        )}
+
+        {/* Floating Message Action Modal - Options Only, No Floating Message */}
         <Modal
           visible={Boolean(actionMenuMessage)}
           transparent={true}
@@ -1372,181 +1415,149 @@ export default function CompanionChatModal({
             activeOpacity={1}
             onPress={() => setActionMenuMessage(null)}
           >
-            <View
-              style={[
-                styles.igOverlayContent,
-                actionMenuMessage?.sender === 'bot' && styles.igOverlayContentBot,
-              ]}
-              onStartShouldSetResponder={() => true}
-            >
-              {/* Spotlighted bubble preview */}
-              {actionMenuMessage && (
-                <View style={styles.igPreviewBubbleWrapper}>
-                  <View
-                    style={[
-                      styles.bubbleContainer,
-                      actionMenuMessage.sender === 'user'
-                        ? styles.userBubble
-                        : [styles.botBubble, styles.igBotPreviewBubble],
-                      styles.igElevatedBubble,
-                    ]}
-                  >
-                    <MarkdownText
-                      content={actionMenuMessage.text}
-                      style={
-                        actionMenuMessage.sender === 'user'
-                          ? styles.userBubbleText
-                          : styles.botBubbleText
-                      }
-                      actionStyle={
-                        actionMenuMessage.sender === 'user'
-                          ? styles.userActionText
-                          : styles.botActionText
-                      }
-                    />
-                    <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
-                      {actionMenuMessage.isFailed && (
-                        <View style={styles.failedIndicatorRow}>
-                          <View style={styles.failedDot} />
-                          <Text style={styles.failedText}>Failed</Text>
-                        </View>
-                      )}
-                      <Text
-                        style={[
-                          styles.bubbleTimestamp,
-                          actionMenuMessage.sender === 'user'
-                            ? styles.userTimestampText
-                            : styles.botTimestampText,
-                        ]}
-                      >
-                        {actionMenuMessage.timestamp}
-                      </Text>
+            {actionMenuMessage && (
+              <View
+                style={styles.igActionCard}
+                onStartShouldSetResponder={() => true}
+              >
+                {/* 1. Copy Option (Available for BOTH User message & Bot response) */}
+                <TouchableOpacity
+                  style={styles.igActionRow}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    const textToCopy = actionMenuMessage.text;
+                    handleCopyMessage(textToCopy);
+                  }}
+                >
+                  <View style={styles.igActionRowLeft}>
+                    <View style={styles.igActionIconCircle}>
+                      <CopyIcon size={14} color="#FFFFFF" />
                     </View>
+                    <Text style={styles.igActionText}>Copy</Text>
                   </View>
-                </View>
-              )}
+                </TouchableOpacity>
 
-              {/* Floating Instagram Action Menu Card */}
-              {actionMenuMessage && (
-                <View style={styles.igActionCard}>
-                  {actionMenuMessage.sender === 'user' && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.igActionRow}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          const msg = actionMenuMessage;
-                          setActionMenuMessage(null);
-                          handleStartEdit(msg);
-                        }}
-                        disabled={isTyping}
-                      >
-                        <View style={styles.igActionRowLeft}>
-                          <View style={styles.igActionIconCircle}>
-                            <EditIcon size={14} color="#FFFFFF" />
-                          </View>
-                          <Text style={styles.igActionText}>Edit</Text>
+                <View style={styles.igActionDivider} />
+
+                {/* 2. User-specific actions */}
+                {actionMenuMessage.sender === 'user' && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.igActionRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const msg = actionMenuMessage;
+                        setActionMenuMessage(null);
+                        handleStartEdit(msg);
+                      }}
+                      disabled={isTyping}
+                    >
+                      <View style={styles.igActionRowLeft}>
+                        <View style={styles.igActionIconCircle}>
+                          <EditIcon size={14} color="#FFFFFF" />
                         </View>
-                      </TouchableOpacity>
-
-                      <View style={styles.igActionDivider} />
-
-                      <TouchableOpacity
-                        style={styles.igActionRow}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          const textToSend = actionMenuMessage.text;
-                          const msgId = actionMenuMessage.id;
-                          setActionMenuMessage(null);
-                          handleSend(textToSend, msgId);
-                        }}
-                        disabled={isTyping}
-                      >
-                        <View style={styles.igActionRowLeft}>
-                          <View
-                            style={[
-                              styles.igActionIconCircle,
-                              actionMenuMessage.isFailed && styles.igActionIconCircleFailed,
-                            ]}
-                          >
-                            <RetryIcon size={14} color="#FFFFFF" />
-                          </View>
-                          <Text style={styles.igActionText}>
-                            {actionMenuMessage.isFailed ? 'Retry Message' : 'Resend'}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-
-                      <View style={styles.igActionDivider} />
-                    </>
-                  )}
-
-                  {actionMenuMessage.sender === 'bot' && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.igActionRow}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          const botMsg = actionMenuMessage;
-                          setActionMenuMessage(null);
-                          handleStartEdit(botMsg);
-                        }}
-                        disabled={isTyping}
-                      >
-                        <View style={styles.igActionRowLeft}>
-                          <View style={styles.igActionIconCircle}>
-                            <EditIcon size={14} color="#FFFFFF" />
-                          </View>
-                          <Text style={styles.igActionText}>Edit Response</Text>
-                        </View>
-                      </TouchableOpacity>
-
-                      <View style={styles.igActionDivider} />
-
-                      <TouchableOpacity
-                        style={styles.igActionRow}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          const botMsg = actionMenuMessage;
-                          setActionMenuMessage(null);
-                          handleRegenerateBotReply(botMsg);
-                        }}
-                        disabled={isTyping}
-                      >
-                        <View style={styles.igActionRowLeft}>
-                          <View style={styles.igActionIconCircle}>
-                            <RetryIcon size={14} color="#FFFFFF" />
-                          </View>
-                          <Text style={styles.igActionText}>Regenerate Response</Text>
-                        </View>
-                      </TouchableOpacity>
-
-                      <View style={styles.igActionDivider} />
-                    </>
-                  )}
-
-                  {/* Delete Action (Available for both user and bot messages) */}
-                  <TouchableOpacity
-                    style={styles.igActionRow}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      const msg = actionMenuMessage;
-                      handleDeleteMessage(msg);
-                    }}
-                    disabled={isTyping}
-                  >
-                    <View style={styles.igActionRowLeft}>
-                      <View style={[styles.igActionIconCircle, styles.igActionIconCircleDelete]}>
-                        <TrashIcon size={14} color="#EF4444" />
+                        <Text style={styles.igActionText}>Edit</Text>
                       </View>
-                      <Text style={[styles.igActionText, styles.igActionTextDelete]}>
-                        Delete Message
-                      </Text>
+                    </TouchableOpacity>
+
+                    <View style={styles.igActionDivider} />
+
+                    <TouchableOpacity
+                      style={styles.igActionRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const textToSend = actionMenuMessage.text;
+                        const msgId = actionMenuMessage.id;
+                        setActionMenuMessage(null);
+                        handleSend(textToSend, msgId);
+                      }}
+                      disabled={isTyping}
+                    >
+                      <View style={styles.igActionRowLeft}>
+                        <View
+                          style={[
+                            styles.igActionIconCircle,
+                            actionMenuMessage.isFailed && styles.igActionIconCircleFailed,
+                          ]}
+                        >
+                          <RetryIcon size={14} color="#FFFFFF" />
+                        </View>
+                        <Text style={styles.igActionText}>
+                          {actionMenuMessage.isFailed ? 'Retry Message' : 'Resend'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.igActionDivider} />
+                  </>
+                )}
+
+                {/* 3. Bot-specific actions */}
+                {actionMenuMessage.sender === 'bot' && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.igActionRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const botMsg = actionMenuMessage;
+                        setActionMenuMessage(null);
+                        handleStartEdit(botMsg);
+                      }}
+                      disabled={isTyping}
+                    >
+                      <View style={styles.igActionRowLeft}>
+                        <View style={styles.igActionIconCircle}>
+                          <EditIcon size={14} color="#FFFFFF" />
+                        </View>
+                        <Text style={styles.igActionText}>Edit Response</Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.igActionDivider} />
+
+                    <TouchableOpacity
+                      style={styles.igActionRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const botMsg = actionMenuMessage;
+                        setActionMenuMessage(null);
+                        handleRegenerateBotReply(botMsg);
+                      }}
+                      disabled={isTyping}
+                    >
+                      <View style={styles.igActionRowLeft}>
+                        <View style={styles.igActionIconCircle}>
+                          <RetryIcon size={14} color="#FFFFFF" />
+                        </View>
+                        <Text style={styles.igActionText}>Regenerate Response</Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.igActionDivider} />
+                  </>
+                )}
+
+                {/* 4. Delete Action (Available for both user and bot messages) */}
+                <TouchableOpacity
+                  style={styles.igActionRow}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    const msg = actionMenuMessage;
+                    handleDeleteMessage(msg);
+                  }}
+                  disabled={isTyping}
+                >
+                  <View style={styles.igActionRowLeft}>
+                    <View style={[styles.igActionIconCircle, styles.igActionIconCircleDelete]}>
+                      <TrashIcon size={14} color="#EF4444" />
                     </View>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
+                    <Text style={[styles.igActionText, styles.igActionTextDelete]}>
+                      Delete Message
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+            )}
           </TouchableOpacity>
         </Modal>
 
@@ -1679,23 +1690,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontStyle: 'italic',
     lineHeight: 12,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 2,
-  },
-  onlineDot: {
-    width: 6.5,
-    height: 6.5,
-    borderRadius: 3.5,
-    backgroundColor: '#10B981',
-  },
-  headerStatusText: {
-    fontSize: 11,
-    color: '#9CA3AF',
-    fontWeight: '500',
   },
   headerSpacer: {
     width: 38,
@@ -1981,45 +1975,42 @@ const styles = StyleSheet.create({
     color: '#FCA5A5',
     letterSpacing: 0.2,
   },
-  igOverlayBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  igOverlayContent: {
-    width: '100%',
-    alignItems: 'flex-end',
-  },
-  igOverlayContentBot: {
-    alignItems: 'flex-start',
-  },
-  igPreviewBubbleWrapper: {
-    maxWidth: '85%',
-    marginBottom: 10,
-  },
-  igBotPreviewBubble: {
-    backgroundColor: '#262628',
+  copiedToastBadge: {
+    position: 'absolute',
+    top: 70,
+    alignSelf: 'center',
+    backgroundColor: '#1E1E24',
+    borderColor: '#374151',
     borderWidth: 1,
-    borderColor: '#343438',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-  },
-  igElevatedBubble: {
+    paddingVertical: 9,
+    borderRadius: 20,
+    zIndex: 9999,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
     elevation: 10,
   },
+  copiedToastText: {
+    color: '#F9FAFB',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  igOverlayBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
   igActionCard: {
-    minWidth: 170,
-    backgroundColor: '#202022',
+    width: 220,
+    backgroundColor: '#1E1E22',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#2E2E32',
+    borderColor: '#2E2E34',
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
