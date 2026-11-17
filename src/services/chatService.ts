@@ -53,6 +53,7 @@ export interface SendMessagePayload {
   user_id?: string;
   user_name?: string;
   reply_length?: ReplyLengthOption;
+  is_autonomous_continue?: boolean;
 }
 
 export interface SendMessageResponse {

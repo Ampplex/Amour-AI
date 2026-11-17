@@ -38,6 +38,7 @@ def build_roleplay_system_prompt(
     has_history: bool = False,
     allow_user_name: bool = False,
     reply_length: str = "default",
+    is_autonomous_continue: bool = False,
 ) -> str:
     """Build a rich, single unified roleplay system prompt with anti-looping momentum."""
     time_str = get_bucketed_time_str(client_time, client_timezone)
@@ -106,7 +107,18 @@ def build_roleplay_system_prompt(
         "However, if the user or scene establishes a fictional time, era, or setting (e.g. midnight, 3 AM, dawn, or a historical period), "
         "ALWAYS adapt to and prioritize the fictional scene seamlessly without contradicting the user's roleplay timeline.\n\n"
     )
-    if current_message and current_message.strip():
+    if is_autonomous_continue or not (current_message and current_message.strip()):
+        user_sec += (
+            "--- ACTIVE SCENE MOMENTUM: USER SILENCE / TAKE THE LEAD ---\n"
+            "The user remained silent, chose not to speak, or prompted you to take the lead.\n\n"
+            "TAKE THE LEAD MANDATE:\n"
+            "1. PROACTIVE INITIATIVE: Do not stay passive. Do not ask 'Why aren't you answering?' or repeatedly ask 'Are you there?'.\n"
+            "2. ADVANCE THE MOMENT DECISIVELY:\n"
+            "   - If your previous message asked a question or offered a choice: Take the lead! Make the decision yourself, playfully tease them for hesitating or being lost in thought, or answer the question from your own perspective.\n"
+            "   - If in the middle of a scene or thought: Continue naturally with an action, observation, spontaneous thought, or advancing to the next logical step.\n"
+            "3. ZERO REPETITION: Never re-ask or rephrase the question you just asked. Drive the interaction forward to the next step naturally.\n\n"
+        )
+    elif current_message and current_message.strip():
         user_sec += (
             f"--- ACTIVE FOCUS: USER'S CURRENT MESSAGE ---\n"
             f"The user just said:\n"

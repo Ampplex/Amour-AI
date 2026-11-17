@@ -105,11 +105,13 @@ def generate_companion_reply(
     user_key: str = None,
     persist_exchange_to_memory: bool = True,
     reply_length: str = "default",
+    is_autonomous_continue: bool = False,
 ) -> dict:
     """
     Single-prompt AI persona response generation.
     Retrieves Reeve memory, formats the last 6 messages from PostgreSQL,
     and calls the LLM directly for rich, forward-moving roleplay.
+    Supports autonomous continue when the user remains silent or prompts the bot to take the lead.
     """
     user_clean_name = user_name.strip() if user_name else ""
     allow_name = should_allow_name_in_turn(
@@ -119,9 +121,13 @@ def generate_companion_reply(
     )
 
     # 1. Retrieve historical memory context from Reeve
+    memory_query = (message or "").strip()
+    if not memory_query:
+        memory_query = (conversation_history[-1].get("content") if conversation_history else greeting) or "conversation"
+
     try:
         raw_memory_context = retrieve_context_for_user(
-            message.strip(),
+            memory_query,
             namespace,
             user_key=user_key,
         ) or ""
@@ -145,10 +151,11 @@ def generate_companion_reply(
         client_time=client_time,
         client_timezone=client_timezone,
         memory_context=memory_context,
-        current_message=message.strip(),
+        current_message=(message or "").strip(),
         has_history=bool(conversation_history),
         allow_user_name=allow_name,
         reply_length=reply_length,
+        is_autonomous_continue=is_autonomous_continue,
     )
 
     # 3. Assemble messages: system prompt + last 4 messages as context + current message
@@ -160,7 +167,14 @@ def generate_companion_reply(
         if role in ("user", "assistant") and content and isinstance(content, str) and content.strip():
             messages.append({"role": role, "content": content.strip()})
 
-    messages.append({"role": "user", "content": message.strip()})
+    if is_autonomous_continue or not (message and message.strip()):
+        # Universal chat API compliance: end on user turn depicting observation / silence
+        messages.append({
+            "role": "user",
+            "content": "*remains silent, letting you continue and take the lead*",
+        })
+    else:
+        messages.append({"role": "user", "content": message.strip()})
 
     # 4. Direct LLM call with fallback model chain & generous token runways to eliminate truncation
     clean_length = (reply_length or "default").strip().lower()

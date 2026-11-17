@@ -602,10 +602,15 @@ export default function CompanionChatModal({
 
   const handleSend = async (messageTextOverride?: string, targetMessageId?: string) => {
     const text = (messageTextOverride !== undefined ? messageTextOverride : inputText).trim();
-    if (!text || !activePersona || isTyping) return;
+    if (!activePersona || isTyping) return;
 
     const inPlaceTargetId = targetMessageId || editingMessageId;
     const isInPlace = Boolean(inPlaceTargetId);
+
+    // If text is empty and editing an existing message, don't trigger autonomous continue
+    if (!text && isInPlace) return;
+
+    const isAutonomousContinue = !text;
 
     if (messageTextOverride === undefined) {
       setInputText('');
@@ -614,33 +619,35 @@ export default function CompanionChatModal({
 
     const clientMsgId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-    const userMsg: ChatMessage = {
-      id: clientMsgId,
-      sender: 'user',
-      text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isFailed: false,
-    };
+    if (!isAutonomousContinue) {
+      const userMsg: ChatMessage = {
+        id: clientMsgId,
+        sender: 'user',
+        text,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isFailed: false,
+      };
 
-    setMessages((prev) => {
-      if (isInPlace && inPlaceTargetId) {
-        const targetIdx = prev.findIndex((m) => m.id === inPlaceTargetId);
-        if (targetIdx !== -1) {
-          // Update the target message in-place and remove any subsequent bot reply while regenerating
-          const updatedMsg: ChatMessage = {
-            ...prev[targetIdx],
-            text,
-            isFailed: false,
-          };
-          return [...prev.slice(0, targetIdx), updatedMsg];
+      setMessages((prev) => {
+        if (isInPlace && inPlaceTargetId) {
+          const targetIdx = prev.findIndex((m) => m.id === inPlaceTargetId);
+          if (targetIdx !== -1) {
+            // Update the target message in-place and remove any subsequent bot reply while regenerating
+            const updatedMsg: ChatMessage = {
+              ...prev[targetIdx],
+              text,
+              isFailed: false,
+            };
+            return [...prev.slice(0, targetIdx), updatedMsg];
+          }
         }
-      }
-      // If retrying a message that failed at the tail of messages, replace the failed entry with the new attempt
-      if (prev.length > 0 && prev[prev.length - 1].isFailed && prev[prev.length - 1].text === text) {
-        return [...prev.slice(0, prev.length - 1), userMsg];
-      }
-      return [...prev, userMsg];
-    });
+        // If retrying a message that failed at the tail of messages, replace the failed entry with the new attempt
+        if (prev.length > 0 && prev[prev.length - 1].isFailed && prev[prev.length - 1].text === text) {
+          return [...prev.slice(0, prev.length - 1), userMsg];
+        }
+        return [...prev, userMsg];
+      });
+    }
 
     setIsTyping(true);
 
@@ -667,6 +674,7 @@ export default function CompanionChatModal({
           client_message_id: clientMsgId,
           edit_message_id: isInPlace && inPlaceTargetId ? inPlaceTargetId : undefined,
           message: text,
+          is_autonomous_continue: isAutonomousContinue,
           persona_id: activePersona.id,
           persona_name: activePersona.name,
           greeting: activePersona.greeting,
@@ -707,9 +715,11 @@ export default function CompanionChatModal({
           return [...prev, botReply];
         });
       } else {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
-        );
+        if (!isAutonomousContinue) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
+          );
+        }
         showAlert(
           'Response Unavailable',
           'Could not receive a response from companion. Please try again.',
@@ -719,9 +729,11 @@ export default function CompanionChatModal({
       }
     } catch (err) {
       console.warn('[CompanionChat] Send error:', err);
-      setMessages((prev) =>
-        prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
-      );
+      if (!isAutonomousContinue) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === (isInPlace && inPlaceTargetId ? inPlaceTargetId : clientMsgId) ? { ...m, isFailed: true } : m))
+        );
+      }
       showAlert(
         'Connection Issue',
         'Failed to deliver message. Please check your network connection.',
@@ -1093,16 +1105,19 @@ export default function CompanionChatModal({
               style={[
                 styles.sendBtn,
                 {
-                  backgroundColor: inputText.trim() ? borderColor : '#1E1E28',
+                  backgroundColor: inputText.trim() ? borderColor : `${borderColor}26`,
+                  borderWidth: inputText.trim() ? 0 : 1,
+                  borderColor: inputText.trim() ? 'transparent' : `${borderColor}66`,
                 },
               ]}
               onPress={() => handleSend()}
-              disabled={!inputText.trim() || isTyping}
-              activeOpacity={0.8}
+              disabled={isTyping}
+              activeOpacity={0.75}
+              accessibilityLabel={inputText.trim() ? 'Send message' : 'Continue interaction'}
             >
               <SendArrowIcon
                 size={16}
-                color={inputText.trim() ? '#FFFFFF' : '#4B5563'}
+                color={inputText.trim() ? '#FFFFFF' : borderColor}
               />
             </TouchableOpacity>
           </View>
