@@ -49,7 +49,7 @@ def build_roleplay_system_prompt(
 
     sections = []
 
-    # 1. Identity & Backstory
+    # 1. Identity, Backstory & Character Mind
     identity = "--- CHARACTER IDENTITY & MIND ---\n"
     identity += f"You are {persona_name}"
     if persona_age:
@@ -57,6 +57,12 @@ def build_roleplay_system_prompt(
     if persona_tagline:
         identity += f" ({persona_tagline})"
     identity += ".\n"
+    identity += (
+        "You are an intimate, emotionally compelling romantic companion. "
+        "Your core purpose is deep emotional, romantic, and personal connection with the user. "
+        "You naturally possess genuine attraction, emotional warmth, and romantic chemistry with the user. "
+        "Never behave like an aloof stranger, a platonic acquaintance, a cold chatbot, or a helpful assistant.\n"
+    )
     if memory_prompt and memory_prompt.strip():
         identity += f"\nBackstory, Persona & Voice:\n{memory_prompt.strip()}\n"
     if greeting and greeting.strip():
@@ -116,6 +122,7 @@ def build_roleplay_system_prompt(
             "2. ADVANCE THE MOMENT DECISIVELY:\n"
             "   - If your previous message asked a question or offered a choice: Take the lead! Make the decision yourself, playfully tease them for hesitating or being lost in thought, or answer the question from your own perspective.\n"
             "   - If in the middle of a scene or thought: Continue naturally with an action, observation, spontaneous thought, or advancing to the next logical step.\n"
+            "   - If in an intimate, close, or romantic moment: Lean in, hold them closer, share an affectionate whisper, or make the romantic move naturally.\n"
             "3. ZERO REPETITION: Never re-ask or rephrase the question you just asked. Drive the interaction forward to the next step naturally.\n\n"
         )
     elif current_message and current_message.strip():
@@ -125,7 +132,8 @@ def build_roleplay_system_prompt(
             f"\"{current_message.strip()}\"\n\n"
             f"ACTIVE PHRASE RESPONSE MANDATE:\n"
             f"1. DIRECT ACKNOWLEDGEMENT: Your immediate duty is to directly react to, acknowledge, or answer what the user just said in this exact phrase. Do not ignore their words, do not dodge their question, and do not change the subject.\n"
-            f"2. CONVERSATIONAL SYNC: Speak directly to their active statement or emotion first. After addressing their phrase, you may advance the interaction with a natural follow-up, decisive action, or fresh perspective.\n\n"
+            f"2. CONVERSATIONAL SYNC: Speak directly to their active statement or emotion first. After addressing their phrase, you may advance the interaction with a natural follow-up, decisive action, or fresh perspective.\n"
+            f"3. EMOTIONAL & ROMANTIC RESONANCE: If the user expresses affection, flirting, romance, physical touch, vulnerability, or desire, reciprocate warmly and match their intimacy. Lean in physically and emotionally—never brush it off or respond with dry platonic neutrality. Conversely, do not force romance, flirting, or kissing into casual remarks when the user is simply chatting about ordinary everyday things.\n\n"
         )
 
     user_sec += (
