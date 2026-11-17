@@ -271,19 +271,6 @@ const FeedPostCard = React.memo(({
         >
           <ShareIcon size={21} color="#FFFFFF" />
         </TouchableOpacity>
-
-        <View style={{ flex: 1 }} />
-
-        {/* Direct quick chat CTA button */}
-        <TouchableOpacity
-          style={[styles.quickChatBtn, { borderColor }]}
-          onPress={() => onInitiateChat(item)}
-          activeOpacity={0.8}
-        >
-          <Text style={[styles.quickChatBtnText, { color: borderColor }]}>
-            Chat with {item.name}
-          </Text>
-        </TouchableOpacity>
       </View>
 
       {/* 4. Caption: Publisher name + Avatar name + Tagline / First message */}
@@ -835,18 +822,6 @@ const styles = StyleSheet.create({
   },
   actionCountLiked: {
     color: '#F43F5E',
-  },
-
-  quickChatBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  quickChatBtnText: {
-    fontWeight: '600',
-    fontSize: 12,
   },
 
   // Caption
