@@ -1103,6 +1103,8 @@ class BotImageUploadView(APIView):
 
         if image_b64:
             # Decode base64
+            if ',' in image_b64:
+                image_b64 = image_b64.split(',', 1)[1]
             image_data = base64.b64decode(image_b64)
             file_stream = io.BytesIO(image_data)
             filename = f"bot_pictures/{uuid.uuid4().hex}.jpg"
@@ -1354,6 +1356,36 @@ class PersonaListCreateView(APIView):
 
         User = get_user_model()
         data = request.data.copy()
+
+        # Sanitize any invalid local device file URIs
+        raw_image_url = data.get("image_url", "")
+        if raw_image_url.startswith("file://") or raw_image_url.startswith("content://"):
+            data["image_url"] = ""
+
+        # If base64 payload provided without valid S3 url, upload to S3 directly
+        image_b64 = data.get("image_base64")
+        if image_b64 and not data.get("image_url"):
+            try:
+                import io, uuid, boto3, base64
+                if ',' in image_b64:
+                    image_b64 = image_b64.split(',', 1)[1]
+                image_data = base64.b64decode(image_b64)
+                file_stream = io.BytesIO(image_data)
+                filename = f"bot_pictures/{uuid.uuid4().hex}.jpg"
+                s3 = boto3.client(
+                    's3',
+                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+                    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                    region_name=os.getenv('AWS_REGION', 'us-west-2')
+                )
+                bucket = os.getenv('AWS_S3_BUCKET_NAME', 'reeve-devpilot-downloads-309490998255')
+                s3.upload_fileobj(file_stream, bucket, filename, ExtraArgs={'ContentType': 'image/jpeg'})
+                region = os.getenv('AWS_REGION', 'us-west-2')
+                data['image_url'] = f"https://{bucket}.s3.{region}.amazonaws.com/{filename}"
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"S3 persona image upload failed: {e}")
+
         user_id = data.get("user_id") or data.get("creator_id")
         creator = None
         if user_id:

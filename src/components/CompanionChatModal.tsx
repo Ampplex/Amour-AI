@@ -1153,10 +1153,10 @@ export default function CompanionChatModal({
     }
   };
 
-  if (!visible && !modalVisible) return null;
   const currentPersona = activePersona || persona;
-  if (!currentPersona) return null;
-  const borderColor = currentPersona.border_color || '#F43F5E';
+  const currentPersonaName = currentPersona?.name || 'Companion';
+  const currentPersonaImage = currentPersona?.image_url;
+  const borderColor = currentPersona?.border_color || '#F43F5E';
 
   const keyExtractor = React.useCallback((item: ChatMessage) => item.id, []);
 
@@ -1186,8 +1186,8 @@ export default function CompanionChatModal({
         <ChatMessageBubble
           item={item}
           isLastUserMsg={isLastUserMsg}
-          currentPersonaName={currentPersona.name}
-          currentPersonaImage={currentPersona.image_url}
+          currentPersonaName={currentPersonaName}
+          currentPersonaImage={currentPersonaImage}
           borderColor={borderColor}
           onLongPress={handleLongPressMessage}
           onPressFailed={handlePressFailedMessage}
@@ -1198,8 +1198,8 @@ export default function CompanionChatModal({
     },
     [
       lastUserMessageId,
-      currentPersona.name,
-      currentPersona.image_url,
+      currentPersonaName,
+      currentPersonaImage,
       borderColor,
       handleLongPressMessage,
       handlePressFailedMessage,
@@ -1213,6 +1213,9 @@ export default function CompanionChatModal({
     outputRange: [0.65, 0],
     extrapolate: 'clamp',
   });
+
+  if (!visible && !modalVisible) return null;
+  if (!currentPersona) return null;
 
   return (
     <Modal

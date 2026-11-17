@@ -26,7 +26,7 @@ import {
   GlobeIcon,
 } from '../../components/CreateBotIcons';
 import { API_CONFIG } from '../../constants/authConfig';
-import { savePersonaToRoster } from '../../services/personaService';
+import { savePersonaToRoster, uploadPersonaAvatarToS3 } from '../../services/personaService';
 import { showAlert } from '../../context/AlertContext';
 import { useAuth } from '../../context/AuthContext';
 
@@ -75,6 +75,8 @@ export default function CreateBotScreen() {
   const taglineInputRef = useRef<any>(null);
   const greetingInputRef = useRef<any>(null);
   const memoryInputRef = useRef<any>(null);
+  const selectedBase64Ref = useRef<string | null>(null);
+  const selectedFileNameRef = useRef<string | null>(null);
 
   // Photo Picker
   const handlePickPhoto = async () => {
@@ -95,24 +97,35 @@ export default function CreateBotScreen() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
+        // 1. Immediate local preview (0ms lag for user)
         setImageUri(asset.uri);
 
-        // Upload in background to backend
-        setIsUploadingPhoto(true);
         if (asset.base64) {
-          await fetch(`${API_CONFIG.baseUrl}/memory/upload-image/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              image_base64: asset.base64,
-              filename: asset.fileName || 'avatar.jpg',
-            }),
-          });
+          selectedBase64Ref.current = asset.base64;
+          selectedFileNameRef.current = asset.fileName || 'avatar.jpg';
+
+          // 2. Upload directly to AWS S3
+          setIsUploadingPhoto(true);
+          try {
+            const s3Url = await uploadPersonaAvatarToS3(
+              asset.base64,
+              asset.fileName || 'avatar.jpg'
+            );
+            if (s3Url) {
+              console.log('[Amour Studio] S3 Avatar URL acquired:', s3Url);
+              setImageUri(s3Url);
+            } else {
+              console.warn('[Amour Studio] S3 upload returned no URL, keeping local preview');
+            }
+          } catch (uploadErr) {
+            console.error('[Amour Studio] S3 upload error:', uploadErr);
+          } finally {
+            setIsUploadingPhoto(false);
+          }
         }
       }
     } catch (err) {
       console.log('[ImageUpload] Error:', err);
-    } finally {
       setIsUploadingPhoto(false);
     }
   };
@@ -215,6 +228,8 @@ export default function CreateBotScreen() {
             setAge('21');
             setTagline('');
             setImageUri(null);
+            selectedBase64Ref.current = null;
+            selectedFileNameRef.current = null;
             setGreeting('');
             setMemoryProfile('');
             router.replace('/(tabs)');
@@ -231,8 +246,35 @@ export default function CreateBotScreen() {
       return;
     }
 
+    if (isUploadingPhoto) {
+      showAlert(
+        'Uploading Avatar Photo',
+        'Please wait a moment while your avatar photo finishes uploading to the cloud...',
+        [{ text: 'OK', style: 'primary' }],
+        'warning'
+      );
+      return;
+    }
+
     setIsDeploying(true);
     try {
+      let finalImageUrl = imageUri || '';
+
+      // If imageUri is still a local device file:// or content:// URI and base64 is available, upload now
+      if (
+        (finalImageUrl.startsWith('file://') || finalImageUrl.startsWith('content://')) &&
+        selectedBase64Ref.current
+      ) {
+        const s3Url = await uploadPersonaAvatarToS3(
+          selectedBase64Ref.current,
+          selectedFileNameRef.current || 'avatar.jpg'
+        );
+        if (s3Url) {
+          finalImageUrl = s3Url;
+          setImageUri(s3Url);
+        }
+      }
+
       const userHandle = user?.email ? `@${user.email.split('@')[0]}` : '@creator';
       await savePersonaToRoster(
         {
@@ -240,7 +282,7 @@ export default function CreateBotScreen() {
           age: age ? parseInt(age, 10) : 21,
           tagline: tagline.trim(),
           border_color: borderColor,
-          image_url: imageUri || '',
+          image_url: finalImageUrl,
           greeting: greeting.trim(),
           memory_prompt: memoryProfile.trim(),
           visibility: accessTier,
@@ -267,6 +309,8 @@ export default function CreateBotScreen() {
               setAge('21');
               setTagline('');
               setImageUri(null);
+              selectedBase64Ref.current = null;
+              selectedFileNameRef.current = null;
               setGreeting('');
               setMemoryProfile('');
               router.replace('/(tabs)/personas');
@@ -401,6 +445,7 @@ export default function CreateBotScreen() {
                 <TouchableOpacity
                   style={[styles.portraitSquircle, { borderColor }]}
                   onPress={handlePickPhoto}
+                  disabled={isUploadingPhoto}
                   activeOpacity={0.8}
                 >
                   {imageUri ? (
@@ -410,9 +455,16 @@ export default function CreateBotScreen() {
                       <SilhouetteUserIcon color="#FFFFFF" size={48} />
                     </View>
                   )}
-                  <View style={styles.portraitOverlayTag}>
-                    <PhotoUploadIcon color="#FFFFFF" size={13} />
-                  </View>
+                  {isUploadingPhoto ? (
+                    <View style={styles.portraitUploadingOverlay}>
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                      <Text style={styles.portraitUploadingText}>Saving...</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.portraitOverlayTag}>
+                      <PhotoUploadIcon color="#FFFFFF" size={13} />
+                    </View>
+                  )}
                 </TouchableOpacity>
 
                 {/* Border Color Interface */}
@@ -1029,6 +1081,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.7)',
     borderRadius: 10,
     padding: 4,
+  },
+  portraitUploadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  portraitUploadingText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '600',
   },
   borderColorCol: {
     flex: 1,

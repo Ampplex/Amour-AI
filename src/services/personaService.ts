@@ -199,6 +199,35 @@ export async function fetchAndSyncPersonas(userId?: string): Promise<PersonaItem
 }
 
 /**
+ * Uploads a base64 encoded avatar image to AWS S3 via the backend /memory/upload-image/ endpoint.
+ * Returns the permanent public S3 URL (e.g. https://reeve-devpilot-downloads-309490998255.s3.us-west-2.amazonaws.com/bot_pictures/xxx.jpg).
+ */
+export async function uploadPersonaAvatarToS3(
+  base64Data: string,
+  filename = 'avatar.jpg'
+): Promise<string | null> {
+  try {
+    const res = await tryServerFetch('/memory/upload-image/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_base64: base64Data,
+        filename,
+      }),
+    });
+    if (res && res.ok) {
+      const data = await res.json();
+      if (data?.url && typeof data.url === 'string') {
+        return data.url;
+      }
+    }
+  } catch (err) {
+    console.warn('[PersonaService] Avatar S3 upload error:', err);
+  }
+  return null;
+}
+
+/**
  * Stores persona with corresponding user ID in PostgreSQL database (Neon).
  */
 export async function savePersonaToRoster(
