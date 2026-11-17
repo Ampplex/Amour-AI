@@ -8,6 +8,7 @@ import {
   Image,
   RefreshControl,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -138,7 +139,7 @@ export default function ChatsScreen() {
       >
         <View style={[styles.avatarContainer, { borderColor: persona.border_color || '#F43F5E' }]}>
           {persona.image_url ? (
-            <Image source={{ uri: persona.image_url }} style={styles.avatarImage} />
+            <Image source={{ uri: persona.image_url }} style={styles.avatarImage} fadeDuration={0} />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarInitial}>
@@ -256,6 +257,11 @@ export default function ChatsScreen() {
           renderItem={renderConversationItem}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={Platform.OS === 'android'}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          initialNumToRender={10}
+          updateCellsBatchingPeriod={50}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -284,14 +290,14 @@ export default function ChatsScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#171717',
   },
   header: {
     paddingHorizontal: 18,
     paddingTop: 10,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#16161E',
+    borderBottomColor: '#262628',
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -305,8 +311,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   countBadge: {
-    backgroundColor: '#1E1E2A',
-    borderColor: '#2D2D3D',
+    backgroundColor: '#262628',
+    borderColor: '#343438',
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 8,
@@ -330,8 +336,8 @@ const styles = StyleSheet.create({
   chatCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0F0F14',
-    borderColor: '#1C1C26',
+    backgroundColor: '#202022',
+    borderColor: '#2E2E32',
     borderWidth: 1,
     borderRadius: 16,
     padding: 12,

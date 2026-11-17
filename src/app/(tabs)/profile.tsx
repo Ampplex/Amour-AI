@@ -536,8 +536,9 @@ export default function ProfileScreen() {
       {/* Edit Profile Modal */}
       <Modal
         visible={isEditModalOpen}
+        transparent={true}
         animationType="slide"
-        presentationStyle="pageSheet"
+        statusBarTranslucent={true}
         onRequestClose={closeEditModal}
       >
         <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
@@ -704,14 +705,14 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#171717',
   },
   header: {
     paddingHorizontal: 20,
     paddingTop: 4,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#1A1A1A',
+    borderBottomColor: '#262628',
   },
   headerTitle: {
     color: '#FFFFFF',
@@ -728,8 +729,8 @@ const styles = StyleSheet.create({
   userCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#111113',
-    borderColor: '#222225',
+    backgroundColor: '#202022',
+    borderColor: '#2E2E32',
     borderWidth: 1,
     borderRadius: 16,
     padding: 18,
@@ -794,8 +795,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#141418',
-    borderColor: '#27272A',
+    backgroundColor: '#202022',
+    borderColor: '#2E2E32',
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 16,
@@ -834,8 +835,8 @@ const styles = StyleSheet.create({
     fontWeight: '300',
   },
   replyLengthCard: {
-    backgroundColor: '#141418',
-    borderColor: '#27272A',
+    backgroundColor: '#202022',
+    borderColor: '#2E2E32',
     borderWidth: 1,
     borderRadius: 16,
     padding: 16,
@@ -1023,7 +1024,7 @@ const styles = StyleSheet.create({
   /* Edit Profile Modal Styles */
   modalContainer: {
     flex: 1,
-    backgroundColor: '#0A0A0C',
+    backgroundColor: '#171717',
   },
   modalHeader: {
     flexDirection: 'row',

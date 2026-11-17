@@ -17,10 +17,10 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        sceneStyle: { backgroundColor: '#000000' },
+        sceneStyle: { backgroundColor: '#171717' },
         tabBarStyle: {
-          backgroundColor: '#000000',
-          borderTopColor: '#1A1A1A',
+          backgroundColor: '#171717',
+          borderTopColor: '#262628',
           borderTopWidth: 1,
           height: tabHeight,
           paddingBottom: paddingBottom,
@@ -28,7 +28,7 @@ export default function TabLayout() {
           elevation: 0,
         },
         tabBarActiveTintColor: '#FFFFFF',
-        tabBarInactiveTintColor: '#666666',
+        tabBarInactiveTintColor: '#8E8E93',
         tabBarLabelStyle: {
           fontFamily: 'ChangaOne-Regular',
           fontSize: 11,

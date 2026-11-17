@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -12,6 +12,8 @@ import {
   Platform,
   Share,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
@@ -188,10 +190,46 @@ export default function PersonaDetailModal({
 }: PersonaDetailModalProps) {
   const { user } = useAuth();
   const [activePersona, setActivePersona] = useState<PersonaItem | null>(persona);
+  const [modalVisible, setModalVisible] = useState<boolean>(visible);
+  const slideAnim = useRef(new Animated.Value(width)).current;
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [greetingText, setGreetingText] = useState<string>('');
   const [memoryText, setMemoryText] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  // iOS-style Horizontal Screen Slide Transition Controller
+  useEffect(() => {
+    if (visible) {
+      setModalVisible(true);
+      slideAnim.setValue(width);
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 360,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }).start();
+    } else if (modalVisible) {
+      Animated.timing(slideAnim, {
+        toValue: width,
+        duration: 300,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }).start(() => {
+        setModalVisible(false);
+      });
+    }
+  }, [visible]);
+
+  const handleDismiss = () => {
+    Animated.timing(slideAnim, {
+      toValue: width,
+      duration: 300,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
 
   useEffect(() => {
     if (persona) {
@@ -202,6 +240,7 @@ export default function PersonaDetailModal({
     }
   }, [persona?.id, visible]);
 
+  if (!visible && !modalVisible) return null;
   if (!activePersona) return null;
 
   const borderColor = activePersona.border_color || '#F43F5E';
@@ -251,74 +290,91 @@ export default function PersonaDetailModal({
   };
 
   const handleStartChat = () => {
-    onClose();
-    setTimeout(() => {
-      onInitiateChat(activePersona);
-    }, 100);
+    onInitiateChat(activePersona);
   };
+
+  const backdropOpacity = slideAnim.interpolate({
+    inputRange: [0, width],
+    outputRange: [0.65, 0],
+    extrapolate: 'clamp',
+  });
 
   return (
     <Modal
-      visible={visible}
-      animationType="slide"
+      visible={modalVisible}
+      transparent={true}
+      animationType="none"
       statusBarTranslucent={true}
-      onRequestClose={onClose}
+      onRequestClose={handleDismiss}
     >
-      <View style={styles.container}>
-        <ScrollView
-          style={styles.scrollBody}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* Widescreen Hero Section - Photo Widely Covers Screen Width with Dark Low-Opacity Vignette */}
-          <View style={styles.heroFrame}>
-            {/* Edge-to-edge Wide Photo */}
-            {activePersona.image_url ? (
-              <Image
-                source={{ uri: activePersona.image_url }}
-                style={styles.widescreenImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={[styles.fallbackHeroFrame, { backgroundColor: '#14141E' }]}>
-                <Text style={[styles.fallbackInitial, { color: borderColor }]}>
-                  {activePersona.name ? activePersona.name.charAt(0).toUpperCase() : 'A'}
-                </Text>
-              </View>
-            )}
+      <View style={styles.modalRoot}>
+        {/* iOS Dimming Backdrop over previous screen */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: '#000000', opacity: backdropOpacity },
+          ]}
+          pointerEvents="none"
+        />
 
-            {/* Dark Low-Opacity Overlay - Dark colors with low opacity over photo */}
-            <View style={styles.darkTintOverlay} />
+        {/* Smooth iOS Horizontal Sliding Screen */}
+        <Animated.View style={[styles.slideContainer, { transform: [{ translateX: slideAnim }] }]}>
+        <View style={styles.container}>
+          <ScrollView
+            style={styles.scrollBody}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Widescreen Hero Section - Photo Widely Covers Screen Width with Dark Low-Opacity Vignette */}
+            <View style={styles.heroFrame}>
+              {/* Edge-to-edge Wide Photo */}
+              {activePersona.image_url ? (
+                <Image
+                  source={{ uri: activePersona.image_url }}
+                  style={styles.widescreenImage}
+                  resizeMode="cover"
+                  fadeDuration={0}
+                />
+              ) : (
+                <View style={[styles.fallbackHeroFrame, { backgroundColor: '#14141E' }]}>
+                  <Text style={[styles.fallbackInitial, { color: borderColor }]}>
+                    {activePersona.name ? activePersona.name.charAt(0).toUpperCase() : 'A'}
+                  </Text>
+                </View>
+              )}
 
-            {/* Cinematic Gradient Vignettes: Deep top & bottom dark fades */}
-            <Svg height="100%" width="100%" style={StyleSheet.absoluteFill}>
-              <Defs>
-                <LinearGradient id="heroTopVignette" x1="0" y1="0" x2="0" y2="0.38">
-                  <Stop offset="0" stopColor="#000000" stopOpacity="0.82" />
-                  <Stop offset="1" stopColor="#000000" stopOpacity="0" />
-                </LinearGradient>
-                <LinearGradient id="heroBottomVignette" x1="0" y1="0.45" x2="0" y2="1">
-                  <Stop offset="0" stopColor="#000000" stopOpacity="0" />
-                  <Stop offset="0.65" stopColor="#07070A" stopOpacity="0.85" />
-                  <Stop offset="1" stopColor="#07070A" stopOpacity="1" />
-                </LinearGradient>
-              </Defs>
-              <Rect x="0" y="0" width="100%" height="100%" fill="url(#heroTopVignette)" />
-              <Rect x="0" y="0" width="100%" height="100%" fill="url(#heroBottomVignette)" />
-            </Svg>
+              {/* Dark Low-Opacity Overlay - Dark colors with low opacity over photo */}
+              <View style={styles.darkTintOverlay} />
 
-            {/* Top Bar Floating Controls */}
-            <View style={styles.floatingTopBar}>
-              <TouchableOpacity
-                style={styles.glassCircleBtn}
-                onPress={onClose}
-                activeOpacity={0.7}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                accessibilityLabel="Close persona profile"
-              >
-                <CloseIcon size={18} color="#FFFFFF" />
-              </TouchableOpacity>
+              {/* Cinematic Gradient Vignettes: Deep top & bottom dark fades */}
+              <Svg height="100%" width="100%" style={StyleSheet.absoluteFill}>
+                <Defs>
+                  <LinearGradient id="heroTopVignette" x1="0" y1="0" x2="0" y2="0.38">
+                    <Stop offset="0" stopColor="#000000" stopOpacity="0.82" />
+                    <Stop offset="1" stopColor="#000000" stopOpacity="0" />
+                  </LinearGradient>
+                  <LinearGradient id="heroBottomVignette" x1="0" y1="0.45" x2="0" y2="1">
+                    <Stop offset="0" stopColor="#000000" stopOpacity="0" />
+                    <Stop offset="0.65" stopColor="#07070A" stopOpacity="0.85" />
+                    <Stop offset="1" stopColor="#07070A" stopOpacity="1" />
+                  </LinearGradient>
+                </Defs>
+                <Rect x="0" y="0" width="100%" height="100%" fill="url(#heroTopVignette)" />
+                <Rect x="0" y="0" width="100%" height="100%" fill="url(#heroBottomVignette)" />
+              </Svg>
+
+              {/* Top Bar Floating Controls */}
+              <View style={styles.floatingTopBar}>
+                <TouchableOpacity
+                  style={styles.glassCircleBtn}
+                  onPress={handleDismiss}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  accessibilityLabel="Close persona profile"
+                >
+                  <CloseIcon size={18} color="#FFFFFF" />
+                </TouchableOpacity>
 
               <View style={styles.topBarRight}>
                 <TouchableOpacity
@@ -587,14 +643,26 @@ export default function PersonaDetailModal({
           </View>
         </SafeAreaView>
       </View>
-    </Modal>
-  );
+    </Animated.View>
+  </View>
+</Modal>
+);
 }
 
 const styles = StyleSheet.create({
+  modalRoot: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  slideContainer: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#171717',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#07070A',
+    backgroundColor: '#171717',
   },
   scrollBody: {
     flex: 1,
@@ -607,7 +675,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 380,
     position: 'relative',
-    backgroundColor: '#000000',
+    backgroundColor: '#171717',
     justifyContent: 'space-between',
   },
   widescreenImage: {
@@ -901,9 +969,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A24',
   },
   bottomSafeArea: {
-    backgroundColor: '#07070A',
+    backgroundColor: '#171717',
     borderTopWidth: 1,
-    borderTopColor: '#161622',
+    borderTopColor: '#262628',
   },
   actionBar: {
     paddingHorizontal: 20,

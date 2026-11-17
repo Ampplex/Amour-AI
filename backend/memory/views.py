@@ -830,28 +830,25 @@ class ChatMemoryView(APIView):
 
     def patch(self, request):
         """
-        Switch active response variant for a regenerated bot message.
-        Updates PostgreSQL `text` column to the chosen variant so future inferences
-        and chat history lookups immediately reflect the user's selected response.
+        Switch active response variant for a regenerated bot message, OR
+        edit a persona's response in-place and synchronize both PostgreSQL and Reeve memory graph.
         """
         message_id = (request.data.get("message_id") or request.query_params.get("message_id", "")).strip()
         user_id = (request.user.id if request.user.is_authenticated else (request.data.get("user_id") or request.query_params.get("user_id", ""))).strip()
+        new_text = (request.data.get("text") or "").strip()
         variant_index = request.data.get("variant_index")
 
         if not message_id:
             return Response({"error": "message_id is required"}, status=status.HTTP_400_BAD_REQUEST)
         if not user_id:
             return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-        if variant_index is None:
-            return Response({"error": "variant_index is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            variant_index = int(variant_index)
-        except (ValueError, TypeError):
-            return Response({"error": "variant_index must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+        if not new_text and variant_index is None:
+            return Response({"error": "Either 'text' to edit or 'variant_index' to switch is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         import uuid as uuid_pkg
         from .models import PersonaChatMessage
+        from .crypto import encrypt_chat_message, decrypt_chat_message
+        user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or request.data.get("user_key") or "").strip() or None
 
         target_msg = None
         try:
@@ -874,6 +871,94 @@ class ChatMemoryView(APIView):
         if not target_msg:
             return Response({"error": "Bot message not found or unauthorized"}, status=status.HTTP_404_NOT_FOUND)
 
+        # -------------------------------------------------------------------------
+        # Branch A: In-place edit of persona response by user
+        # -------------------------------------------------------------------------
+        if new_text:
+            old_decrypted_text = decrypt_chat_message(target_msg.text, user_id=str(user_id), client_key=user_key)
+            encrypted_new_text = encrypt_chat_message(new_text, user_id=str(user_id), client_key=user_key)
+            target_msg.text = encrypted_new_text
+
+            resp_meta = dict(target_msg.response_metadata or {})
+            variants = resp_meta.get("variants") or []
+            active_idx = resp_meta.get("active_variant_index", 0)
+            if variants:
+                if 0 <= active_idx < len(variants):
+                    variants[active_idx] = encrypted_new_text
+                else:
+                    variants.append(encrypted_new_text)
+                resp_meta["variants"] = variants
+                resp_meta["active_variant_index"] = active_idx
+                target_msg.response_metadata = resp_meta
+
+            target_msg.save(update_fields=["text", "response_metadata"])
+
+            # Synchronize Reeve Long-Term Memory with the edited text
+            try:
+                user_msg = PersonaChatMessage.objects.filter(
+                    user_identifier=str(user_id),
+                    persona_identifier=target_msg.persona_identifier,
+                    sender="user",
+                    created_at__lte=target_msg.created_at,
+                ).order_by("-created_at").first()
+
+                from .reeve_service import delete_memory_for_message, store_memory_for_user
+
+                # Prune old bot response from Reeve memory graph and write buffer
+                delete_memory_for_message(
+                    old_decrypted_text,
+                    namespace=target_msg.namespace,
+                    sender="bot",
+                    user_key=user_key,
+                )
+
+                # Ingest updated persona text into Reeve
+                if user_msg:
+                    user_text = decrypt_chat_message(user_msg.text, user_id=str(user_id), client_key=user_key)
+                    store_memory_for_user(
+                        f"User: {user_text.strip()}\nAssistant: {new_text.strip()}",
+                        target_msg.namespace,
+                        user_key=user_key,
+                    )
+                else:
+                    store_memory_for_user(
+                        f"Assistant: {new_text.strip()}",
+                        target_msg.namespace,
+                        user_key=user_key,
+                    )
+            except Exception as exc:
+                logger.warning("Could not sync Reeve memory for edited bot response: %s", exc)
+
+            logger.info(
+                "Edited bot message id=%s in PostgreSQL and Reeve for user=%s",
+                target_msg.id,
+                user_id,
+            )
+
+            decrypted_variants = [
+                decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)
+                for v in variants
+            ] if variants else [new_text]
+
+            return Response(
+                {
+                    "success": True,
+                    "message_id": str(target_msg.id),
+                    "text": new_text,
+                    "variants": decrypted_variants,
+                    "variants_count": len(decrypted_variants),
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # -------------------------------------------------------------------------
+        # Branch B: Switch active variant (0-indexed)
+        # -------------------------------------------------------------------------
+        try:
+            variant_index = int(variant_index)
+        except (ValueError, TypeError):
+            return Response({"error": "variant_index must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+
         resp_meta = dict(target_msg.response_metadata or {})
         variants = resp_meta.get("variants") or []
 
@@ -889,8 +974,6 @@ class ChatMemoryView(APIView):
         target_msg.response_metadata = resp_meta
         target_msg.save(update_fields=["text", "response_metadata"])
 
-        user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or request.data.get("user_key") or "").strip() or None
-        from .crypto import decrypt_chat_message
         decrypted_text = decrypt_chat_message(chosen_variant_encrypted, user_id=str(user_id), client_key=user_key)
         decrypted_variants = [
             decrypt_chat_message(v, user_id=str(user_id), client_key=user_key)

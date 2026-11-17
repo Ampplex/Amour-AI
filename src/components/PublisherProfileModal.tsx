@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -9,6 +9,8 @@ import {
   Image,
   Dimensions,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -100,9 +102,45 @@ export default function PublisherProfileModal({
   onToggleFollowParent,
 }: PublisherProfileModalProps) {
   const [profile, setProfile] = useState<PublisherProfileData | null>(null);
+  const [modalVisible, setModalVisible] = useState<boolean>(visible);
+  const slideAnim = useRef(new Animated.Value(width)).current;
   const [loading, setLoading] = useState<boolean>(true);
   const [isFollowing, setIsFollowing] = useState<boolean>(false);
   const [followersCount, setFollowersCount] = useState<number>(0);
+
+  // iOS-style Horizontal Screen Slide Transition Controller
+  useEffect(() => {
+    if (visible) {
+      setModalVisible(true);
+      slideAnim.setValue(width);
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 360,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }).start();
+    } else if (modalVisible) {
+      Animated.timing(slideAnim, {
+        toValue: width,
+        duration: 300,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }).start(() => {
+        setModalVisible(false);
+      });
+    }
+  }, [visible]);
+
+  const handleDismiss = () => {
+    Animated.timing(slideAnim, {
+      toValue: width,
+      duration: 300,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
 
   useEffect(() => {
     if (!visible || !publisherHandle) return;
@@ -142,30 +180,49 @@ export default function PublisherProfileModal({
     await togglePublisherFollow(publisherHandle, isFollowing, userId);
   };
 
-  if (!visible) return null;
+  if (!visible && !modalVisible) return null;
 
   const displayName = profile?.name || initialPublisherName || 'Creator';
   const displayHandle = profile?.handle || publisherHandle || '@creator';
   const displayAvatar = profile?.avatar || initialPublisherAvatar || '';
 
+  const backdropOpacity = slideAnim.interpolate({
+    inputRange: [0, width],
+    outputRange: [0.65, 0],
+    extrapolate: 'clamp',
+  });
+
   return (
     <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
+      visible={modalVisible}
+      transparent={true}
+      animationType="none"
+      statusBarTranslucent={true}
+      onRequestClose={handleDismiss}
     >
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        {/* Top Header */}
-        <View style={styles.topBar}>
-          <TouchableOpacity
-            style={styles.closeBtn}
-            onPress={onClose}
-            activeOpacity={0.7}
-            accessibilityLabel="Close publisher profile"
-          >
-            <CloseIcon size={18} color="#FFFFFF" />
-          </TouchableOpacity>
+      <View style={styles.modalRoot}>
+        {/* iOS Dimming Backdrop over previous screen */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: '#000000', opacity: backdropOpacity },
+          ]}
+          pointerEvents="none"
+        />
+
+        {/* Smooth iOS Horizontal Sliding Screen */}
+        <Animated.View style={[styles.slideContainer, { transform: [{ translateX: slideAnim }] }]}>
+        <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+          {/* Top Header */}
+          <View style={styles.topBar}>
+            <TouchableOpacity
+              style={styles.closeBtn}
+              onPress={handleDismiss}
+              activeOpacity={0.7}
+              accessibilityLabel="Close publisher profile"
+            >
+              <CloseIcon size={18} color="#FFFFFF" />
+            </TouchableOpacity>
           <Text style={styles.topBarTitle}>CREATOR PROFILE</Text>
           <View style={{ width: 36 }} />
         </View>
@@ -179,7 +236,7 @@ export default function PublisherProfileModal({
           <View style={styles.creatorHeroCard}>
             <View style={styles.avatarBorderFrame}>
               {displayAvatar ? (
-                <Image source={{ uri: displayAvatar }} style={styles.avatarLargeImg} />
+                <Image source={{ uri: displayAvatar }} style={styles.avatarLargeImg} fadeDuration={0} />
               ) : (
                 <View style={styles.avatarFallbackCircle}>
                   <Text style={styles.avatarFallbackLetter}>
@@ -254,7 +311,7 @@ export default function PublisherProfileModal({
                   >
                     <View style={[styles.personaMiniSquircle, { borderColor: accent }]}>
                       {persona.image_url ? (
-                        <Image source={{ uri: persona.image_url }} style={styles.personaMiniImg} />
+                        <Image source={{ uri: persona.image_url }} style={styles.personaMiniImg} fadeDuration={0} />
                       ) : (
                         <View style={[styles.personaMiniFallback, { backgroundColor: accent + '20' }]}>
                           <Text style={[styles.personaMiniInitial, { color: accent }]}>
@@ -289,14 +346,26 @@ export default function PublisherProfileModal({
           )}
         </ScrollView>
       </SafeAreaView>
-    </Modal>
-  );
+    </Animated.View>
+  </View>
+</Modal>
+);
 }
 
 const styles = StyleSheet.create({
+  modalRoot: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  slideContainer: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#171717',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#09090D',
+    backgroundColor: '#171717',
   },
   topBar: {
     height: 52,
@@ -305,13 +374,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#161622',
+    borderBottomColor: '#262628',
   },
   closeBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#161622',
+    backgroundColor: '#262628',
     alignItems: 'center',
     justifyContent: 'center',
   },

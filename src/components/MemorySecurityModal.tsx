@@ -196,8 +196,9 @@ export function MemorySecurityModal({
   return (
     <Modal
       visible={visible}
+      transparent={true}
       animationType="slide"
-      presentationStyle="pageSheet"
+      statusBarTranslucent={true}
       onRequestClose={onClose}
     >
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -405,7 +406,7 @@ export function MemorySecurityModal({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0B0E14',
+    backgroundColor: '#171717',
   },
   header: {
     height: 54,

@@ -90,7 +90,7 @@ function ShareIcon({ size = 21, color = '#FFFFFF' }: { size?: number; color?: st
   );
 }
 
-// Single Feed Post Item with Instagram/Chai layout
+// Single Feed Post Item layout
 const FeedPostCard = React.memo(({
   item,
   onPressProfile,
@@ -169,7 +169,7 @@ const FeedPostCard = React.memo(({
           activeOpacity={0.8}
         >
           {item.publisher_avatar ? (
-            <Image source={{ uri: item.publisher_avatar }} style={styles.publisherAvatarImg} />
+            <Image source={{ uri: item.publisher_avatar }} style={styles.publisherAvatarImg} fadeDuration={0} />
           ) : (
             <View style={[styles.publisherAvatarCircle, { backgroundColor: borderColor }]}>
               <Text style={styles.publisherAvatarLetter}>{publisherInitial}</Text>
@@ -211,6 +211,7 @@ const FeedPostCard = React.memo(({
             source={{ uri: item.image_url }}
             style={styles.mediaImage}
             resizeMode="cover"
+            fadeDuration={0}
           />
         ) : (
           <View style={[styles.mediaFallback, { backgroundColor: '#13131F' }]}>
@@ -223,7 +224,7 @@ const FeedPostCard = React.memo(({
           </View>
         )}
 
-        {/* Floating Top-Right Chat Bubble (exactly matching Chai screenshot) */}
+        {/* Floating Top-Right Chat Bubble */}
         <TouchableOpacity
           style={styles.floatingChatBadge}
           onPress={() => onInitiateChat(item)}
@@ -471,21 +472,27 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const handlePressProfile = useCallback((p: FeedPersonaItem) => {
+    setSelectedPersona(p);
+  }, []);
+
+  const handlePressPublisher = useCallback((handle: string, name: string, avatar: string) => {
+    setSelectedPublisher({ handle, name, avatar });
+  }, []);
+
   const renderItem = useCallback(
     ({ item }: { item: FeedPersonaItem }) => (
       <FeedPostCard
         item={item}
-        onPressProfile={(p) => setSelectedPersona(p)}
-        onPressPublisher={(handle, name, avatar) =>
-          setSelectedPublisher({ handle, name, avatar })
-        }
+        onPressProfile={handlePressProfile}
+        onPressPublisher={handlePressPublisher}
         onInitiateChat={handleInitiateChat}
         onToggleLike={handleToggleLike}
         onToggleFollow={handleToggleFollow}
         onSharePersona={handleSharePersona}
       />
     ),
-    [handleInitiateChat, handleToggleLike, handleToggleFollow, handleSharePersona]
+    [handleInitiateChat, handleToggleLike, handleToggleFollow, handleSharePersona, handlePressProfile, handlePressPublisher]
   );
 
   const renderFooter = () => {
@@ -499,7 +506,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      {/* Top Header - Chai / Instagram Style */}
+      {/* Top Header */}
       <View style={styles.topHeader}>
         <View style={styles.headerLogoRow}>
           <AmourLogoVector size={30} showText={false} animated={false} />
@@ -598,7 +605,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#171717',
   },
   topHeader: {
     height: 48,
@@ -607,8 +614,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#12121A',
-    backgroundColor: '#000000',
+    borderBottomColor: '#262628',
+    backgroundColor: '#171717',
   },
   headerLogoRow: {
     flexDirection: 'row',
@@ -663,7 +670,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
-    backgroundColor: '#1E1E2A',
+    backgroundColor: '#262628',
   },
   retryBtnText: {
     color: '#F43F5E',
@@ -671,10 +678,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 
-  // Post Card (Instagram / Chai style)
+  // Post Card style
   postCard: {
     marginBottom: 20,
-    backgroundColor: '#000000',
+    backgroundColor: '#171717',
   },
   postHeaderRow: {
     flexDirection: 'row',
@@ -693,7 +700,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#1E1E2A',
+    backgroundColor: '#262628',
   },
   publisherAvatarCircle: {
     width: 36,
@@ -731,8 +738,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   followBtnDefault: {
-    borderColor: '#FFFFFF',
-    backgroundColor: 'transparent',
+    borderColor: '#4B5563',
+    backgroundColor: '#262628',
   },
   followingBtnActive: {
     borderColor: '#374151',
@@ -751,7 +758,7 @@ const styles = StyleSheet.create({
   mediaContainer: {
     width: width,
     height: MEDIA_HEIGHT,
-    backgroundColor: '#0A0A10',
+    backgroundColor: '#202022',
     position: 'relative',
     overflow: 'hidden',
   },

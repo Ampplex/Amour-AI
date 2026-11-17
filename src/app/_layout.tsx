@@ -49,7 +49,7 @@ export default function RootLayout() {
             contentStyle: {
               backgroundColor: theme.colors.background,
             },
-            animation: 'fade',
+            animation: 'ios_from_right',
           }}
         >
           <Stack.Screen
@@ -61,19 +61,19 @@ export default function RootLayout() {
           <Stack.Screen
             name="login"
             options={{
-              animation: 'fade',
+              animation: 'ios_from_right',
             }}
           />
           <Stack.Screen
             name="signup"
             options={{
-              animation: 'slide_from_right',
+              animation: 'ios_from_right',
             }}
           />
           <Stack.Screen
             name="forgot-password"
             options={{
-              animation: 'slide_from_right',
+              animation: 'ios_from_right',
             }}
           />
           <Stack.Screen

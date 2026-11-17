@@ -289,3 +289,54 @@ export async function switchChatMessageVariant(
     return { success: false, error: err?.message || 'Network error' };
   }
 }
+
+/**
+ * Edit a bot / persona response in-place.
+ * Updates PostgreSQL DB so that the message reply is set to the edited text under the same message ID,
+ * and synchronizes Reeve memory graph with the updated dialogue exchange.
+ */
+export async function editBotChatMessage(
+  messageId: string,
+  newText: string,
+  userId: string,
+  token?: string
+): Promise<{
+  success: boolean;
+  message_id?: string;
+  text?: string;
+  variants?: string[];
+  error?: string;
+}> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const userKey = await getOrCreateUserKey();
+    const baseUrl = await resolveActiveBaseUrl();
+    const res = await fetch(`${baseUrl}/memory/chat/`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Memory-User-Key': userKey,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        message_id: messageId,
+        text: newText,
+        user_id: userId,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData?.error || `HTTP ${res.status}` };
+    }
+
+    return await res.json();
+  } catch (err: any) {
+    clearTimeout(timer);
+    return { success: false, error: err?.message || 'Network error' };
+  }
+}

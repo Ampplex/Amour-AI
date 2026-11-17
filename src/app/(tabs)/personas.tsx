@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Image,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -172,7 +173,7 @@ export default function PersonasScreen() {
           {/* Avatar Portrait with dynamic border color */}
           <View style={[styles.avatarFrame, { borderColor }]}>
             {item.image_url ? (
-              <Image source={{ uri: item.image_url }} style={styles.avatarImage} />
+              <Image source={{ uri: item.image_url }} style={styles.avatarImage} fadeDuration={0} />
             ) : (
               <View style={[styles.avatarFallback, { backgroundColor: borderColor + '20' }]}>
                 <Text style={[styles.avatarInitial, { color: borderColor }]}>
@@ -340,6 +341,11 @@ export default function PersonasScreen() {
           renderItem={renderPersonaCard}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={Platform.OS === 'android'}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          initialNumToRender={6}
+          updateCellsBatchingPeriod={50}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -376,14 +382,14 @@ export default function PersonasScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: '#171717',
   },
   header: {
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#16161A',
+    borderBottomColor: '#262628',
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -397,12 +403,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   countBadge: {
-    backgroundColor: '#1E1E24',
+    backgroundColor: '#262628',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#2E2E38',
+    borderColor: '#343438',
   },
   countText: {
     fontFamily: 'ChangaOne-Regular',
@@ -424,9 +430,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 20,
-    backgroundColor: '#111116',
+    backgroundColor: '#202022',
     borderWidth: 1,
-    borderColor: '#1F2937',
+    borderColor: '#2E2E32',
   },
   filterChipActive: {
     backgroundColor: '#26141A',
@@ -446,9 +452,10 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   card: {
-    backgroundColor: '#0D0D12',
+    backgroundColor: '#202022',
     borderRadius: 18,
     borderWidth: 1,
+    borderColor: '#2E2E32',
     padding: 16,
   },
   cardHeader: {

@@ -23,12 +23,18 @@ import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem } from '../services/personaService';
-import { fetchChatHistory, sendChatMessage, deleteChatMessage, switchChatMessageVariant } from '../services/chatService';
+import { fetchChatHistory, sendChatMessage, deleteChatMessage, switchChatMessageVariant, editBotChatMessage } from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 import { showAlert } from '../context/AlertContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
+
+function cleanPersonaChipName(name?: string): string {
+  if (!name) return '';
+  const cleaned = name.split(/[\(\[\{]/)[0].trim();
+  return cleaned || name;
+}
 
 function BackIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
@@ -39,6 +45,43 @@ function BackIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: str
         strokeWidth="2.4"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function MenuIcon({ size = 18, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M4 7h16M4 12h16M4 17h16"
+        stroke={color}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
+
+function ChatSendIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M3.4 20.4l17.45-7.48c.81-.35.81-1.49 0-1.84L3.4 3.6c-.66-.29-1.39.2-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.49-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"
+        fill={color}
+      />
+    </Svg>
+  );
+}
+
+function InputUserIcon({ size = 26 }: { size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="11" fill="#1C1C1F" />
+      <Circle cx="12" cy="9.2" r="3.4" fill="#D4D4D8" />
+      <Path
+        d="M6 18.8c0-2.8 2.7-5 6-5s6 2.2 6 5"
+        fill="#D4D4D8"
       />
     </Svg>
   );
@@ -87,7 +130,7 @@ function CloseIcon({ size = 18, color = '#FFFFFF' }: { size?: number; color?: st
   );
 }
 
-function TypingDotsAnimation({ color = '#A1A1AA' }: { color?: string }) {
+function TypingDotsAnimation({ color = '#D4D4D8' }: { color?: string }) {
   const dot1 = useRef(new Animated.Value(0)).current;
   const dot2 = useRef(new Animated.Value(0)).current;
   const dot3 = useRef(new Animated.Value(0)).current;
@@ -258,6 +301,8 @@ export default function CompanionChatModal({
 }: CompanionChatModalProps) {
   const { user } = useAuth();
   const [activePersona, setActivePersona] = useState<PersonaItem | null>(persona);
+  const [modalVisible, setModalVisible] = useState<boolean>(visible);
+  const slideAnim = useRef(new Animated.Value(width)).current;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
@@ -275,6 +320,40 @@ export default function CompanionChatModal({
   const chatInputRef = useRef<any>(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
 
+  // iOS-style Horizontal Screen Slide Transition Controller
+  useEffect(() => {
+    if (visible) {
+      setModalVisible(true);
+      slideAnim.setValue(width);
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 360, // Silky smooth iOS push duration
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1), // Authentic iOS slide curve
+        useNativeDriver: true,
+      }).start();
+    } else if (modalVisible) {
+      Animated.timing(slideAnim, {
+        toValue: width,
+        duration: 300, // Smooth iOS pop duration
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+        useNativeDriver: true,
+      }).start(() => {
+        setModalVisible(false);
+      });
+    }
+  }, [visible]);
+
+  const handleDismiss = () => {
+    Animated.timing(slideAnim, {
+      toValue: width,
+      duration: 300,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
+
   const handleStartEdit = (item: ChatMessage) => {
     setActionMenuMessage(null);
     setEditingMessageId(item.id);
@@ -287,6 +366,73 @@ export default function CompanionChatModal({
   const handleCancelEdit = () => {
     setEditingMessageId(null);
     setInputText('');
+  };
+
+  const handleSaveEditedBotResponse = async (msgId: string, newText: string) => {
+    const currentPersona = activePersona || persona;
+    if (!newText.trim() || !currentPersona) return;
+    const trimmed = newText.trim();
+    setEditingMessageId(null);
+    setInputText('');
+
+    const targetMsg = messages.find((m) => m.id === msgId);
+    if (!targetMsg) return;
+
+    const previousMessages = [...messages];
+
+    // Optimistically update the message in local state
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id === msgId) {
+          const activeIdx = m.activeVariantIndex ?? (m.variants && m.variants.length > 0 ? m.variants.length - 1 : 0);
+          let updatedVariants = m.variants ? [...m.variants] : undefined;
+          if (updatedVariants && updatedVariants.length > 0 && activeIdx >= 0 && activeIdx < updatedVariants.length) {
+            updatedVariants[activeIdx] = trimmed;
+          }
+          return {
+            ...m,
+            text: trimmed,
+            variants: updatedVariants,
+          };
+        }
+        return m;
+      })
+    );
+
+    try {
+      const uId = await resolveConversationUserId(user?.id);
+      const res = await editBotChatMessage(msgId, trimmed, uId, user?.token);
+      if (!res.success) {
+        setMessages(previousMessages);
+        showAlert(
+          'Edit Failed',
+          res.error || 'Could not update response in memory.',
+          [{ text: 'OK', style: 'primary' }],
+          'danger'
+        );
+      } else if (res.variants) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId
+              ? {
+                  ...m,
+                  text: res.text || trimmed,
+                  variants: res.variants,
+                  activeVariantIndex: m.activeVariantIndex,
+                }
+              : m
+          )
+        );
+      }
+    } catch (err: any) {
+      setMessages(previousMessages);
+      showAlert(
+        'Edit Failed',
+        err?.message || 'Network error updating response.',
+        [{ text: 'OK', style: 'primary' }],
+        'danger'
+      );
+    }
   };
 
   const handleDeleteMessage = (item: ChatMessage) => {
@@ -371,7 +517,8 @@ export default function CompanionChatModal({
   };
 
   const handleRegenerateBotReply = async (botMsg: ChatMessage) => {
-    if (isTyping || !activePersona) return;
+    const currentPersona = activePersona || persona;
+    if (isTyping || !currentPersona) return;
 
     const botIdx = messages.findIndex((m) => m.id === botMsg.id);
     if (botIdx === -1) return;
@@ -384,7 +531,7 @@ export default function CompanionChatModal({
       }
     }
 
-    const textToPrompt = precedingUserMsg ? precedingUserMsg.text : activePersona.greeting;
+    const textToPrompt = precedingUserMsg ? precedingUserMsg.text : currentPersona.greeting;
     const userMsgId = precedingUserMsg ? precedingUserMsg.id : undefined;
 
     setIsTyping(true);
@@ -412,10 +559,10 @@ export default function CompanionChatModal({
           regenerate_bot_message_id: botMsg.id,
           edit_message_id: userMsgId,
           message: textToPrompt,
-          persona_id: activePersona.id,
-          persona_name: activePersona.name,
-          greeting: activePersona.greeting,
-          memory_prompt: activePersona.memory_prompt,
+          persona_id: currentPersona.id,
+          persona_name: currentPersona.name,
+          greeting: currentPersona.greeting,
+          memory_prompt: currentPersona.memory_prompt,
           client_time: clientTime,
           client_timezone: clientTimezone,
           user_id: conversationUserId,
@@ -602,9 +749,19 @@ export default function CompanionChatModal({
 
   const handleSend = async (messageTextOverride?: string, targetMessageId?: string) => {
     const text = (messageTextOverride !== undefined ? messageTextOverride : inputText).trim();
-    if (!activePersona || isTyping) return;
+    const currentPersona = activePersona || persona;
+    if (!currentPersona || isTyping) return;
 
     const inPlaceTargetId = targetMessageId || editingMessageId;
+    const targetMsg = inPlaceTargetId ? messages.find((m) => m.id === inPlaceTargetId) : null;
+
+    // Check if user is editing a bot/persona response: save directly in-place without generating a new reply
+    if (targetMsg && targetMsg.sender === 'bot') {
+      if (!text) return;
+      handleSaveEditedBotResponse(targetMsg.id, text);
+      return;
+    }
+
     const isInPlace = Boolean(inPlaceTargetId);
 
     // If text is empty and editing an existing message, don't trigger autonomous continue
@@ -675,10 +832,10 @@ export default function CompanionChatModal({
           edit_message_id: isInPlace && inPlaceTargetId ? inPlaceTargetId : undefined,
           message: text,
           is_autonomous_continue: isAutonomousContinue,
-          persona_id: activePersona.id,
-          persona_name: activePersona.name,
-          greeting: activePersona.greeting,
-          memory_prompt: activePersona.memory_prompt,
+          persona_id: currentPersona.id,
+          persona_name: currentPersona.name,
+          greeting: currentPersona.greeting,
+          memory_prompt: currentPersona.memory_prompt,
           client_time: clientTime,
           client_timezone: clientTimezone,
           user_id: conversationUserId,
@@ -748,28 +905,54 @@ export default function CompanionChatModal({
     }
   };
 
-  if (!activePersona) return null;
-  const borderColor = activePersona.border_color || '#F43F5E';
+  if (!visible && !modalVisible) return null;
+  const currentPersona = activePersona || persona;
+  if (!currentPersona) return null;
+  const borderColor = currentPersona.border_color || '#F43F5E';
+
+  const backdropOpacity = slideAnim.interpolate({
+    inputRange: [0, width],
+    outputRange: [0.65, 0],
+    extrapolate: 'clamp',
+  });
 
   return (
     <Modal
-      visible={visible}
-      animationType="slide"
+      visible={modalVisible}
+      transparent={true}
+      animationType="none"
       statusBarTranslucent={true}
-      onRequestClose={onClose}
+      onRequestClose={handleDismiss}
     >
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        {/* Top Header */}
-        <View style={styles.topHeader}>
-          <TouchableOpacity
-            onPress={onClose}
-            style={styles.backBtn}
-            activeOpacity={0.7}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            accessibilityLabel="Back to companions"
-          >
-            <BackIcon size={20} color="#FFFFFF" />
-          </TouchableOpacity>
+      <View style={styles.modalRoot}>
+        {/* iOS Dimming Backdrop over previous screen */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: '#000000', opacity: backdropOpacity },
+          ]}
+          pointerEvents="none"
+        />
+
+        {/* Smooth iOS Horizontal Sliding Screen */}
+        <Animated.View
+          style={[
+            styles.slideContainer,
+            { transform: [{ translateX: slideAnim }] },
+          ]}
+        >
+          <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+            {/* Top Header */}
+            <View style={styles.topHeader}>
+              <TouchableOpacity
+                onPress={handleDismiss}
+                style={styles.backBtn}
+                activeOpacity={0.7}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityLabel="Back to companions"
+              >
+                <BackIcon size={20} color="#FFFFFF" />
+              </TouchableOpacity>
 
           <View style={styles.headerProfileCol}>
             {/* Persona DP / Avatar - Tap to View Netflix-Paused Image Preview */}
@@ -777,14 +960,14 @@ export default function CompanionChatModal({
               style={[styles.headerSquircle, { borderColor }]}
               onPress={() => setIsPreviewImageOpen(true)}
               activeOpacity={0.8}
-              accessibilityLabel={`View photo of ${activePersona.name}`}
+              accessibilityLabel={`View photo of ${currentPersona.name}`}
             >
-              {activePersona.image_url ? (
-                <Image source={{ uri: activePersona.image_url }} style={styles.headerAvatarImg} />
+              {currentPersona.image_url ? (
+                <Image source={{ uri: currentPersona.image_url }} style={styles.headerAvatarImg} fadeDuration={0} />
               ) : (
                 <View style={[styles.headerAvatarImg, { backgroundColor: borderColor }]}>
                   <Text style={styles.headerAvatarLetter}>
-                    {activePersona.name.charAt(0).toUpperCase()}
+                    {cleanPersonaChipName(currentPersona.name).charAt(0).toUpperCase()}
                   </Text>
                 </View>
               )}
@@ -795,10 +978,10 @@ export default function CompanionChatModal({
               style={styles.headerTextCol}
               onPress={() => setIsDetailModalOpen(true)}
               activeOpacity={0.7}
-              accessibilityLabel={`View profile details of ${activePersona.name}`}
+              accessibilityLabel={`View profile details of ${cleanPersonaChipName(currentPersona.name)}`}
             >
               <View style={styles.nameWithBadgeRow}>
-                <Text style={styles.headerBotName} numberOfLines={1}>{activePersona.name}{activePersona.age ? `, ${activePersona.age}` : ''}</Text>
+                <Text style={styles.headerBotName} numberOfLines={1}>{cleanPersonaChipName(currentPersona.name)}{currentPersona.age ? `, ${currentPersona.age}` : ''}</Text>
                 <View style={styles.headerInfoPill}>
                   <Text style={styles.headerInfoText}>i</Text>
                 </View>
@@ -810,8 +993,16 @@ export default function CompanionChatModal({
             </TouchableOpacity>
           </View>
 
-          {/* Symmetrical header spacer */}
-          <View style={styles.headerSpacer} />
+          {/* Header Menu Button */}
+          <TouchableOpacity
+            style={styles.menuBtn}
+            onPress={() => setIsDetailModalOpen(true)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityLabel="Persona details menu"
+          >
+            <MenuIcon size={18} color="#FFFFFF" />
+          </TouchableOpacity>
         </View>
 
         {/* Messages Flow */}
@@ -820,6 +1011,11 @@ export default function CompanionChatModal({
           data={messages}
           extraData={{ lastUserMessageId, isTyping }}
           keyExtractor={(item) => item.id}
+          removeClippedSubviews={Platform.OS === 'android'}
+          maxToRenderPerBatch={8}
+          windowSize={9}
+          initialNumToRender={12}
+          updateCellsBatchingPeriod={50}
           contentContainerStyle={[
             styles.messagesList,
             messages.length === 0 && styles.emptyMessagesList,
@@ -874,17 +1070,17 @@ export default function CompanionChatModal({
             ) : (
               <View style={styles.emptyContainer}>
                 <View style={[styles.emptySquircle, { borderColor }]}>
-                  {activePersona.image_url ? (
-                    <Image source={{ uri: activePersona.image_url }} style={styles.emptyAvatarImg} />
+                  {currentPersona.image_url ? (
+                    <Image source={{ uri: currentPersona.image_url }} style={styles.emptyAvatarImg} fadeDuration={0} />
                   ) : (
                     <View style={[styles.emptyAvatarFallback, { backgroundColor: borderColor }]}>
-                      <Text style={styles.emptyAvatarLetter}>{activePersona.name.charAt(0)}</Text>
+                      <Text style={styles.emptyAvatarLetter}>{cleanPersonaChipName(currentPersona.name).charAt(0)}</Text>
                     </View>
                   )}
                 </View>
-                <Text style={styles.emptyPersonaName}>{activePersona.name}</Text>
-                {activePersona.greeting ? (
-                  <Text style={styles.emptyTagline}>"{activePersona.greeting}"</Text>
+                <Text style={styles.emptyPersonaName}>{cleanPersonaChipName(currentPersona.name)}</Text>
+                {currentPersona.greeting ? (
+                  <Text style={styles.emptyTagline}>"{currentPersona.greeting}"</Text>
                 ) : (
                   <Text style={styles.emptyTagline}>Always here to talk</Text>
                 )}
@@ -923,7 +1119,6 @@ export default function CompanionChatModal({
                     style={[
                       styles.bubbleContainer,
                       styles.userBubble,
-                      { backgroundColor: borderColor },
                     ]}
                   >
                     <MarkdownText
@@ -950,6 +1145,25 @@ export default function CompanionChatModal({
                   </TouchableOpacity>
                 ) : (
                   <View style={styles.botMessageWrapper}>
+                    {/* Persona Header Chip */}
+                    <TouchableOpacity
+                      style={styles.botHeaderChip}
+                      activeOpacity={0.8}
+                      onPress={() => setIsDetailModalOpen(true)}
+                    >
+                      {currentPersona.image_url ? (
+                        <Image source={{ uri: currentPersona.image_url }} style={styles.chipAvatar} fadeDuration={0} />
+                      ) : (
+                        <View style={[styles.chipAvatar, styles.chipAvatarFallback, { backgroundColor: borderColor }]}>
+                          <Text style={styles.chipLetter}>{cleanPersonaChipName(currentPersona.name).charAt(0).toUpperCase()}</Text>
+                        </View>
+                      )}
+                      <Text style={styles.chipName} numberOfLines={1}>
+                        {cleanPersonaChipName(currentPersona.name)}
+                      </Text>
+                    </TouchableOpacity>
+
+                    {/* Wide Bot Response (No Speech Bubble, Full Width) */}
                     <TouchableOpacity
                       activeOpacity={0.88}
                       delayLongPress={260}
@@ -959,23 +1173,15 @@ export default function CompanionChatModal({
                         } catch {}
                         setActionMenuMessage(item);
                       }}
-                      style={[
-                        styles.bubbleContainer,
-                        styles.botBubble,
-                      ]}
+                      style={styles.botBubble}
                     >
                       <MarkdownText
                         content={item.text}
                         style={styles.botBubbleText}
                         actionStyle={styles.botActionText}
                       />
-                      <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
-                        <Text
-                          style={[
-                            styles.bubbleTimestamp,
-                            styles.botTimestampText,
-                          ]}
-                        >
+                      <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowBot]}>
+                        <Text style={styles.botTimestampText}>
                           {item.timestamp}
                         </Text>
                       </View>
@@ -1051,9 +1257,22 @@ export default function CompanionChatModal({
           }}
           ListFooterComponent={
             isTyping ? (
-              <View style={[styles.messageBubbleRow, styles.botBubbleRow]}>
-                <View style={[styles.bubbleContainer, styles.botBubble, styles.typingBubbleContainer]}>
-                  <TypingDotsAnimation color={borderColor} />
+              <View style={styles.typingRow}>
+                {currentPersona.image_url ? (
+                  <Image
+                    source={{ uri: currentPersona.image_url }}
+                    style={styles.typingAvatar}
+                    fadeDuration={0}
+                  />
+                ) : (
+                  <View style={[styles.typingAvatar, styles.typingAvatarFallback, { backgroundColor: borderColor }]}>
+                    <Text style={styles.typingAvatarLetter}>
+                      {cleanPersonaChipName(currentPersona.name).charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.typingPill}>
+                  <TypingDotsAnimation color="#D4D4D8" />
                 </View>
               </View>
             ) : undefined
@@ -1076,7 +1295,11 @@ export default function CompanionChatModal({
             <View style={styles.editingBanner}>
               <View style={styles.editingBannerLeft}>
                 <EditIcon size={12} color={borderColor} />
-                <Text style={styles.editingBannerText}>Editing message</Text>
+                <Text style={styles.editingBannerText}>
+                  {messages.find((m) => m.id === editingMessageId)?.sender === 'bot'
+                    ? 'Editing persona response'
+                    : 'Editing message'}
+                </Text>
               </View>
               <TouchableOpacity
                 onPress={handleCancelEdit}
@@ -1090,11 +1313,21 @@ export default function CompanionChatModal({
           )}
 
           <View style={styles.inputCapsule}>
+            <View style={styles.inputUserIconWrapper}>
+              <InputUserIcon size={26} />
+            </View>
+
             <TextInput
               ref={chatInputRef}
               style={styles.chatTextInput}
-              placeholder={editingMessageId ? 'Edit your message...' : `Message ${activePersona.name}...`}
-              placeholderTextColor="#6B7280"
+              placeholder={
+                editingMessageId
+                  ? messages.find((m) => m.id === editingMessageId)?.sender === 'bot'
+                    ? 'Edit persona response...'
+                    : 'Edit your message...'
+                  : 'Type a message...'
+              }
+              placeholderTextColor="#71717A"
               value={inputText}
               onChangeText={setInputText}
               multiline
@@ -1105,9 +1338,7 @@ export default function CompanionChatModal({
               style={[
                 styles.sendBtn,
                 {
-                  backgroundColor: inputText.trim() ? borderColor : `${borderColor}26`,
-                  borderWidth: inputText.trim() ? 0 : 1,
-                  borderColor: inputText.trim() ? 'transparent' : `${borderColor}66`,
+                  backgroundColor: inputText.trim() ? '#3F3F46' : '#2A2A2E',
                 },
               ]}
               onPress={() => handleSend()}
@@ -1115,9 +1346,9 @@ export default function CompanionChatModal({
               activeOpacity={0.75}
               accessibilityLabel={inputText.trim() ? 'Send message' : 'Continue interaction'}
             >
-              <SendArrowIcon
+              <ChatSendIcon
                 size={16}
-                color={inputText.trim() ? '#FFFFFF' : borderColor}
+                color={inputText.trim() ? '#FFFFFF' : '#A1A1AA'}
               />
             </TouchableOpacity>
           </View>
@@ -1150,8 +1381,8 @@ export default function CompanionChatModal({
                     style={[
                       styles.bubbleContainer,
                       actionMenuMessage.sender === 'user'
-                        ? [styles.userBubble, { backgroundColor: borderColor }]
-                        : styles.botBubble,
+                        ? styles.userBubble
+                        : [styles.botBubble, styles.igBotPreviewBubble],
                       styles.igElevatedBubble,
                     ]}
                   >
@@ -1253,6 +1484,26 @@ export default function CompanionChatModal({
                         onPress={() => {
                           const botMsg = actionMenuMessage;
                           setActionMenuMessage(null);
+                          handleStartEdit(botMsg);
+                        }}
+                        disabled={isTyping}
+                      >
+                        <View style={styles.igActionRowLeft}>
+                          <View style={styles.igActionIconCircle}>
+                            <EditIcon size={14} color="#FFFFFF" />
+                          </View>
+                          <Text style={styles.igActionText}>Edit Response</Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={styles.igActionDivider} />
+
+                      <TouchableOpacity
+                        style={styles.igActionRow}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          const botMsg = actionMenuMessage;
+                          setActionMenuMessage(null);
                           handleRegenerateBotReply(botMsg);
                         }}
                         disabled={isTyping}
@@ -1298,19 +1549,21 @@ export default function CompanionChatModal({
         {isPreviewImageOpen && (
           <ImagePreviewModal
             visible={isPreviewImageOpen}
-            imageUrl={activePersona.image_url}
-            name={activePersona.name}
-            tagline={activePersona.tagline}
+            imageUrl={currentPersona.image_url}
+            name={currentPersona.name}
+            tagline={currentPersona.tagline}
             borderColor={borderColor}
             onClose={() => setIsPreviewImageOpen(false)}
           />
         )}
-      </SafeAreaView>
+        </SafeAreaView>
+      </Animated.View>
+    </View>
 
-      {/* Persona Details & Mind Profile Modal */}
+    {/* Persona Details & Mind Profile Modal */}
       <PersonaDetailModal
         visible={isDetailModalOpen}
-        persona={activePersona}
+        persona={currentPersona}
         onClose={() => setIsDetailModalOpen(false)}
         onInitiateChat={() => setIsDetailModalOpen(false)}
       />
@@ -1319,9 +1572,19 @@ export default function CompanionChatModal({
 }
 
 const styles = StyleSheet.create({
+  modalRoot: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  slideContainer: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#171717',
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: '#09090D',
+    backgroundColor: '#171717',
   },
   topHeader: {
     flexDirection: 'row',
@@ -1330,18 +1593,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#161622',
-    backgroundColor: '#09090D',
+    borderBottomColor: '#242426',
+    backgroundColor: '#171717',
   },
   backBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#14141E',
+    backgroundColor: '#262628',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#222232',
+    borderColor: '#343438',
+  },
+  menuBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#262628',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#343438',
   },
   headerProfileCol: {
     flexDirection: 'row',
@@ -1349,6 +1622,7 @@ const styles = StyleSheet.create({
     gap: 10,
     flex: 1,
     marginLeft: 10,
+    marginRight: 6,
   },
   headerSquircle: {
     width: 40,
@@ -1356,7 +1630,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1.8,
     overflow: 'hidden',
-    backgroundColor: '#12121A',
+    backgroundColor: '#262628',
   },
   headerAvatarImg: {
     width: '100%',
@@ -1388,8 +1662,8 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#1E1E2A',
-    borderColor: '#323244',
+    backgroundColor: '#262628',
+    borderColor: '#343438',
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1443,7 +1717,7 @@ const styles = StyleSheet.create({
     borderRadius: 26,
     borderWidth: 2,
     overflow: 'hidden',
-    backgroundColor: '#14141E',
+    backgroundColor: '#262628',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
@@ -1489,9 +1763,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 14,
-    backgroundColor: '#151522',
+    backgroundColor: '#262628',
     borderWidth: 1,
-    borderColor: '#262638',
+    borderColor: '#343438',
     marginBottom: 10,
     marginTop: 4,
   },
@@ -1517,23 +1791,107 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   userBubble: {
+    backgroundColor: '#323236',
+    borderRadius: 18,
     borderBottomRightRadius: 4,
+    borderWidth: 1,
+    borderColor: '#404046',
   },
   botBubble: {
-    backgroundColor: '#151520',
-    borderWidth: 1,
-    borderColor: '#242436',
-    borderBottomLeftRadius: 4,
+    width: '100%',
+    maxWidth: '100%',
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 2,
+    borderRadius: 0,
   },
   botMessageWrapper: {
-    maxWidth: '82%',
+    width: '100%',
+    maxWidth: '100%',
     alignItems: 'flex-start',
+    marginVertical: 4,
+  },
+  botHeaderChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#262628',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#343438',
+    paddingLeft: 4,
+    paddingRight: 12,
+    paddingVertical: 3,
+    marginBottom: 6,
+    maxWidth: '92%',
+    gap: 8,
+  },
+  chipAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#1C1C20',
+  },
+  chipAvatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLetter: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 12,
+    color: '#FFFFFF',
+  },
+  chipName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#E4E4E7',
+    letterSpacing: 0.2,
+    flexShrink: 1,
+  },
+  typingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 8,
+    alignSelf: 'flex-start',
+  },
+  typingAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#262628',
+  },
+  typingAvatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  typingAvatarLetter: {
+    fontFamily: 'ChangaOne-Regular',
+    fontSize: 14,
+    color: '#FFFFFF',
+  },
+  typingPill: {
+    backgroundColor: '#2A2A2E',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    minHeight: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#343438',
   },
   variantNavRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 5,
-    marginLeft: 2,
+    marginTop: 8,
+    backgroundColor: '#242426',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#343438',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
     gap: 6,
   },
   variantRectBtn: {
@@ -1575,9 +1933,10 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   botBubbleText: {
-    fontSize: 15,
-    color: '#F3F4F6',
-    lineHeight: 22,
+    fontSize: 15.5,
+    color: '#FFFFFF',
+    lineHeight: 24,
+    letterSpacing: 0.15,
   },
   userActionText: {
     fontStyle: 'italic',
@@ -1585,7 +1944,7 @@ const styles = StyleSheet.create({
   },
   botActionText: {
     fontStyle: 'italic',
-    color: '#94A3B8',
+    color: '#9CA3AF',
   },
   bubbleFooterRow: {
     flexDirection: 'row',
@@ -1594,6 +1953,10 @@ const styles = StyleSheet.create({
   },
   bubbleFooterRowDefault: {
     justifyContent: 'flex-end',
+  },
+  bubbleFooterRowBot: {
+    justifyContent: 'flex-start',
+    marginTop: 4,
   },
   failedIndicatorRow: {
     flexDirection: 'row',
@@ -1631,6 +1994,14 @@ const styles = StyleSheet.create({
     maxWidth: '85%',
     marginBottom: 10,
   },
+  igBotPreviewBubble: {
+    backgroundColor: '#262628',
+    borderWidth: 1,
+    borderColor: '#343438',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+  },
   igElevatedBubble: {
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
@@ -1640,10 +2011,10 @@ const styles = StyleSheet.create({
   },
   igActionCard: {
     minWidth: 170,
-    backgroundColor: '#1E1E26',
+    backgroundColor: '#202022',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#2F2F3D',
+    borderColor: '#2E2E32',
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
@@ -1688,7 +2059,7 @@ const styles = StyleSheet.create({
   },
   igActionDivider: {
     height: 1,
-    backgroundColor: '#292936',
+    backgroundColor: '#2E2E32',
     width: '100%',
   },
   bubbleTimestamp: {
@@ -1701,10 +2072,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
     marginBottom: 6,
-    backgroundColor: '#12121A',
+    backgroundColor: '#202022',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#242434',
+    borderColor: '#2E2E32',
   },
   editingBannerLeft: {
     flexDirection: 'row',
@@ -1723,7 +2094,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.75)',
   },
   botTimestampText: {
-    color: '#64748B',
+    color: '#71717A',
   },
   typingBubbleContainer: {
     paddingHorizontal: 16,
@@ -1750,20 +2121,26 @@ const styles = StyleSheet.create({
   inputContainer: {
     paddingHorizontal: 16,
     paddingTop: 8,
-    backgroundColor: '#09090D',
+    backgroundColor: '#171717',
     borderTopWidth: 1,
-    borderTopColor: '#161622',
+    borderTopColor: '#242426',
   },
   inputCapsule: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#14141E',
+    backgroundColor: '#262628',
     borderRadius: 25,
     borderWidth: 1,
-    borderColor: '#262638',
-    paddingLeft: 16,
+    borderColor: '#343438',
+    paddingLeft: 8,
     paddingRight: 6,
     paddingVertical: 4,
+  },
+  inputUserIconWrapper: {
+    marginLeft: 2,
+    marginRight: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   chatTextInput: {
     flex: 1,

@@ -814,7 +814,7 @@ export default function CreateBotScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#09090D',
+    backgroundColor: '#171717',
   },
   keyboardContainer: {
     flex: 1,
@@ -1070,9 +1070,9 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   studioTextInput: {
-    backgroundColor: '#0A0A0E',
+    backgroundColor: '#202022',
     borderWidth: 1,
-    borderColor: '#242432',
+    borderColor: '#2E2E32',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1101,9 +1101,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   vaultTierCard: {
-    backgroundColor: '#0A0A0E',
+    backgroundColor: '#202022',
     borderWidth: 1,
-    borderColor: '#22222E',
+    borderColor: '#2E2E32',
     borderRadius: 16,
     padding: 14,
     gap: 4,
@@ -1167,9 +1167,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   multilineStudioInput: {
-    backgroundColor: '#0A0A0E',
+    backgroundColor: '#202022',
     borderWidth: 1,
-    borderColor: '#242432',
+    borderColor: '#2E2E32',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1202,9 +1202,9 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
   memoryStudioInput: {
-    backgroundColor: '#0A0A0E',
+    backgroundColor: '#202022',
     borderWidth: 1,
-    borderColor: '#242432',
+    borderColor: '#2E2E32',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
