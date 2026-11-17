@@ -21,7 +21,7 @@ interface MarkdownTextProps {
  * - _underscore italics_ -> italic
  * - `inline code` -> code style
  */
-export default function MarkdownText({
+const MarkdownText = React.memo(function MarkdownText({
   content,
   style,
   actionStyle,
@@ -31,45 +31,48 @@ export default function MarkdownText({
 }: MarkdownTextProps) {
   if (!content) return null;
 
-  // 1. Detect if content contains spoken dialogue inside quotation marks (ASCII " or curly “ ” or « »)
-  const hasQuotes = /([“"„«][^”"»]*[”"»])/.test(content);
-  // 2. Detect if content contains explicit *action* or _action_
-  const hasAsterisks = /(\*[^*]+\*|_[^_]+_)/.test(content);
+  const tokens = React.useMemo(() => {
+    // 1. Detect if content contains spoken dialogue inside quotation marks (ASCII " or curly “ ” or « »)
+    const hasQuotes = /([“"„«][^”"»]*[”"»])/.test(content);
+    // 2. Detect if content contains explicit *action* or _action_
+    const hasAsterisks = /(\*[^*]+\*|_[^_]+_)/.test(content);
 
-  const tokens: Array<{
-    type: 'dialogue' | 'action' | 'bold' | 'bold-action' | 'code';
-    text: string;
-  }> = [];
+    const parsedTokens: Array<{
+      type: 'dialogue' | 'action' | 'bold' | 'bold-action' | 'code';
+      text: string;
+    }> = [];
 
-  if (hasQuotes) {
-    // Quote-based novelistic dialogue format:
-    // Text inside quotes is spoken dialogue (bright white, normal font).
-    // Text outside quotes is atmosphere, actions, narration, and background (italic, dim color).
-    const quoteRegex = /([“"„«][^”"»]*[”"»])/g;
-    const segments = content.split(quoteRegex);
+    if (hasQuotes) {
+      // Quote-based novelistic dialogue format:
+      // Text inside quotes is spoken dialogue (bright white, normal font).
+      // Text outside quotes is atmosphere, actions, narration, and background (italic, dim color).
+      const quoteRegex = /([“"„«][^”"»]*[”"»])/g;
+      const segments = content.split(quoteRegex);
 
-    for (const segment of segments) {
-      if (!segment) continue;
+      for (const segment of segments) {
+        if (!segment) continue;
 
-      const isQuote =
-        /^[“"„«].*[”"»]$/s.test(segment) && segment.length >= 2;
+        const isQuote =
+          /^[“"„«].*[”"»]$/s.test(segment) && segment.length >= 2;
 
-      if (isQuote) {
-        // Dialogue: bright white, upright
-        tokens.push({ type: 'dialogue', text: segment });
-      } else {
-        // Outside quotes: atmosphere / narration / actions / background!
-        tokenizeMarkdown(segment, tokens, /* defaultToAction */ true);
+        if (isQuote) {
+          // Dialogue: bright white, upright
+          parsedTokens.push({ type: 'dialogue', text: segment });
+        } else {
+          // Outside quotes: atmosphere / narration / actions / background!
+          tokenizeMarkdown(segment, parsedTokens, /* defaultToAction */ true);
+        }
       }
+    } else if (hasAsterisks) {
+      // Asterisk-based roleplay without quotes:
+      // *action* is atmosphere/action (italic, dim), outside is dialogue (bright, normal)
+      tokenizeMarkdown(content, parsedTokens, /* defaultToAction */ false);
+    } else {
+      // Plain chat without quotes or asterisks: entire message is dialogue
+      parsedTokens.push({ type: 'dialogue', text: content });
     }
-  } else if (hasAsterisks) {
-    // Asterisk-based roleplay without quotes:
-    // *action* is atmosphere/action (italic, dim), outside is dialogue (bright, normal)
-    tokenizeMarkdown(content, tokens, /* defaultToAction */ false);
-  } else {
-    // Plain chat without quotes or asterisks: entire message is dialogue
-    tokens.push({ type: 'dialogue', text: content });
-  }
+    return parsedTokens;
+  }, [content]);
 
   return (
     <Text style={[styles.defaultBase, style]} numberOfLines={numberOfLines}>
@@ -133,7 +136,7 @@ export default function MarkdownText({
       })}
     </Text>
   );
-}
+});
 
 function tokenizeMarkdown(
   text: string,
@@ -197,4 +200,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
 });
+
+export default MarkdownText;
 

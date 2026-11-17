@@ -297,6 +297,196 @@ interface ChatMessage {
   activeVariantIndex?: number;
 }
 
+interface ChatMessageBubbleProps {
+  item: ChatMessage;
+  isLastUserMsg: boolean;
+  currentPersonaName: string;
+  currentPersonaImage?: string;
+  borderColor: string;
+  onLongPress: (item: ChatMessage) => void;
+  onPressFailed: (item: ChatMessage) => void;
+  onOpenDetails: () => void;
+  onSwitchVariant: (botMessageId: string, targetIndex: number) => void;
+}
+
+const ChatMessageBubble = React.memo(
+  function ChatMessageBubble({
+    item,
+    isLastUserMsg,
+    currentPersonaName,
+    currentPersonaImage,
+    borderColor,
+    onLongPress,
+    onPressFailed,
+    onOpenDetails,
+    onSwitchVariant,
+  }: ChatMessageBubbleProps) {
+    const isUser = item.sender === 'user';
+    const variantsList = item.variants ?? [];
+    const variantCount = variantsList.length;
+    const currentVariantIdx =
+      item.activeVariantIndex ?? (variantCount > 0 ? variantCount - 1 : 0);
+    return (
+      <View
+        style={[
+          styles.messageBubbleRow,
+          isUser ? styles.userBubbleRow : styles.botBubbleRow,
+        ]}
+      >
+        {isUser ? (
+          <TouchableOpacity
+            activeOpacity={0.88}
+            delayLongPress={260}
+            onLongPress={() => onLongPress(item)}
+            onPress={() => {
+              if (isLastUserMsg && item.isFailed) {
+                onPressFailed(item);
+              }
+            }}
+            style={[styles.bubbleContainer, styles.userBubble]}
+          >
+            <MarkdownText
+              content={item.text}
+              style={styles.userBubbleText}
+              actionStyle={styles.userActionText}
+            />
+            <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
+              {item.isFailed && (
+                <View style={styles.failedIndicatorRow}>
+                  <View style={styles.failedDot} />
+                  <Text style={styles.failedText}>Failed</Text>
+                </View>
+              )}
+              <Text style={[styles.bubbleTimestamp, styles.userTimestampText]}>
+                {item.timestamp}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.botMessageWrapper}>
+            {/* Persona Header Chip */}
+            <TouchableOpacity
+              style={styles.botHeaderChip}
+              activeOpacity={0.8}
+              onPress={onOpenDetails}
+            >
+              {currentPersonaImage ? (
+                <Image
+                  source={{ uri: currentPersonaImage }}
+                  style={styles.chipAvatar}
+                  fadeDuration={0}
+                />
+              ) : (
+                <View
+                  style={[
+                    styles.chipAvatar,
+                    styles.chipAvatarFallback,
+                    { backgroundColor: borderColor },
+                  ]}
+                >
+                  <Text style={styles.chipLetter}>
+                    {cleanPersonaChipName(currentPersonaName).charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              <Text style={styles.chipName} numberOfLines={1}>
+                {cleanPersonaChipName(currentPersonaName)}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Wide Bot Response (No Speech Bubble, Full Width) */}
+            <TouchableOpacity
+              activeOpacity={0.88}
+              delayLongPress={260}
+              onLongPress={() => onLongPress(item)}
+              style={styles.botBubble}
+            >
+              <MarkdownText
+                content={item.text}
+                style={styles.botBubbleText}
+                actionStyle={styles.botActionText}
+              />
+              <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowBot]}>
+                <Text style={styles.botTimestampText}>{item.timestamp}</Text>
+              </View>
+            </TouchableOpacity>
+
+            {variantCount > 1 && (
+              <View style={styles.variantNavRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.variantRectBtn,
+                    currentVariantIdx === 0 && styles.variantRectBtnDisabled,
+                  ]}
+                  onPress={() =>
+                    onSwitchVariant(item.id, currentVariantIdx - 1)
+                  }
+                  disabled={currentVariantIdx === 0}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Previous response"
+                >
+                  <Text
+                    style={[
+                      styles.variantArrowText,
+                      currentVariantIdx === 0 && styles.variantArrowTextDisabled,
+                    ]}
+                  >
+                    {'<'}
+                  </Text>
+                </TouchableOpacity>
+
+                <Text style={styles.variantCounterText}>
+                  {currentVariantIdx + 1} / {variantCount}
+                </Text>
+
+                <TouchableOpacity
+                  style={[
+                    styles.variantRectBtn,
+                    currentVariantIdx >= variantCount - 1 &&
+                      styles.variantRectBtnDisabled,
+                  ]}
+                  onPress={() =>
+                    onSwitchVariant(item.id, currentVariantIdx + 1)
+                  }
+                  disabled={currentVariantIdx >= variantCount - 1}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Next response"
+                >
+                  <Text
+                    style={[
+                      styles.variantArrowText,
+                      currentVariantIdx >= variantCount - 1 &&
+                        styles.variantArrowTextDisabled,
+                    ]}
+                  >
+                    {'>'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+    );
+  },
+  (prev, next) => {
+    return (
+      prev.item.id === next.item.id &&
+      prev.item.text === next.item.text &&
+      prev.item.timestamp === next.item.timestamp &&
+      prev.item.isFailed === next.item.isFailed &&
+      prev.item.activeVariantIndex === next.item.activeVariantIndex &&
+      prev.item.variants?.length === next.item.variants?.length &&
+      prev.isLastUserMsg === next.isLastUserMsg &&
+      prev.currentPersonaName === next.currentPersonaName &&
+      prev.currentPersonaImage === next.currentPersonaImage &&
+      prev.borderColor === next.borderColor
+    );
+  }
+);
+
 interface CompanionChatModalProps {
   visible: boolean;
   persona: PersonaItem | null;
@@ -521,40 +711,43 @@ export default function CompanionChatModal({
     );
   };
 
-  const handleSwitchVariant = async (messageId: string, targetIndex: number) => {
-    const targetMsg = messages.find((m) => m.id === messageId);
-    if (!targetMsg || !targetMsg.variants || targetIndex < 0 || targetIndex >= targetMsg.variants.length) {
-      return;
-    }
+  const handleSwitchVariant = React.useCallback(
+    async (messageId: string, targetIndex: number) => {
+      const targetMsg = messages.find((m) => m.id === messageId);
+      if (!targetMsg || !targetMsg.variants || targetIndex < 0 || targetIndex >= targetMsg.variants.length) {
+        return;
+      }
 
-    try {
-      Vibration.vibrate(15);
-    } catch {}
+      try {
+        Vibration.vibrate(15);
+      } catch {}
 
-    const selectedText = targetMsg.variants[targetIndex];
+      const selectedText = targetMsg.variants[targetIndex];
 
-    // Optimistic UI update: switch immediately on screen
-    setMessages((prev) =>
-      prev.map((m) => {
-        if (m.id === messageId) {
-          return {
-            ...m,
-            text: selectedText,
-            activeVariantIndex: targetIndex,
-          };
-        }
-        return m;
-      })
-    );
+      // Optimistic UI update: switch immediately on screen
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id === messageId) {
+            return {
+              ...m,
+              text: selectedText,
+              activeVariantIndex: targetIndex,
+            };
+          }
+          return m;
+        })
+      );
 
-    // Persist selected response to PostgreSQL backend
-    try {
-      const uId = await resolveConversationUserId(user?.id);
-      await switchChatMessageVariant(messageId, targetIndex, uId, user?.token);
-    } catch (err) {
-      console.warn('[CompanionChat] switchChatMessageVariant network error:', err);
-    }
-  };
+      // Persist selected response to PostgreSQL backend
+      try {
+        const uId = await resolveConversationUserId(user?.id);
+        await switchChatMessageVariant(messageId, targetIndex, uId, user?.token);
+      } catch (err) {
+        console.warn('[CompanionChat] switchChatMessageVariant network error:', err);
+      }
+    },
+    [messages, user?.id, user?.token]
+  );
 
   const handleRegenerateBotReply = async (botMsg: ChatMessage) => {
     const currentPersona = activePersona || persona;
@@ -965,6 +1158,56 @@ export default function CompanionChatModal({
   if (!currentPersona) return null;
   const borderColor = currentPersona.border_color || '#F43F5E';
 
+  const keyExtractor = React.useCallback((item: ChatMessage) => item.id, []);
+
+  const handleLongPressMessage = React.useCallback((item: ChatMessage) => {
+    try {
+      Vibration.vibrate(25);
+    } catch {}
+    setActionMenuMessage(item);
+  }, []);
+
+  const handlePressFailedMessage = React.useCallback((item: ChatMessage) => {
+    try {
+      Vibration.vibrate(20);
+    } catch {}
+    setActionMenuMessage(item);
+  }, []);
+
+  const handleOpenDetails = React.useCallback(() => {
+    setIsDetailModalOpen(true);
+  }, []);
+
+  const renderItem = React.useCallback(
+    ({ item }: { item: ChatMessage }) => {
+      const isUser = item.sender === 'user';
+      const isLastUserMsg = isUser && item.id === lastUserMessageId;
+      return (
+        <ChatMessageBubble
+          item={item}
+          isLastUserMsg={isLastUserMsg}
+          currentPersonaName={currentPersona.name}
+          currentPersonaImage={currentPersona.image_url}
+          borderColor={borderColor}
+          onLongPress={handleLongPressMessage}
+          onPressFailed={handlePressFailedMessage}
+          onOpenDetails={handleOpenDetails}
+          onSwitchVariant={handleSwitchVariant}
+        />
+      );
+    },
+    [
+      lastUserMessageId,
+      currentPersona.name,
+      currentPersona.image_url,
+      borderColor,
+      handleLongPressMessage,
+      handlePressFailedMessage,
+      handleOpenDetails,
+      handleSwitchVariant,
+    ]
+  );
+
   const backdropOpacity = slideAnim.interpolate({
     inputRange: [0, width],
     outputRange: [0.65, 0],
@@ -1060,13 +1303,14 @@ export default function CompanionChatModal({
         <FlatList
           ref={flatListRef}
           data={messages}
-          extraData={{ lastUserMessageId, isTyping }}
-          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          extraData={lastUserMessageId}
           removeClippedSubviews={Platform.OS === 'android'}
-          maxToRenderPerBatch={8}
-          windowSize={9}
-          initialNumToRender={12}
-          updateCellsBatchingPeriod={50}
+          maxToRenderPerBatch={10}
+          windowSize={11}
+          initialNumToRender={14}
+          updateCellsBatchingPeriod={40}
           contentContainerStyle={[
             styles.messagesList,
             messages.length === 0 && styles.emptyMessagesList,
@@ -1140,173 +1384,6 @@ export default function CompanionChatModal({
               </View>
             )
           }
-          renderItem={({ item }) => {
-            const isUser = item.sender === 'user';
-            const isLastUserMsg = isUser && item.id === lastUserMessageId;
-            return (
-              <View
-                style={[
-                  styles.messageBubbleRow,
-                  isUser ? styles.userBubbleRow : styles.botBubbleRow,
-                ]}
-              >
-                {isUser ? (
-                  <TouchableOpacity
-                    activeOpacity={0.88}
-                    delayLongPress={260}
-                    onLongPress={() => {
-                      try {
-                        Vibration.vibrate(25);
-                      } catch {}
-                      setActionMenuMessage(item);
-                    }}
-                    onPress={() => {
-                      if (isLastUserMsg && item.isFailed) {
-                        try {
-                          Vibration.vibrate(20);
-                        } catch {}
-                        setActionMenuMessage(item);
-                      }
-                    }}
-                    style={[
-                      styles.bubbleContainer,
-                      styles.userBubble,
-                    ]}
-                  >
-                    <MarkdownText
-                      content={item.text}
-                      style={styles.userBubbleText}
-                      actionStyle={styles.userActionText}
-                    />
-                    <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowDefault]}>
-                      {item.isFailed && (
-                        <View style={styles.failedIndicatorRow}>
-                          <View style={styles.failedDot} />
-                          <Text style={styles.failedText}>Failed</Text>
-                        </View>
-                      )}
-                      <Text
-                        style={[
-                          styles.bubbleTimestamp,
-                          styles.userTimestampText,
-                        ]}
-                      >
-                        {item.timestamp}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ) : (
-                  <View style={styles.botMessageWrapper}>
-                    {/* Persona Header Chip */}
-                    <TouchableOpacity
-                      style={styles.botHeaderChip}
-                      activeOpacity={0.8}
-                      onPress={() => setIsDetailModalOpen(true)}
-                    >
-                      {currentPersona.image_url ? (
-                        <Image source={{ uri: currentPersona.image_url }} style={styles.chipAvatar} fadeDuration={0} />
-                      ) : (
-                        <View style={[styles.chipAvatar, styles.chipAvatarFallback, { backgroundColor: borderColor }]}>
-                          <Text style={styles.chipLetter}>{cleanPersonaChipName(currentPersona.name).charAt(0).toUpperCase()}</Text>
-                        </View>
-                      )}
-                      <Text style={styles.chipName} numberOfLines={1}>
-                        {cleanPersonaChipName(currentPersona.name)}
-                      </Text>
-                    </TouchableOpacity>
-
-                    {/* Wide Bot Response (No Speech Bubble, Full Width) */}
-                    <TouchableOpacity
-                      activeOpacity={0.88}
-                      delayLongPress={260}
-                      onLongPress={() => {
-                        try {
-                          Vibration.vibrate(25);
-                        } catch {}
-                        setActionMenuMessage(item);
-                      }}
-                      style={styles.botBubble}
-                    >
-                      <MarkdownText
-                        content={item.text}
-                        style={styles.botBubbleText}
-                        actionStyle={styles.botActionText}
-                      />
-                      <View style={[styles.bubbleFooterRow, styles.bubbleFooterRowBot]}>
-                        <Text style={styles.botTimestampText}>
-                          {item.timestamp}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-
-                    {item.variants && item.variants.length > 1 && (
-                      <View style={styles.variantNavRow}>
-                        <TouchableOpacity
-                          style={[
-                            styles.variantRectBtn,
-                            (item.activeVariantIndex ?? item.variants.length - 1) === 0 && styles.variantRectBtnDisabled,
-                          ]}
-                          onPress={() =>
-                            handleSwitchVariant(
-                              item.id,
-                              (item.activeVariantIndex ?? item.variants.length - 1) - 1
-                            )
-                          }
-                          disabled={
-                            (item.activeVariantIndex ?? item.variants.length - 1) === 0 || isTyping
-                          }
-                          activeOpacity={0.7}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          accessibilityLabel="Previous response"
-                        >
-                          <Text
-                            style={[
-                              styles.variantArrowText,
-                              (item.activeVariantIndex ?? item.variants.length - 1) === 0 && styles.variantArrowTextDisabled,
-                            ]}
-                          >
-                            {'<'}
-                          </Text>
-                        </TouchableOpacity>
-
-                        <Text style={styles.variantCounterText}>
-                          {(item.activeVariantIndex ?? item.variants.length - 1) + 1} / {item.variants.length}
-                        </Text>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.variantRectBtn,
-                            (item.activeVariantIndex ?? item.variants.length - 1) >= item.variants.length - 1 && styles.variantRectBtnDisabled,
-                          ]}
-                          onPress={() =>
-                            handleSwitchVariant(
-                              item.id,
-                              (item.activeVariantIndex ?? item.variants.length - 1) + 1
-                            )
-                          }
-                          disabled={
-                            (item.activeVariantIndex ?? item.variants.length - 1) >= item.variants.length - 1 || isTyping
-                          }
-                          activeOpacity={0.7}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          accessibilityLabel="Next response"
-                        >
-                          <Text
-                            style={[
-                              styles.variantArrowText,
-                              (item.activeVariantIndex ?? item.variants.length - 1) >= item.variants.length - 1 && styles.variantArrowTextDisabled,
-                            ]}
-                          >
-                            {'>'}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                )}
-              </View>
-            );
-          }}
           ListFooterComponent={
             isTyping ? (
               <View style={styles.typingRow}>
