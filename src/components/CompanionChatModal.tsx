@@ -779,9 +779,19 @@ export default function CompanionChatModal({
           variants: item.variants || (item.response_metadata?.variants && item.response_metadata.variants.length > 1 ? item.response_metadata.variants : undefined),
           activeVariantIndex: item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
         }));
+        const olderCount = older.length;
         setMessages((prev) => [...older, ...prev]);
         setHistoryPage(nextPage);
         setHasMoreHistory(Boolean(data.has_more));
+        setTimeout(() => {
+          try {
+            flatListRef.current?.scrollToIndex({
+              index: olderCount,
+              animated: false,
+              viewPosition: 0,
+            });
+          } catch {}
+        }, 50);
       } else {
         setHasMoreHistory(false);
       }
@@ -1062,7 +1072,8 @@ export default function CompanionChatModal({
             messages.length === 0 && styles.emptyMessagesList,
           ]}
           keyboardShouldPersistTaps="handled"
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          onScrollToIndexFailed={() => {}}
           ListHeaderComponent={
             hasMoreHistory ? (
               <TouchableOpacity
