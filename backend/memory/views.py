@@ -463,7 +463,7 @@ class ChatMemoryView(APIView):
         except Exception as exc:
             logger.warning("Error checking user persona customization: %s", exc)
 
-        # Fetch the last six messages from PostgreSQL for immediate conversational continuity.
+        # Fetch up to 10 recent messages from PostgreSQL for immediate conversational continuity.
         exclude_turn_ids = []
         if user_msg_to_edit:
             exclude_turn_ids.append(user_msg_to_edit.id)
@@ -477,7 +477,7 @@ class ChatMemoryView(APIView):
         if exclude_turn_ids:
             turns_filter = turns_filter.exclude(id__in=exclude_turn_ids)
 
-        recent_turns_qs = list(turns_filter.order_by("-created_at")[:6])
+        recent_turns_qs = list(turns_filter.order_by("-created_at")[:10])
         recent_turns_qs.reverse()
         conversation_history = [
             {

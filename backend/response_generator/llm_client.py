@@ -180,6 +180,8 @@ def call_llm(
     messages: list,
     max_tokens: int = 1024,
     temperature: float = 0.88,
+    frequency_penalty: float = 0.5,
+    presence_penalty: float = 0.5,
 ) -> tuple[str | None, str | None]:
     """
     Direct LLM call with fallback model chain.
@@ -248,8 +250,8 @@ def call_llm(
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": min(max_tokens, 3072),
-                    "frequency_penalty": 0.5,
-                    "presence_penalty": 0.5,
+                    "frequency_penalty": frequency_penalty,
+                    "presence_penalty": presence_penalty,
                     "top_p": 0.9,
                 }
                 url = f"{llm_base_url}/chat/completions"

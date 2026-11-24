@@ -8,7 +8,6 @@ atmosphere, initiative, and conversational momentum.
 """
 
 import logging
-import random
 import re
 
 from memory.reeve_service import (
@@ -17,19 +16,14 @@ from memory.reeve_service import (
     deduplicate_context,
 )
 
-from .prompt_builder import (
-    get_bucketed_time_str,
-    build_roleplay_system_prompt,
-)
+from .prompt_builder import build_roleplay_system_prompt
 from .llm_client import call_llm
-from .sanitizer import (
-    strip_emojis,
-    sanitize_companion_reply,
-)
+from .sanitizer import sanitize_companion_reply
 
 logger = logging.getLogger("amour.response_generator")
 
 MIN_NAME_COOLDOWN_TURNS = 4
+MAX_SHORT_TERM_HISTORY = 10
 
 NAME_INTENT_PATTERN = re.compile(
     r"\b("
@@ -109,7 +103,7 @@ def generate_companion_reply(
 ) -> dict:
     """
     Single-prompt AI persona response generation.
-    Retrieves Reeve memory, formats the last 6 messages from PostgreSQL,
+    Retrieves Reeve memory, formats up to the last 10 messages from PostgreSQL,
     and calls the LLM directly for rich, forward-moving roleplay.
     Supports autonomous continue when the user remains silent or prompts the bot to take the lead.
     """
@@ -158,10 +152,10 @@ def generate_companion_reply(
         is_autonomous_continue=is_autonomous_continue,
     )
 
-    # 3. Assemble messages: system prompt + last 4 messages as context + current message
+    # 3. Assemble messages: system prompt + recent short-term history + current message
     messages = [{"role": "system", "content": system_prompt}]
 
-    for turn in (conversation_history or [])[-4:]:
+    for turn in (conversation_history or [])[-MAX_SHORT_TERM_HISTORY:]:
         role = turn.get("role")
         content = turn.get("content")
         if role in ("user", "assistant") and content and isinstance(content, str) and content.strip():
@@ -192,6 +186,8 @@ def generate_companion_reply(
         messages=messages,
         max_tokens=target_max_tokens,
         temperature=0.88,
+        frequency_penalty=0.5,
+        presence_penalty=0.5,
     )
 
     if not raw_text:
