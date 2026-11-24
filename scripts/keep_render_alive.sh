@@ -2,7 +2,7 @@
 # Amour AI - Render Keep-Alive Script
 # Pings the backend every 9 minutes to keep the Render server warm and prevent spin-down.
 
-TARGET_URL="https://amour-ai-d6a8.onrender.com/api/memory/status/"
+TARGET_URL="https://amour-ai-v3e4.onrender.com/api/memory/status/"
 INTERVAL=540  # 9 minutes (Render free tier spins down after 15 min of inactivity)
 LOG_FILE="${HOME}/Library/Logs/amour_keepalive.log"
 

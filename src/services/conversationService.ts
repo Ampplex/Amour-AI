@@ -32,7 +32,7 @@ export async function fetchUserConversations(
 
   try {
     const userKey = await getOrCreateUserKey();
-    const baseUrl = API_CONFIG.baseUrl || 'https://amour-ai-d6a8.onrender.com/api';
+    const baseUrl = API_CONFIG.baseUrl || 'https://amour-ai-v3e4.onrender.com/api';
     const res = await fetch(`${baseUrl}/memory/conversations/?user_id=${encodeURIComponent(userId)}`, {
       method: 'GET',
       headers: {

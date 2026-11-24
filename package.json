@@ -34,6 +34,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "web:app": "cd web && npm start",
+    "web:build": "cd web && npm run build",
     "build": "tsc --noEmit && expo export -p android"
   },
   "private": true,

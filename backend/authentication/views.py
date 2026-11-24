@@ -73,9 +73,9 @@ def _get_public_base_url(request=None) -> str:
         except Exception:
             pass
 
-    configured = getattr(settings, "BACKEND_PUBLIC_URL", "https://amour-ai-d6a8.onrender.com").rstrip("/")
+    configured = getattr(settings, "BACKEND_PUBLIC_URL", "https://amour-ai-v3e4.onrender.com").rstrip("/")
     if any(local_ip in configured for local_ip in ("192.168.", "127.0.0.1", "localhost")):
-        return "https://amour-ai-d6a8.onrender.com"
+        return "https://amour-ai-v3e4.onrender.com"
     return configured
 
 

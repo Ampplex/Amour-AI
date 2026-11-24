@@ -29,7 +29,7 @@ import {
   subscribePersonas,
 } from '../../services/personaService';
 
-function ShieldLockIcon({ size = 13, color = '#F43F5E' }: { size?: number; color?: string }) {
+function ShieldLockIcon({ size = 13, color = '#D4D4D8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -45,7 +45,7 @@ function ShieldLockIcon({ size = 13, color = '#F43F5E' }: { size?: number; color
   );
 }
 
-function GlobeIcon({ size = 13, color = '#10B981' }: { size?: number; color?: string }) {
+function GlobeIcon({ size = 13, color = '#D4D4D8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Circle cx="12" cy="12" r="10" stroke={color} strokeWidth="2" />
@@ -71,7 +71,7 @@ function MessageIcon({ size = 15, color = '#FFFFFF' }: { size?: number; color?: 
   );
 }
 
-function EditIcon({ size = 13, color = '#F43F5E' }: { size?: number; color?: string }) {
+function EditIcon({ size = 13, color = '#D4D4D8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -217,16 +217,16 @@ export default function PersonasScreen() {
                 style={[
                   styles.visibilityBadge,
                   {
-                    backgroundColor: isPrivate ? 'rgba(244, 63, 94, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                    borderColor: isPrivate ? 'rgba(244, 63, 94, 0.3)' : 'rgba(16, 185, 129, 0.3)',
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    borderColor: 'rgba(255, 255, 255, 0.18)',
                   },
                 ]}
               >
-                {isPrivate ? <ShieldLockIcon size={11} color="#F43F5E" /> : <GlobeIcon size={11} color="#10B981" />}
+                {isPrivate ? <ShieldLockIcon size={11} color="#D4D4D8" /> : <GlobeIcon size={11} color="#D4D4D8" />}
                 <Text
                   style={[
                     styles.visibilityText,
-                    { color: isPrivate ? '#F43F5E' : '#10B981' },
+                    { color: '#E4E4E7' },
                   ]}
                 >
                   {isPrivate ? 'Private' : 'Community'}
@@ -257,7 +257,7 @@ export default function PersonasScreen() {
 
         {/* Roleplay Opening Greeting Preview */}
         {item.greeting ? (
-          <View style={styles.greetingBox}>
+          <View style={[styles.greetingBox, { borderLeftColor: borderColor }]}>
             <Text style={styles.greetingLabel}>First Message</Text>
             <MarkdownText content={item.greeting} style={styles.greetingText} />
           </View>
@@ -271,7 +271,7 @@ export default function PersonasScreen() {
               onPress={() => setEditingPublicPersona(item)}
               activeOpacity={0.8}
             >
-              <EditIcon size={13} color="#F43F5E" />
+              <EditIcon size={13} color="#D4D4D8" />
               <Text style={styles.editPublicBtnText}>Edit Public Version</Text>
             </TouchableOpacity>
           )}
@@ -398,7 +398,9 @@ export default function PersonasScreen() {
         onClose={() => setSelectedPersona(null)}
         onInitiateChat={(p) => {
           setSelectedPersona(null);
-          handleInitiateChat(p);
+          setTimeout(() => {
+            handleInitiateChat(p);
+          }, 320);
         }}
         onDelete={handleDelete}
       />
@@ -481,8 +483,8 @@ const styles = StyleSheet.create({
     borderColor: '#2E2E32',
   },
   filterChipActive: {
-    backgroundColor: '#26141A',
-    borderColor: '#F43F5E',
+    backgroundColor: '#2E2E32',
+    borderColor: '#4A4A50',
   },
   filterChipText: {
     fontSize: 12,
@@ -490,7 +492,7 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
   },
   filterChipTextActive: {
-    color: '#F43F5E',
+    color: '#FFFFFF',
   },
   listContent: {
     paddingHorizontal: 16,
@@ -610,15 +612,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderRadius: 10,
-    backgroundColor: 'rgba(244, 63, 94, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(244, 63, 94, 0.4)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
     justifyContent: 'center',
   },
   editPublicBtnText: {
     fontFamily: 'ChangaOne-Regular',
     fontSize: 12.5,
-    color: '#F43F5E',
+    color: '#E4E4E7',
     letterSpacing: 0.3,
   },
   detailsBtn: {

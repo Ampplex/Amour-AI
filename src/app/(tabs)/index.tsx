@@ -201,52 +201,55 @@ const FeedPostCard = React.memo(({
       </View>
 
       {/* 2. Hero Media: Large Avatar Image with Floating Chat Bubble */}
-      <TouchableOpacity
-        style={styles.mediaContainer}
-        onPress={handleMediaPress}
-        activeOpacity={0.96}
-      >
-        {item.image_url ? (
-          <Image
-            source={{ uri: item.image_url }}
-            style={styles.mediaImage}
-            resizeMode="cover"
-            fadeDuration={0}
-          />
-        ) : (
-          <View style={[styles.mediaFallback, { backgroundColor: '#13131F' }]}>
-            <View style={[styles.fallbackSquircle, { borderColor }]}>
-              <Text style={[styles.fallbackLetter, { color: borderColor }]}>
-                {item.name ? item.name.charAt(0).toUpperCase() : 'A'}
-              </Text>
+      <View style={styles.mediaContainer}>
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          onPress={handleMediaPress}
+          activeOpacity={0.96}
+        >
+          {item.image_url ? (
+            <Image
+              source={{ uri: item.image_url }}
+              style={styles.mediaImage}
+              resizeMode="cover"
+              fadeDuration={0}
+            />
+          ) : (
+            <View style={[styles.mediaFallback, { backgroundColor: '#13131F' }]}>
+              <View style={[styles.fallbackSquircle, { borderColor }]}>
+                <Text style={[styles.fallbackLetter, { color: borderColor }]}>
+                  {item.name ? item.name.charAt(0).toUpperCase() : 'A'}
+                </Text>
+              </View>
+              <Text style={styles.fallbackName}>{item.name}</Text>
             </View>
-            <Text style={styles.fallbackName}>{item.name}</Text>
-          </View>
-        )}
+          )}
 
-        {/* Floating Top-Right Chat Bubble */}
+          {/* Double-tap animated heart pop in center */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.centeredPopHeart,
+              {
+                transform: [{ scale: heartScaleAnim }],
+                opacity: heartOpacityAnim,
+              },
+            ]}
+          >
+            <HeartIcon size={96} filled color="#F43F5E" />
+          </Animated.View>
+        </TouchableOpacity>
+
+        {/* Floating Top-Right Chat Bubble - Independent Sibling to prevent touch bubbling */}
         <TouchableOpacity
           style={styles.floatingChatBadge}
           onPress={() => onInitiateChat(item)}
           activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <FloatingChatBubble size={16} color="#FFFFFF" />
         </TouchableOpacity>
-
-        {/* Double-tap animated heart pop in center */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.centeredPopHeart,
-            {
-              transform: [{ scale: heartScaleAnim }],
-              opacity: heartOpacityAnim,
-            },
-          ]}
-        >
-          <HeartIcon size={96} filled color="#F43F5E" />
-        </Animated.View>
-      </TouchableOpacity>
+      </View>
 
       {/* 3. Action Bar: Like & Share & Quick Chat */}
       <View style={styles.actionBarRow}>
@@ -560,7 +563,9 @@ export default function HomeScreen() {
         onClose={() => setSelectedPersona(null)}
         onInitiateChat={(p) => {
           setSelectedPersona(null);
-          handleInitiateChat(p);
+          setTimeout(() => {
+            handleInitiateChat(p);
+          }, 320);
         }}
       />
 
@@ -574,7 +579,9 @@ export default function HomeScreen() {
         onClose={() => setSelectedPublisher(null)}
         onSelectPersona={(persona) => {
           setSelectedPublisher(null);
-          setSelectedPersona(persona);
+          setTimeout(() => {
+            setSelectedPersona(persona);
+          }, 320);
         }}
         onToggleFollowParent={handleToggleFollow}
       />

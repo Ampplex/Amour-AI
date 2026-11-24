@@ -21,20 +21,20 @@ import { showAlert } from '../../context/AlertContext';
 import { MemorySecurityModal } from '../../components/MemorySecurityModal';
 import { getReplyLengthPreference, setReplyLengthPreference, ReplyLengthOption } from '../../services/settingsService';
 
-function MessageLengthIcon({ size = 16, color = '#EC4899' }: { size?: number; color?: string }) {
+function MessageLengthIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
         d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
         stroke={color}
-        strokeWidth="2"
+        strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <Path
         d="M8 10h8M8 14h4"
         stroke={color}
-        strokeWidth="2"
+        strokeWidth="1.8"
         strokeLinecap="round"
       />
     </Svg>
@@ -105,7 +105,7 @@ function CloseIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: st
   );
 }
 
-function CheckIcon({ size = 16, color = '#10B981' }: { size?: number; color?: string }) {
+function CheckIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -119,7 +119,7 @@ function CheckIcon({ size = 16, color = '#10B981' }: { size?: number; color?: st
   );
 }
 
-function UserIcon({ size = 34, color = '#EC4899' }: { size?: number; color?: string }) {
+function UserIcon({ size = 34, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -320,7 +320,7 @@ export default function ProfileScreen() {
 
         <View style={styles.guestContainer}>
           <View style={styles.guestIconCircle}>
-            <UserIcon size={38} color="#EC4899" />
+            <UserIcon size={38} color="#FFFFFF" />
           </View>
           <Text style={styles.guestTitle}>Welcome to Amour AI</Text>
           <Text style={styles.guestSubtitle}>
@@ -396,8 +396,8 @@ export default function ProfileScreen() {
           activeOpacity={0.8}
         >
           <View style={styles.editButtonContent}>
-            <View style={[styles.editIconCircle, { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}>
-              <ShieldLockIcon size={16} color="#10B981" />
+            <View style={styles.editIconCircle}>
+              <ShieldLockIcon size={16} color="#FFFFFF" />
             </View>
             <View style={styles.editButtonTextContainer}>
               <Text style={styles.editButtonTitle}>Memory Encryption & Recovery</Text>
@@ -410,102 +410,82 @@ export default function ProfileScreen() {
         {/* Persona Response Length Settings Card */}
         <View style={styles.replyLengthCard}>
           <View style={styles.replyLengthHeader}>
-            <View style={[styles.editIconCircle, { backgroundColor: 'rgba(236, 72, 153, 0.15)', borderColor: '#EC4899' }]}>
-              <MessageLengthIcon size={18} color="#EC4899" />
+            <View style={styles.editIconCircle}>
+              <MessageLengthIcon size={16} color="#FFFFFF" />
             </View>
             <View style={styles.replyLengthHeaderTextContainer}>
               <Text style={styles.replyLengthCardTitle}>Response Length</Text>
-              <Text style={styles.replyLengthCardSubtitle}>Choose conversational depth of companion replies</Text>
+              <Text style={styles.replyLengthCardSubtitle}>Dialogue pacing & detail</Text>
             </View>
           </View>
 
-          <View style={styles.replyLengthOptionsList}>
-            {/* Short Option */}
+          {/* Segmented Pill Selector: Concise | Adaptive | Detailed */}
+          <View style={styles.segmentTrack}>
             <TouchableOpacity
               style={[
-                styles.replyLengthOption,
-                replyLength === 'short' && styles.replyLengthOptionActive,
+                styles.segmentItem,
+                replyLength === 'short' && styles.segmentItemActive,
               ]}
               onPress={() => handleSelectReplyLength('short')}
               activeOpacity={0.8}
             >
-              <View style={styles.replyLengthOptionTopRow}>
-                <View style={styles.replyLengthRadioContainer}>
-                  <View style={[styles.replyLengthRadioOuter, replyLength === 'short' && styles.replyLengthRadioOuterActive]}>
-                    {replyLength === 'short' && <View style={styles.replyLengthRadioInner} />}
-                  </View>
-                  <Text style={[styles.replyLengthOptionLabel, replyLength === 'short' && styles.replyLengthOptionLabelActive]}>
-                    Short
-                  </Text>
-                </View>
-                <View style={[styles.replyLengthBadge, replyLength === 'short' && styles.replyLengthBadgeActive]}>
-                  <Text style={[styles.replyLengthBadgeText, replyLength === 'short' && styles.replyLengthBadgeTextActive]}>
-                    1–2 Sentences
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.replyLengthOptionDesc}>
-                Brief, punchy replies like casual texting. Minimal narration.
+              <Text
+                style={[
+                  styles.segmentLabel,
+                  replyLength === 'short' && styles.segmentLabelActive,
+                ]}
+              >
+                Concise
               </Text>
             </TouchableOpacity>
 
-            {/* Default Option */}
             <TouchableOpacity
               style={[
-                styles.replyLengthOption,
-                replyLength === 'default' && styles.replyLengthOptionActive,
+                styles.segmentItem,
+                replyLength === 'default' && styles.segmentItemActive,
               ]}
               onPress={() => handleSelectReplyLength('default')}
               activeOpacity={0.8}
             >
-              <View style={styles.replyLengthOptionTopRow}>
-                <View style={styles.replyLengthRadioContainer}>
-                  <View style={[styles.replyLengthRadioOuter, replyLength === 'default' && styles.replyLengthRadioOuterActive]}>
-                    {replyLength === 'default' && <View style={styles.replyLengthRadioInner} />}
-                  </View>
-                  <Text style={[styles.replyLengthOptionLabel, replyLength === 'default' && styles.replyLengthOptionLabelActive]}>
-                    Default
-                  </Text>
-                </View>
-                <View style={[styles.replyLengthBadge, replyLength === 'default' && styles.replyLengthBadgeActive]}>
-                  <Text style={[styles.replyLengthBadgeText, replyLength === 'default' && styles.replyLengthBadgeTextActive]}>
-                    Adaptive
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.replyLengthOptionDesc}>
-                Standard natural dialogue & narration. Adapts to scene context.
+              <Text
+                style={[
+                  styles.segmentLabel,
+                  replyLength === 'default' && styles.segmentLabelActive,
+                ]}
+              >
+                Adaptive
               </Text>
             </TouchableOpacity>
 
-            {/* Long Option */}
             <TouchableOpacity
               style={[
-                styles.replyLengthOption,
-                replyLength === 'long' && styles.replyLengthOptionActive,
+                styles.segmentItem,
+                replyLength === 'long' && styles.segmentItemActive,
               ]}
               onPress={() => handleSelectReplyLength('long')}
               activeOpacity={0.8}
             >
-              <View style={styles.replyLengthOptionTopRow}>
-                <View style={styles.replyLengthRadioContainer}>
-                  <View style={[styles.replyLengthRadioOuter, replyLength === 'long' && styles.replyLengthRadioOuterActive]}>
-                    {replyLength === 'long' && <View style={styles.replyLengthRadioInner} />}
-                  </View>
-                  <Text style={[styles.replyLengthOptionLabel, replyLength === 'long' && styles.replyLengthOptionLabelActive]}>
-                    Long
-                  </Text>
-                </View>
-                <View style={[styles.replyLengthBadge, replyLength === 'long' && styles.replyLengthBadgeActive]}>
-                  <Text style={[styles.replyLengthBadgeText, replyLength === 'long' && styles.replyLengthBadgeTextActive]}>
-                    Multi-Paragraph
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.replyLengthOptionDesc}>
-                Expansive, multi-paragraph roleplay with rich sensory detail & thoughts.
+              <Text
+                style={[
+                  styles.segmentLabel,
+                  replyLength === 'long' && styles.segmentLabelActive,
+                ]}
+              >
+                Detailed
               </Text>
             </TouchableOpacity>
+          </View>
+
+          {/* Contextual Description */}
+          <View style={styles.replyDescriptionRow}>
+            <View style={styles.replyDescriptionDot} />
+            <Text style={styles.replyDescriptionText}>
+              {replyLength === 'short'
+                ? 'Fast, focused exchanges with minimal descriptive pauses.'
+                : replyLength === 'long'
+                ? 'Expansive roleplay with rich character thoughts and scene atmosphere.'
+                : 'Context-aware dialogue that naturally balances speed and story.'}
+            </Text>
           </View>
         </View>
 
@@ -526,7 +506,7 @@ export default function ProfileScreen() {
           disabled={isDeletingAccount}
         >
           {isDeletingAccount ? (
-            <ActivityIndicator size="small" color="#EF4444" />
+            <ActivityIndicator size="small" color="#A1A1AA" />
           ) : (
             <Text style={styles.deleteAccountText}>Delete Account</Text>
           )}
@@ -641,7 +621,7 @@ export default function ProfileScreen() {
                     />
                     {editUsername.length >= 3 && !usernameError && (
                       <View style={styles.inputCheckmark}>
-                        <CheckIcon size={16} color="#10B981" />
+                        <CheckIcon size={16} color="#FFFFFF" />
                       </View>
                     )}
                   </View>
@@ -749,14 +729,14 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#1E1B2E',
-    borderColor: '#3B2D54',
+    backgroundColor: '#202022',
+    borderColor: '#2E2E32',
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInitial: {
-    color: '#EC4899',
+    color: '#FFFFFF',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 28,
   },
@@ -772,8 +752,8 @@ const styles = StyleSheet.create({
   },
   handleBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: '#1A1224',
-    borderColor: '#3B2D54',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
     borderWidth: 1,
     borderRadius: 6,
     paddingHorizontal: 8,
@@ -781,7 +761,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   handleText: {
-    color: '#EC4899',
+    color: '#D4D4D8',
     fontSize: 13,
     fontWeight: '600',
     letterSpacing: 0.2,
@@ -811,8 +791,8 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#271B38',
-    borderColor: '#4A2E6E',
+    backgroundColor: '#27272A',
+    borderColor: '#3F3F46',
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -854,96 +834,63 @@ const styles = StyleSheet.create({
   replyLengthCardTitle: {
     color: '#FFFFFF',
     fontFamily: 'ChangaOne-Regular',
-    fontSize: 16,
+    fontSize: 15,
   },
   replyLengthCardSubtitle: {
     color: '#8E8E93',
     fontSize: 12,
   },
-  replyLengthOptionsList: {
-    gap: 10,
-    marginTop: 2,
-  },
-  replyLengthOption: {
-    backgroundColor: '#0F0F12',
-    borderColor: '#27272A',
-    borderWidth: 1,
+  segmentTrack: {
+    flexDirection: 'row',
+    backgroundColor: '#141416',
     borderRadius: 12,
-    padding: 12,
-    gap: 6,
+    borderWidth: 1,
+    borderColor: '#27272A',
+    padding: 3,
   },
-  replyLengthOptionActive: {
-    backgroundColor: 'rgba(236, 72, 153, 0.08)',
-    borderColor: '#EC4899',
-    borderWidth: 1.5,
-  },
-  replyLengthOptionTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  replyLengthRadioContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  replyLengthRadioOuter: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    borderColor: '#555555',
+  segmentItem: {
+    flex: 1,
+    paddingVertical: 9,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  replyLengthRadioOuterActive: {
-    borderColor: '#EC4899',
-  },
-  replyLengthRadioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#EC4899',
-  },
-  replyLengthOptionLabel: {
-    color: '#E4E4E7',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  replyLengthOptionLabelActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  replyLengthBadge: {
-    backgroundColor: '#1C1C20',
-    borderColor: '#2D2D33',
+    borderRadius: 9,
     borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    borderColor: 'transparent',
   },
-  replyLengthBadgeActive: {
-    backgroundColor: 'rgba(236, 72, 153, 0.2)',
-    borderColor: '#EC4899',
+  segmentItemActive: {
+    backgroundColor: '#2A2A2E',
+    borderColor: '#3F3F46',
   },
-  replyLengthBadgeText: {
+  segmentLabel: {
     color: '#8E8E93',
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '500',
   },
-  replyLengthBadgeTextActive: {
-    color: '#EC4899',
+  segmentLabelActive: {
+    color: '#FFFFFF',
     fontWeight: '600',
   },
-  replyLengthOptionDesc: {
-    color: '#A1A1AA',
+  replyDescriptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 4,
+  },
+  replyDescriptionDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#71717A',
+  },
+  replyDescriptionText: {
+    color: '#9CA3AF',
     fontSize: 12,
     lineHeight: 16,
-    paddingLeft: 28,
+    flex: 1,
   },
   signOutButton: {
-    backgroundColor: '#181212',
-    borderColor: '#3D1D1D',
+    backgroundColor: '#202022',
+    borderColor: '#2E2E32',
     borderWidth: 1,
     borderRadius: 14,
     paddingVertical: 15,
@@ -952,7 +899,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   signOutText: {
-    color: '#EF4444',
+    color: '#E4E4E7',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 16,
   },
@@ -964,7 +911,7 @@ const styles = StyleSheet.create({
     marginBottom: 26,
   },
   deleteAccountText: {
-    color: '#9CA3AF',
+    color: '#71717A',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 14,
     textDecorationLine: 'underline',
@@ -982,9 +929,9 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#1C1524',
+    backgroundColor: '#202022',
     borderWidth: 1.5,
-    borderColor: '#3D2254',
+    borderColor: '#2E2E32',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
@@ -1005,7 +952,7 @@ const styles = StyleSheet.create({
     marginBottom: 28,
   },
   guestButton: {
-    backgroundColor: '#E11D48',
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     paddingVertical: 15,
     paddingHorizontal: 28,
@@ -1015,7 +962,7 @@ const styles = StyleSheet.create({
     maxWidth: 320,
   },
   guestButtonText: {
-    color: '#FFFFFF',
+    color: '#0A0A0C',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 16,
     letterSpacing: 0.3,
@@ -1049,7 +996,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   modalSaveButton: {
-    backgroundColor: '#E11D48',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     paddingVertical: 7,
     borderRadius: 18,
@@ -1061,7 +1008,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   modalSaveText: {
-    color: '#FFFFFF',
+    color: '#0A0A0C',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 14,
   },
@@ -1086,21 +1033,21 @@ const styles = StyleSheet.create({
     height: 104,
     borderRadius: 52,
     borderWidth: 2,
-    borderColor: '#EC4899',
+    borderColor: '#3F3F46',
     backgroundColor: '#16161A',
   },
   avatarEditFallback: {
     width: 104,
     height: 104,
     borderRadius: 52,
-    backgroundColor: '#1E1B2E',
+    backgroundColor: '#202022',
     borderWidth: 2,
-    borderColor: '#EC4899',
+    borderColor: '#3F3F46',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarEditInitial: {
-    color: '#EC4899',
+    color: '#FFFFFF',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 44,
   },
@@ -1111,9 +1058,9 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: '#E11D48',
-    borderColor: '#0A0A0C',
-    borderWidth: 2.5,
+    backgroundColor: '#27272A',
+    borderColor: '#3F3F46',
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1133,7 +1080,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   changePhotoText: {
-    color: '#EC4899',
+    color: '#E4E4E7',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -1167,7 +1114,7 @@ const styles = StyleSheet.create({
     borderColor: '#EF4444',
   },
   usernamePrefix: {
-    color: '#EC4899',
+    color: '#A1A1AA',
     fontSize: 16,
     fontWeight: '700',
     marginRight: 4,
@@ -1210,7 +1157,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   saveChangesButton: {
-    backgroundColor: '#E11D48',
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     paddingVertical: 15,
     alignItems: 'center',
@@ -1218,10 +1165,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   saveChangesButtonDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   saveChangesText: {
-    color: '#FFFFFF',
+    color: '#0A0A0C',
     fontFamily: 'ChangaOne-Regular',
     fontSize: 16,
     letterSpacing: 0.3,

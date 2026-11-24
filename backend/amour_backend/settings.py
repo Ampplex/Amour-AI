@@ -132,9 +132,21 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# CORS Settings (Mobile friendly)
+# CORS Settings (Mobile & Web friendly)
+from corsheaders.defaults import default_headers
+
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-memory-user-key",
+    "x-user-id",
+    "user_key",
+    "client_key",
+]
+CORS_EXPOSE_HEADERS = [
+    "x-memory-user-key",
+    "x-user-id",
+]
 
 # Django REST Framework Settings
 REST_FRAMEWORK = {
@@ -173,7 +185,7 @@ BREVO_SENDER_EMAIL = os.environ.get("BREVO_SENDER_EMAIL", "ankesh3905222@gmail.c
 BREVO_SENDER_NAME = os.environ.get("BREVO_SENDER_NAME", "Amour AI")
 BACKEND_PUBLIC_URL = os.environ.get(
     "BACKEND_PUBLIC_URL",
-    os.environ.get("RENDER_EXTERNAL_URL", "https://amour-ai-d6a8.onrender.com")
+    os.environ.get("RENDER_EXTERNAL_URL", "https://amour-ai-v3e4.onrender.com")
 )
 
 # Security-Hardened Logging Configuration:

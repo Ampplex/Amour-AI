@@ -78,7 +78,7 @@ const CANDIDATE_URLS = [
   'http://127.0.0.1:8000/api',
 ];
 
-let activeBaseUrl = API_CONFIG.baseUrl || 'https://amour-ai-d6a8.onrender.com/api';
+let activeBaseUrl = API_CONFIG.baseUrl || 'https://amour-ai-v3e4.onrender.com/api';
 
 async function resolveActiveBaseUrl(): Promise<string> {
   const probeController = new AbortController();

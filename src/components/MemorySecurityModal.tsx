@@ -30,7 +30,7 @@ interface MemorySecurityModalProps {
   token?: string;
 }
 
-function ShieldCheckIcon({ size = 28, color = '#10B981' }: { size?: number; color?: string }) {
+function ShieldCheckIcon({ size = 28, color = '#FFFFFF' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -258,7 +258,7 @@ export function MemorySecurityModal({
               <View style={styles.tabContent}>
                 <View style={styles.shieldHero}>
                   <View style={styles.shieldCircle}>
-                    <ShieldCheckIcon size={44} color="#10B981" />
+                    <ShieldCheckIcon size={44} color="#FFFFFF" />
                   </View>
                   <Text style={styles.heroTitle}>Zero-Knowledge Protected</Text>
                   <Text style={styles.heroSubtitle}>
@@ -320,7 +320,7 @@ export function MemorySecurityModal({
                     </View>
                     {backupSaved && (
                       <View style={styles.successBanner}>
-                        <ShieldCheckIcon size={16} color="#10B981" />
+                        <ShieldCheckIcon size={16} color="#FFFFFF" />
                         <Text style={styles.successText}>Encrypted backup secured in cloud</Text>
                       </View>
                     )}
@@ -513,8 +513,8 @@ const styles = StyleSheet.create({
   cardBadgeGreen: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#10B981',
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    color: '#E4E4E7',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -538,16 +538,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#EC4899',
+    backgroundColor: '#FFFFFF',
     paddingVertical: 14,
     borderRadius: 12,
     marginTop: 6,
   },
   successButton: {
-    backgroundColor: '#10B981',
+    backgroundColor: '#27272A',
+    borderColor: '#3F3F46',
+    borderWidth: 1,
   },
   primaryButtonText: {
-    color: '#FFFFFF',
+    color: '#0A0A0C',
     fontSize: 14,
     fontWeight: '700',
   },
@@ -601,7 +603,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
@@ -610,7 +612,7 @@ const styles = StyleSheet.create({
   successText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#10B981',
+    color: '#E4E4E7',
   },
   inputArea: {
     backgroundColor: '#161B26',
@@ -625,11 +627,11 @@ const styles = StyleSheet.create({
   },
   statusErrorText: {
     fontSize: 13,
-    color: '#EF4444',
+    color: '#F87171',
     textAlign: 'center',
     marginTop: 6,
   },
   statusSuccessText: {
-    color: '#10B981',
+    color: '#E4E4E7',
   },
 });

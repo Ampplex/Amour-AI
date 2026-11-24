@@ -35,7 +35,7 @@ function CloseIcon({ size = 20, color = '#FFFFFF' }: { size?: number; color?: st
   );
 }
 
-function GlobeIcon({ size = 14, color = '#10B981' }: { size?: number; color?: string }) {
+function GlobeIcon({ size = 14, color = '#D4D4D8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -147,7 +147,7 @@ export default function EditPublicPersonaModal({
 
           <View style={styles.headerTitleCol}>
             <View style={styles.publicBadgeRow}>
-              <GlobeIcon size={12} color="#10B981" />
+              <GlobeIcon size={12} color="#D4D4D8" />
               <Text style={styles.publicBadgeText}>PUBLIC CANONICAL VERSION</Text>
             </View>
             <Text style={styles.headerTitle}>Edit Public Persona</Text>
@@ -330,7 +330,7 @@ const styles = StyleSheet.create({
   publicBadgeText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#10B981',
+    color: '#D4D4D8',
     letterSpacing: 0.6,
   },
   headerTitle: {
@@ -340,7 +340,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   saveHeaderBtn: {
-    backgroundColor: '#F43F5E',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 14,
@@ -353,19 +353,19 @@ const styles = StyleSheet.create({
   saveHeaderBtnText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: '#0A0A0C',
   },
   publicNoticeBanner: {
-    backgroundColor: '#1A231E',
+    backgroundColor: '#1E1E22',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(16, 185, 129, 0.2)',
+    borderBottomColor: '#2C2C32',
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   publicNoticeTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#10B981',
+    color: '#FFFFFF',
     marginBottom: 2,
   },
   publicNoticeSubtitle: {
@@ -486,7 +486,7 @@ const styles = StyleSheet.create({
   },
   saveBtn: {
     flex: 2,
-    backgroundColor: '#F43F5E',
+    backgroundColor: '#FFFFFF',
     paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
@@ -497,6 +497,6 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: '#0A0A0C',
   },
 });

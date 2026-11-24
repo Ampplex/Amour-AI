@@ -104,7 +104,7 @@ function CheckIcon({ size = 14, color = '#10B981' }: { size?: number; color?: st
   );
 }
 
-function ShieldLockIcon({ size = 12, color = '#F43F5E' }: { size?: number; color?: string }) {
+function ShieldLockIcon({ size = 12, color = '#D4D4D8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
@@ -120,7 +120,7 @@ function ShieldLockIcon({ size = 12, color = '#F43F5E' }: { size?: number; color
   );
 }
 
-function GlobeIcon({ size = 12, color = '#10B981' }: { size?: number; color?: string }) {
+function GlobeIcon({ size = 12, color = '#D4D4D8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Circle cx="12" cy="12" r="10" stroke={color} strokeWidth="2" />
@@ -453,13 +453,13 @@ export default function PersonaDetailModal({
               style={[
                 styles.badge,
                 {
-                  backgroundColor: isPrivate ? 'rgba(244, 63, 94, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                  borderColor: isPrivate ? 'rgba(244, 63, 94, 0.35)' : 'rgba(16, 185, 129, 0.35)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  borderColor: 'rgba(255, 255, 255, 0.18)',
                 },
               ]}
             >
-              {isPrivate ? <ShieldLockIcon size={11} color="#F43F5E" /> : <GlobeIcon size={11} color="#10B981" />}
-              <Text style={[styles.badgeText, { color: isPrivate ? '#F43F5E' : '#10B981' }]}>
+              {isPrivate ? <ShieldLockIcon size={11} color="#D4D4D8" /> : <GlobeIcon size={11} color="#D4D4D8" />}
+              <Text style={[styles.badgeText, { color: '#E4E4E7' }]}>
                 {isPrivate ? 'Private' : 'Community'}
               </Text>
             </View>
@@ -556,7 +556,7 @@ export default function PersonaDetailModal({
                 </Text>
               </View>
             ) : (
-              <View style={styles.memoryBox}>
+              <View style={[styles.memoryBox, { borderLeftColor: borderColor }]}>
                 {activePersona.memory_prompt ? (
                   <Text style={styles.memoryText}>{activePersona.memory_prompt}</Text>
                 ) : (
@@ -583,16 +583,16 @@ export default function PersonaDetailModal({
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.saveBtn, { backgroundColor: borderColor }]}
+                style={styles.saveBtn}
                 onPress={() => handleSaveMemory(false)}
                 disabled={isSaving}
                 activeOpacity={0.8}
               >
                 {isSaving ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator size="small" color="#0A0A0C" />
                 ) : (
                   <>
-                    <CheckIcon size={14} color="#FFFFFF" />
+                    <CheckIcon size={14} color="#0A0A0C" />
                     <Text style={styles.saveBtnText}>Save Memory</Text>
                   </>
                 )}
@@ -869,11 +869,13 @@ const styles = StyleSheet.create({
   editPencilText: {
     fontSize: 11,
     fontWeight: '700',
+    color: '#D4D4D8',
   },
   dialogueBox: {
     backgroundColor: '#14141E',
     borderRadius: 12,
     borderLeftWidth: 3.5,
+    borderLeftColor: '#F43F5E',
     padding: 14,
   },
   dialogueText: {
@@ -902,6 +904,8 @@ const styles = StyleSheet.create({
   memoryBox: {
     backgroundColor: '#14141E',
     borderRadius: 12,
+    borderLeftWidth: 3.5,
+    borderLeftColor: '#F43F5E',
     padding: 14,
   },
   memoryText: {
@@ -937,9 +941,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 10,
+    backgroundColor: '#FFFFFF',
   },
   saveBtnText: {
-    color: '#FFFFFF',
+    color: '#0A0A0C',
     fontSize: 13,
     fontWeight: '700',
   },

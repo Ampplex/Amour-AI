@@ -3,6 +3,7 @@
   "compilerOptions": {},
   "exclude": [
     "node_modules",
-    "backend"
+    "backend",
+    "web"
   ]
 }

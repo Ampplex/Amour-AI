@@ -60,7 +60,7 @@ class AdminConsoleWebView(View):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Amour AI — Admin Console</title>
-  <link rel="icon" href="https://amour-ai-d6a8.onrender.com/static/favicon.ico">
+  <link rel="icon" href="https://amour-ai-v3e4.onrender.com/static/favicon.ico">
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">

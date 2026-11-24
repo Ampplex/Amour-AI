@@ -561,11 +561,11 @@ export default function CreateBotScreen() {
                 >
                   <View style={styles.vaultTierIconRow}>
                     <ShieldLockIcon
-                      color={accessTier === 'private' ? '#F43F5E' : '#71717A'}
+                      color={accessTier === 'private' ? '#FFFFFF' : '#71717A'}
                       size={20}
                     />
                     {accessTier === 'private' && (
-                      <CheckmarkCircleIcon color="#F43F5E" size={18} />
+                      <CheckmarkCircleIcon color="#FFFFFF" size={18} />
                     )}
                   </View>
                   <Text style={styles.vaultTierTitle}>Private Room</Text>
@@ -584,11 +584,11 @@ export default function CreateBotScreen() {
                 >
                   <View style={styles.vaultTierIconRow}>
                     <GlobeIcon
-                      color={accessTier === 'public' ? '#F43F5E' : '#71717A'}
+                      color={accessTier === 'public' ? '#FFFFFF' : '#71717A'}
                       size={20}
                     />
                     {accessTier === 'public' && (
-                      <CheckmarkCircleIcon color="#F43F5E" size={18} />
+                      <CheckmarkCircleIcon color="#FFFFFF" size={18} />
                     )}
                   </View>
                   <Text style={styles.vaultTierTitle}>Community Lounge</Text>
@@ -1177,8 +1177,8 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   vaultTierCardActive: {
-    borderColor: '#F43F5E',
-    backgroundColor: '#170E12',
+    borderColor: '#52525B',
+    backgroundColor: '#27272A',
   },
   vaultTierIconRow: {
     flexDirection: 'row',

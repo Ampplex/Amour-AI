@@ -4,5 +4,5 @@ export const GOOGLE_CONFIG = {
 };
 
 export const API_CONFIG = {
-  baseUrl: 'https://amour-ai-d6a8.onrender.com/api',
+  baseUrl: 'https://amour-ai-v3e4.onrender.com/api',
 };

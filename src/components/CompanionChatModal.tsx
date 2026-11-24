@@ -926,7 +926,11 @@ export default function CompanionChatModal({
       setHistoryLoadError(true);
     } finally {
       setIsLoadingHistory(false);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 80);
+      setTimeout(() => {
+        try {
+          flatListRef.current?.scrollToEnd({ animated: false });
+        } catch {}
+      }, 80);
     }
   }, [persona?.id, user?.id, user?.token]);
 
@@ -1218,13 +1222,14 @@ export default function CompanionChatModal({
   if (!currentPersona) return null;
 
   return (
-    <Modal
-      visible={modalVisible}
-      transparent={true}
-      animationType="none"
-      statusBarTranslucent={true}
-      onRequestClose={handleDismiss}
-    >
+    <>
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="none"
+        statusBarTranslucent={true}
+        onRequestClose={handleDismiss}
+      >
       <View style={styles.modalRoot}>
         {/* iOS Dimming Backdrop over previous screen */}
         <Animated.View
@@ -1268,7 +1273,7 @@ export default function CompanionChatModal({
               ) : (
                 <View style={[styles.headerAvatarImg, { backgroundColor: borderColor }]}>
                   <Text style={styles.headerAvatarLetter}>
-                    {cleanPersonaChipName(currentPersona.name).charAt(0).toUpperCase()}
+                    {(cleanPersonaChipName(currentPersona.name).charAt(0) || 'C').toUpperCase()}
                   </Text>
                 </View>
               )}
@@ -1319,7 +1324,9 @@ export default function CompanionChatModal({
             messages.length === 0 && styles.emptyMessagesList,
           ]}
           keyboardShouldPersistTaps="handled"
-          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          maintainVisibleContentPosition={
+            Platform.OS === 'ios' ? { minIndexForVisible: 0 } : undefined
+          }
           onScrollToIndexFailed={() => {}}
           ListHeaderComponent={
             hasMoreHistory ? (
@@ -1399,7 +1406,7 @@ export default function CompanionChatModal({
                 ) : (
                   <View style={[styles.typingAvatar, styles.typingAvatarFallback, { backgroundColor: borderColor }]}>
                     <Text style={styles.typingAvatarLetter}>
-                      {cleanPersonaChipName(currentPersona.name).charAt(0).toUpperCase()}
+                      {(cleanPersonaChipName(currentPersona.name).charAt(0) || 'C').toUpperCase()}
                     </Text>
                   </View>
                 )}
@@ -1662,19 +1669,20 @@ export default function CompanionChatModal({
             borderColor={borderColor}
             onClose={() => setIsPreviewImageOpen(false)}
           />
-        )}
-        </SafeAreaView>
-      </Animated.View>
-    </View>
-
-    {/* Persona Details & Mind Profile Modal */}
-      <PersonaDetailModal
-        visible={isDetailModalOpen}
-        persona={currentPersona}
-        onClose={() => setIsDetailModalOpen(false)}
-        onInitiateChat={() => setIsDetailModalOpen(false)}
-      />
+          )}
+          </SafeAreaView>
+        </Animated.View>
+      </View>
     </Modal>
+
+    {/* Persona Details & Mind Profile Modal - Rendered outside parent Modal to prevent Android nested Modal collisions */}
+    <PersonaDetailModal
+      visible={isDetailModalOpen}
+      persona={currentPersona}
+      onClose={() => setIsDetailModalOpen(false)}
+      onInitiateChat={() => setIsDetailModalOpen(false)}
+    />
+  </>
   );
 }
 
