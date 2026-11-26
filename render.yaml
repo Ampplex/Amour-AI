@@ -29,6 +29,10 @@ services:
         value: "groq"
       - key: GROQ_API_KEY
         sync: false
+      - key: GROQ_API_KEY_FALLBACK
+        sync: false
+      - key: BEDROCK_SMALL_MODEL_ID
+        value: "meta.llama3-1-8b-instruct-v1:0"
       - key: LLM_MODEL
         value: "qwen/qwen3.8-27b"
       - key: GROQ_CHAT_MODEL
