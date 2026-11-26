@@ -25,6 +25,10 @@ _ROTATION_LOCK = threading.Lock()
 _GROQ_KEY_ROTATION_IDX = 0
 DEFAULT_COOLDOWN_SECONDS = 60.0
 SHORT_RATE_LIMIT_RETRY_MAX_SECONDS = 2.5
+DEFAULT_GROQ_BEDROCK_FALLBACK_MODEL_IDS = (
+    "qwen.qwen3-32b-v1:0",
+    "deepseek.v3.2",
+)
 
 _DURATION_PART_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m(?!s)|s)")
 _DURATION_FULL_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:ms|h|m(?!s)|s))+$")
@@ -164,6 +168,22 @@ def get_groq_api_keys() -> list[str]:
     return unique
 
 
+def get_groq_bedrock_fallback_model_ids() -> list[str]:
+    """Resolve the Bedrock models used after Groq rate limits."""
+    configured_models = getattr(settings, "GROQ_BEDROCK_FALLBACK_MODEL_IDS", None)
+    if configured_models is None:
+        configured_models = os.environ.get(
+            "GROQ_BEDROCK_FALLBACK_MODEL_IDS",
+            list(DEFAULT_GROQ_BEDROCK_FALLBACK_MODEL_IDS),
+        )
+
+    if isinstance(configured_models, str):
+        return [model.strip() for model in configured_models.split(",") if model.strip()]
+    if isinstance(configured_models, (list, tuple)):
+        return [str(model).strip() for model in configured_models if str(model).strip()]
+    return []
+
+
 def get_llm_configuration() -> tuple[str, str, list[str]]:
     """
     Resolve API key, endpoint, and fallback model chain.
@@ -275,6 +295,148 @@ def prepare_bedrock_converse_messages(messages: list) -> tuple[list[dict], list[
         conversation.append({"role": "user", "content": [{"text": "Please continue."}]})
 
     return system_blocks, conversation
+
+
+def _bedrock_region_from_endpoint(endpoint: str) -> str:
+    hostname = urlparse(endpoint).hostname or ""
+    match = re.fullmatch(r"bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com", hostname)
+    if match:
+        return match.group(1)
+    return (
+        getattr(settings, "AWS_REGION", "")
+        or os.environ.get("AWS_REGION", "us-west-2")
+    ).strip() or "us-west-2"
+
+
+def _call_bedrock_model(
+    *,
+    model_id: str,
+    region: str,
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+) -> str | None:
+    """Call one Bedrock Converse model and record its usage or failure."""
+    attempt_started_at = None
+    attempt_recorded = False
+    try:
+        system_blocks, conversation = prepare_bedrock_converse_messages(messages)
+        if model_id.lower().startswith("qwen.qwen3"):
+            if system_blocks:
+                system_blocks[-1]["text"] += "\n/no_think"
+            else:
+                system_blocks.append({"text": "/no_think"})
+
+        client = boto3.client("bedrock-runtime", region_name=region)
+        attempt_started_at = time.time()
+        response = client.converse(
+            modelId=model_id,
+            system=system_blocks,
+            messages=conversation,
+            inferenceConfig={
+                "maxTokens": max_tokens,
+                "temperature": temperature,
+                "topP": 0.9,
+            },
+        )
+        duration = time.time() - attempt_started_at
+
+        content_blocks = (
+            response.get("output", {})
+            .get("message", {})
+            .get("content", [])
+        )
+        raw_text = "".join(
+            block.get("text", "")
+            for block in content_blocks
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ).strip()
+        input_tokens, output_tokens = extract_token_usage(response.get("usage"))
+        metadata = response.get("ResponseMetadata", {})
+        record_llm_request(
+            provider="bedrock",
+            model=model_id,
+            status="success" if raw_text else "error",
+            duration_ms=int(duration * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            response_status=metadata.get("HTTPStatusCode"),
+            error_type="" if raw_text else "EmptyResponse",
+        )
+        attempt_recorded = True
+        logger.info(
+            "Bedrock model %s responded in %.2fs (%s chars)",
+            model_id,
+            duration,
+            len(raw_text),
+        )
+        return raw_text or None
+    except ClientError as exc:
+        err_code = exc.response.get("Error", {}).get("Code", "")
+        is_rate_limited = err_code in (
+            "ThrottlingException",
+            "TooManyRequestsException",
+            "ServiceQuotaExceededException",
+        )
+        if attempt_started_at is not None and not attempt_recorded:
+            record_llm_request(
+                provider="bedrock",
+                model=model_id,
+                status="rate_limited" if is_rate_limited else "error",
+                duration_ms=int((time.time() - attempt_started_at) * 1000),
+                error_type=err_code or type(exc).__name__,
+            )
+        if is_rate_limited:
+            cooldown = record_model_rate_limit(
+                f"https://bedrock-runtime.{region}.amazonaws.com",
+                model_id,
+            )
+            logger.warning(
+                "Bedrock model %s throttled (%s); cooldown %.1fs",
+                model_id,
+                err_code,
+                cooldown,
+            )
+        else:
+            logger.error("Bedrock ClientError for %s: %s", model_id, err_code)
+    except Exception as exc:
+        if attempt_started_at is not None and not attempt_recorded:
+            record_llm_request(
+                provider="bedrock",
+                model=model_id,
+                status="error",
+                duration_ms=int((time.time() - attempt_started_at) * 1000),
+                error_type=type(exc).__name__,
+            )
+        logger.exception("Unexpected error calling Bedrock model %s: %s", model_id, type(exc).__name__)
+    return None
+
+
+def _call_bedrock_models(
+    *,
+    model_ids: list[str],
+    endpoint: str,
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str | None, str | None]:
+    """Try Bedrock model IDs in order, skipping models in cooldown."""
+    region = _bedrock_region_from_endpoint(endpoint)
+    for model_id in model_ids:
+        cooldown = get_model_rate_limit_cooldown(endpoint, model_id)
+        if cooldown > 0:
+            logger.info("Skipping Bedrock model %s; in cooldown for %.1fs", model_id, cooldown)
+            continue
+        raw_text = _call_bedrock_model(
+            model_id=model_id,
+            region=region,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if raw_text:
+            return raw_text, model_id
+    return None, None
 
 
 def _post_openai_compatible_completion(
@@ -389,10 +551,11 @@ def _call_openai_compatible_with_keys(
     temperature: float,
     frequency_penalty: float,
     presence_penalty: float,
-) -> str | None:
-    """Try rotated keys for an OpenAI/Groq model, retrying once if shortest cooldown is <= 2.5s."""
+) -> tuple[str | None, bool]:
+    """Try rotated keys and return the response plus whether a rate limit was hit."""
     rotated_keys = _rotate_api_keys(api_keys) if provider == "groq" else list(api_keys)
     waited_seconds = 0.0
+    was_rate_limited = False
 
     for pass_idx in range(2):
         shortest_cooldown = None
@@ -407,6 +570,7 @@ def _call_openai_compatible_with_keys(
             if key_cooldown > 0 and (pass_idx == 0 or key_cooldown > waited_seconds):
                 logger.info("Groq key ...%s in cooldown for %.2fs; trying next key", key_id, key_cooldown)
                 hit_rate_limit = True
+                was_rate_limited = True
                 shortest_cooldown = key_cooldown if shortest_cooldown is None else min(shortest_cooldown, key_cooldown)
                 continue
 
@@ -424,9 +588,10 @@ def _call_openai_compatible_with_keys(
             if outcome == "ok" and isinstance(result, str):
                 with _COOLDOWN_LOCK:
                     _RATE_LIMIT_COOLDOWNS.pop(f"{llm_base_url}:{cooldown_key}", None)
-                return result
+                return result, was_rate_limited
             if outcome == "rate_limited" and isinstance(result, float):
                 hit_rate_limit = True
+                was_rate_limited = True
                 shortest_cooldown = result if shortest_cooldown is None else min(shortest_cooldown, result)
 
         if (
@@ -441,7 +606,7 @@ def _call_openai_compatible_with_keys(
             continue
         break
 
-    return None
+    return None, was_rate_limited
 
 
 def call_llm(
@@ -467,123 +632,66 @@ def call_llm(
         "groq" if configured_provider == "groq" else "openai_compatible"
     )
 
+    if is_bedrock:
+        return _call_bedrock_models(
+            model_ids=models_to_try,
+            endpoint=llm_base_url,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    groq_was_rate_limited = False
     for current_model in models_to_try:
         cooldown = get_model_rate_limit_cooldown(llm_base_url, current_model)
         if cooldown > 0:
             logger.info("Skipping model %s; in cooldown for %.1fs", current_model, cooldown)
             continue
 
-        attempt_started_at = None
-        attempt_recorded = False
+        api_keys_to_try = get_groq_api_keys() if provider == "groq" else [llm_api_key]
+        if not api_keys_to_try and llm_api_key:
+            api_keys_to_try = [llm_api_key]
+
         try:
-            if is_bedrock:
-                parsed_url = urlparse(llm_base_url)
-                hostname = parsed_url.hostname or ""
-                match = re.fullmatch(r"bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com", hostname)
-                region = match.group(1) if match else "us-west-2"
-
-                system_blocks, conversation = prepare_bedrock_converse_messages(messages)
-                client = boto3.client("bedrock-runtime", region_name=region)
-
-                attempt_started_at = time.time()
-                response = client.converse(
-                    modelId=current_model,
-                    system=system_blocks,
-                    messages=conversation,
-                    inferenceConfig={
-                        "maxTokens": max_tokens,
-                        "temperature": temperature,
-                        "topP": 0.9,
-                    },
-                )
-                duration = time.time() - attempt_started_at
-
-                content_blocks = (
-                    response.get("output", {})
-                    .get("message", {})
-                    .get("content", [])
-                )
-                raw_text = "".join(
-                    block.get("text", "")
-                    for block in content_blocks
-                    if isinstance(block, dict) and isinstance(block.get("text"), str)
-                ).strip()
-                input_tokens, output_tokens = extract_token_usage(response.get("usage"))
-                metadata = response.get("ResponseMetadata", {})
-                record_llm_request(
-                    provider=provider,
-                    model=current_model,
-                    status="success" if raw_text else "error",
-                    duration_ms=int(duration * 1000),
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    response_status=metadata.get("HTTPStatusCode"),
-                    error_type="" if raw_text else "EmptyResponse",
-                )
-                attempt_recorded = True
-
-                logger.info(
-                    "Bedrock model %s responded in %.2fs (%s chars)",
-                    current_model,
-                    duration,
-                    len(raw_text),
-                )
-                if raw_text:
-                    return raw_text, current_model
-
-            else:
-                # OpenAI / Groq compatible completions with round-robin multi-key 429 failover
-                api_keys_to_try = get_groq_api_keys() if provider == "groq" else [llm_api_key]
-                if not api_keys_to_try and llm_api_key:
-                    api_keys_to_try = [llm_api_key]
-
-                raw_text = _call_openai_compatible_with_keys(
-                    provider=provider,
-                    llm_base_url=llm_base_url,
-                    current_model=current_model,
-                    api_keys=api_keys_to_try,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                )
-                if raw_text:
-                    return raw_text, current_model
-
-        except ClientError as exc:
-            err_code = exc.response.get("Error", {}).get("Code", "")
-            if attempt_started_at is not None and not attempt_recorded:
-                is_rate_limited = err_code in (
-                    "ThrottlingException",
-                    "TooManyRequestsException",
-                    "ServiceQuotaExceededException",
-                )
-                record_llm_request(
-                    provider=provider,
-                    model=current_model,
-                    status="rate_limited" if is_rate_limited else "error",
-                    duration_ms=int((time.time() - attempt_started_at) * 1000),
-                    error_type=err_code or type(exc).__name__,
-                )
-                attempt_recorded = True
-            if err_code in ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"):
-                cd = record_model_rate_limit(llm_base_url, current_model)
-                logger.warning("Bedrock model %s throttled (%s); cooldown %.1fs", current_model, err_code, cd)
-            else:
-                logger.error("Bedrock ClientError for %s: %s", current_model, err_code)
-            continue
+            raw_text, was_rate_limited = _call_openai_compatible_with_keys(
+                provider=provider,
+                llm_base_url=llm_base_url,
+                current_model=current_model,
+                api_keys=api_keys_to_try,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+            )
         except Exception as exc:
-            if attempt_started_at is not None and not attempt_recorded:
-                record_llm_request(
-                    provider=provider,
-                    model=current_model,
-                    status="error",
-                    duration_ms=int((time.time() - attempt_started_at) * 1000),
-                    error_type=type(exc).__name__,
-                )
-                attempt_recorded = True
             logger.exception("Unexpected error calling LLM model %s: %s", current_model, type(exc).__name__)
             continue
+
+        groq_was_rate_limited = groq_was_rate_limited or (
+            provider == "groq" and was_rate_limited
+        )
+        if raw_text:
+            return raw_text, current_model
+
+    if provider == "groq" and groq_was_rate_limited:
+        fallback_model_ids = get_groq_bedrock_fallback_model_ids()
+        if fallback_model_ids:
+            region = (
+                getattr(settings, "AWS_REGION", "")
+                or os.environ.get("AWS_REGION", "us-west-2")
+            ).strip() or "us-west-2"
+            endpoint = f"https://bedrock-runtime.{region}.amazonaws.com"
+            logger.warning(
+                "Groq rate-limited; trying Bedrock fallback models: %s",
+                ", ".join(fallback_model_ids),
+            )
+            return _call_bedrock_models(
+                model_ids=fallback_model_ids,
+                endpoint=endpoint,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
 
     return None, None

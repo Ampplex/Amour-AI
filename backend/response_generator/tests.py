@@ -324,6 +324,92 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertEqual(recorded["status"], "rate_limited")
         self.assertEqual(recorded["response_status"], 429)
 
+    def test_call_llm_falls_back_to_bedrock_qwen_then_deepseek_on_groq_rate_limit(self):
+        _RATE_LIMIT_COOLDOWNS.clear()
+        self.addCleanup(_RATE_LIMIT_COOLDOWNS.clear)
+
+        rate_limited_response = MagicMock()
+        rate_limited_response.status_code = 429
+        rate_limited_response.headers = {"retry-after": "30"}
+
+        bedrock_response = {
+            "output": {"message": {"content": [{"text": "Bedrock reply."}]}},
+            "usage": {"inputTokens": 21, "outputTokens": 6},
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+        bedrock_client = MagicMock()
+        bedrock_client.converse.side_effect = [
+            RuntimeError("Qwen unavailable"),
+            bedrock_response,
+        ]
+
+        with (
+            override_settings(
+                RESPONSE_LLM_PROVIDER="groq",
+                GROQ_BEDROCK_FALLBACK_MODEL_IDS="qwen.qwen3-32b-v1:0,deepseek.v3.2",
+            ),
+            patch(
+                "response_generator.llm_client.get_llm_configuration",
+                return_value=("key", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"]),
+            ),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key"]),
+            patch("response_generator.llm_client.requests.post", return_value=rate_limited_response),
+            patch("response_generator.llm_client.boto3.client", return_value=bedrock_client) as mock_boto_client,
+            patch("response_generator.llm_client.record_llm_request"),
+            patch.dict("os.environ", {"AWS_REGION": "ap-south-1"}, clear=False),
+        ):
+            text, model = call_llm(
+                messages=[
+                    {"role": "system", "content": "Follow the character prompt."},
+                    {"role": "user", "content": "Hi"},
+                ],
+                max_tokens=512,
+                temperature=0.8,
+            )
+
+        self.assertEqual((text, model), ("Bedrock reply.", "deepseek.v3.2"))
+        self.assertEqual(
+            [call.kwargs["modelId"] for call in bedrock_client.converse.call_args_list],
+            ["qwen.qwen3-32b-v1:0", "deepseek.v3.2"],
+        )
+        qwen_request, deepseek_request = [
+            call.kwargs for call in bedrock_client.converse.call_args_list
+        ]
+        self.assertEqual(
+            qwen_request["system"],
+            [{"text": "Follow the character prompt.\n/no_think"}],
+        )
+        self.assertEqual(
+            deepseek_request["system"],
+            [{"text": "Follow the character prompt."}],
+        )
+        self.assertNotIn("guardrailConfig", qwen_request)
+        self.assertNotIn("guardrailConfig", deepseek_request)
+        self.assertTrue(
+            all(call.kwargs["region_name"] == "ap-south-1" for call in mock_boto_client.call_args_list)
+        )
+
+    def test_call_llm_does_not_use_bedrock_fallback_for_non_rate_limit_errors(self):
+        fake_response = MagicMock()
+        fake_response.status_code = 503
+        fake_response.headers = {}
+        fake_response.text = "Service unavailable"
+
+        with (
+            override_settings(RESPONSE_LLM_PROVIDER="groq"),
+            patch(
+                "response_generator.llm_client.get_llm_configuration",
+                return_value=("key", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"]),
+            ),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key"]),
+            patch("response_generator.llm_client.requests.post", return_value=fake_response),
+            patch("response_generator.llm_client.boto3.client") as mock_boto_client,
+            patch("response_generator.llm_client.record_llm_request"),
+        ):
+            self.assertEqual(call_llm(messages=[{"role": "user", "content": "Hi"}]), (None, None))
+
+        mock_boto_client.assert_not_called()
+
     def test_autonomous_continue_merges_history_and_scrubs_memory_labels(self):
         history = [
             {"role": "user", "content": "Hey there."},

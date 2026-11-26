@@ -171,6 +171,10 @@ REEVE_API_KEY = os.environ.get("REEVE_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_API_KEYS = os.environ.get("GROQ_API_KEYS", "")
 GROQ_API_KEY_FALLBACK = os.environ.get("GROQ_API_KEY_FALLBACK", "")
+GROQ_BEDROCK_FALLBACK_MODEL_IDS = os.environ.get(
+    "GROQ_BEDROCK_FALLBACK_MODEL_IDS",
+    "qwen.qwen3-32b-v1:0,deepseek.v3.2",
+)
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
 GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL", "qwen/qwen3.8-27b")
