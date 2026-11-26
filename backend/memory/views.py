@@ -1919,33 +1919,86 @@ class UserConversationsListView(APIView):
             return Response({"conversations": []}, status=status.HTTP_200_OK)
 
         import uuid
-        from django.db.models import Max
-        from .models import PersonaChatMessage, Persona
+        from django.db import connection
+        from django.db.models import Max, Q
+        from .models import PersonaChatMessage, Persona, UserPersonaCustomization
         from .crypto import decrypt_chat_message
 
-        # Find distinct persona identifiers with messages involving this user
-        persona_latest = (
-            PersonaChatMessage.objects.filter(user_identifier=user_id)
-            .values("persona_identifier")
-            .annotate(max_created_at=Max("created_at"))
-            .order_by("-max_created_at")
+        # Fetch the latest message per persona in 1 indexed query on PostgreSQL
+        # (eliminates 2N+1 sequential round-trips over remote Neon connections).
+        if connection.vendor == "postgresql":
+            latest_messages = list(
+                PersonaChatMessage.objects.filter(user_identifier=user_id)
+                .select_related("persona")
+                .order_by("persona_identifier", "-created_at")
+                .distinct("persona_identifier")
+            )
+            latest_messages.sort(key=lambda m: m.created_at, reverse=True)
+        else:
+            persona_latest = list(
+                PersonaChatMessage.objects.filter(user_identifier=user_id)
+                .values("persona_identifier")
+                .annotate(max_created_at=Max("created_at"))
+                .order_by("-max_created_at")
+            )
+            if not persona_latest:
+                return Response({"conversations": []}, status=status.HTTP_200_OK)
+
+            pair_filter = Q()
+            for row in persona_latest:
+                pid = row.get("persona_identifier")
+                ts = row.get("max_created_at")
+                if pid and ts:
+                    pair_filter |= Q(persona_identifier=pid, created_at=ts)
+
+            seen_pids = set()
+            latest_messages = []
+            if pair_filter:
+                candidates = (
+                    PersonaChatMessage.objects.filter(user_identifier=user_id)
+                    .filter(pair_filter)
+                    .select_related("persona")
+                    .order_by("-created_at")
+                )
+                for msg in candidates:
+                    if msg.persona_identifier and msg.persona_identifier not in seen_pids:
+                        seen_pids.add(msg.persona_identifier)
+                        latest_messages.append(msg)
+
+        if not latest_messages:
+            return Response({"conversations": []}, status=status.HTTP_200_OK)
+
+        # Batch-load any Persona records where the FK wasn't populated on the message
+        missing_persona_uuids = []
+        all_persona_ids = []
+        for msg in latest_messages:
+            pid = msg.persona_identifier
+            if not pid:
+                continue
+            all_persona_ids.append(str(pid))
+            if msg.persona is None:
+                try:
+                    missing_persona_uuids.append(uuid.UUID(str(pid)))
+                except (ValueError, TypeError):
+                    pass
+
+        fallback_personas = (
+            Persona.objects.in_bulk(missing_persona_uuids)
+            if missing_persona_uuids
+            else {}
         )
+        customizations_by_pid = {
+            str(c.persona_identifier): c
+            for c in UserPersonaCustomization.objects.filter(
+                user_identifier=user_id,
+                persona_identifier__in=all_persona_ids,
+            )
+        } if all_persona_ids else {}
 
         conversations = []
-        for row in persona_latest:
-            persona_id = row.get("persona_identifier")
+        for latest_msg in latest_messages:
+            persona_id = latest_msg.persona_identifier
             if not persona_id:
-                continue
-
-            latest_msg = (
-                PersonaChatMessage.objects.filter(
-                    user_identifier=user_id,
-                    persona_identifier=persona_id,
-                )
-                .order_by("-created_at")
-                .first()
-            )
-            if not latest_msg:
                 continue
 
             decrypted_text = decrypt_chat_message(
@@ -1954,23 +2007,25 @@ class UserConversationsListView(APIView):
                 client_key=user_key,
             )
 
-            persona_obj = None
-            try:
-                uuid.UUID(str(persona_id))
-                persona_obj = Persona.objects.filter(id=persona_id).first()
-            except (ValueError, TypeError):
-                persona_obj = None
+            persona_obj = latest_msg.persona
+            if persona_obj is None:
+                try:
+                    persona_obj = fallback_personas.get(uuid.UUID(str(persona_id)))
+                except (ValueError, TypeError):
+                    persona_obj = None
+
+            custom = customizations_by_pid.get(str(persona_id))
 
             if persona_obj:
                 persona_data = {
                     "id": str(persona_obj.id),
-                    "name": persona_obj.name,
-                    "tagline": persona_obj.tagline or "",
+                    "name": (custom.custom_name if custom and custom.custom_name else persona_obj.name),
+                    "tagline": (custom.custom_tagline if custom and custom.custom_tagline else persona_obj.tagline) or "",
                     "age": persona_obj.age or 21,
                     "border_color": persona_obj.border_color or "#F43F5E",
                     "image_url": persona_obj.image_url or "",
-                    "greeting": persona_obj.greeting or "",
-                    "memory_prompt": persona_obj.memory_prompt or "",
+                    "greeting": (custom.custom_greeting if custom and custom.custom_greeting else persona_obj.greeting) or "",
+                    "memory_prompt": (custom.custom_memory_prompt if custom and custom.custom_memory_prompt else persona_obj.memory_prompt) or "",
                     "visibility": persona_obj.visibility,
                     "is_community": persona_obj.is_community,
                     "publisher_name": persona_obj.publisher_name or "Amour Creator",
@@ -1984,13 +2039,13 @@ class UserConversationsListView(APIView):
             else:
                 persona_data = {
                     "id": str(persona_id),
-                    "name": "Companion",
-                    "tagline": "",
+                    "name": (custom.custom_name if custom and custom.custom_name else "Companion"),
+                    "tagline": (custom.custom_tagline if custom and custom.custom_tagline else ""),
                     "age": 21,
                     "border_color": "#F43F5E",
                     "image_url": "",
-                    "greeting": "",
-                    "memory_prompt": "",
+                    "greeting": (custom.custom_greeting if custom and custom.custom_greeting else ""),
+                    "memory_prompt": (custom.custom_memory_prompt if custom and custom.custom_memory_prompt else ""),
                     "visibility": "private",
                     "is_community": False,
                     "publisher_name": "Amour Creator",

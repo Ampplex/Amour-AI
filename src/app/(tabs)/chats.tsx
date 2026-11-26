@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -17,7 +17,8 @@ import { useAuth } from '../../context/AuthContext';
 import CompanionChatModal from '../../components/CompanionChatModal';
 import { PersonaItem } from '../../services/personaService';
 import {
-  fetchUserConversations,
+  fetchUserConversationsWithStatus,
+  getCachedConversations,
   ConversationItem,
 } from '../../services/conversationService';
 
@@ -72,51 +73,98 @@ function formatRelativeTime(dateString: string): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+const CONVERSATIONS_STALE_MS = 10000;
+
 export default function ChatsScreen() {
   const { user } = useAuth();
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [loadError, setLoadError] = useState<boolean>(false);
   const [activeChatPersona, setActiveChatPersona] = useState<PersonaItem | null>(null);
+  const conversationsRef = useRef<ConversationItem[]>([]);
+  const lastLoadedAtRef = useRef<number>(0);
+  const activeUserIdRef = useRef<string | null>(null);
 
   const loadConversations = useCallback(
-    async (isPullToRefresh = false) => {
-      if (!user?.id) {
+    async ({ isPullToRefresh = false, force = false } = {}) => {
+      const currentUserId = user?.id || null;
+      if (!currentUserId) {
+        activeUserIdRef.current = null;
+        conversationsRef.current = [];
+        lastLoadedAtRef.current = 0;
         setConversations([]);
+        setLoadError(false);
         setLoading(false);
         setRefreshing(false);
         return;
+      }
+
+      if (activeUserIdRef.current !== currentUserId) {
+        activeUserIdRef.current = currentUserId;
+        conversationsRef.current = [];
+        lastLoadedAtRef.current = 0;
+        setConversations([]);
+        setLoading(true);
       }
 
       if (isPullToRefresh) {
         setRefreshing(true);
       }
 
+      // Immediately hydrate from memory/local cache if list isn't populated yet
+      let hasExisting = conversationsRef.current.length > 0;
+      if (!hasExisting) {
+        const cached = await getCachedConversations(currentUserId);
+        if (activeUserIdRef.current !== currentUserId) return;
+        if (cached && cached.length > 0) {
+          conversationsRef.current = cached;
+          setConversations(cached);
+          setLoading(false);
+          setLoadError(false);
+          hasExisting = true;
+        }
+      }
+
+      if (!force && !isPullToRefresh && hasExisting && Date.now() - lastLoadedAtRef.current < CONVERSATIONS_STALE_MS) {
+        setLoading(false);
+        return;
+      }
+
       try {
-        const data = await fetchUserConversations(user.id, user.token);
-        setConversations(data);
+        const result = await fetchUserConversationsWithStatus(currentUserId, user?.token);
+        if (activeUserIdRef.current !== currentUserId) return;
+        if (result.ok) {
+          conversationsRef.current = result.conversations;
+          setConversations(result.conversations);
+          setLoadError(false);
+          lastLoadedAtRef.current = Date.now();
+        } else if (!hasExisting) {
+          setLoadError(true);
+        }
       } catch (err) {
         console.warn('[ChatsScreen] Error loading conversations:', err);
+        if (!hasExisting) {
+          setLoadError(true);
+        }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (activeUserIdRef.current === currentUserId) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [user?.id, user?.token]
   );
 
-  useEffect(() => {
-    loadConversations(false);
-  }, [loadConversations]);
-
   useFocusEffect(
     useCallback(() => {
-      loadConversations(false);
+      loadConversations();
     }, [loadConversations])
   );
 
   const onRefresh = useCallback(() => {
-    loadConversations(true);
+    loadConversations({ isPullToRefresh: true, force: true });
   }, [loadConversations]);
 
   const handleOpenChat = (persona: PersonaItem) => {
@@ -214,10 +262,46 @@ export default function ChatsScreen() {
         </View>
       </View>
 
-      {loading ? (
+      {loading && conversations.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#F43F5E" />
         </View>
+      ) : conversations.length === 0 && loadError ? (
+        <FlatList
+          data={[]}
+          renderItem={() => null}
+          contentContainerStyle={styles.emptyScrollContainer}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#F43F5E"
+              colors={['#F43F5E']}
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIconCircle}>
+                <EmptyChatIcon size={46} color="#6B7280" />
+              </View>
+              <Text style={styles.emptyTitle}>Unable to Load Conversations</Text>
+              <Text style={styles.emptySubtitle}>
+                Connection timed out or server is waking up. Please try again.
+              </Text>
+              <TouchableOpacity
+                style={styles.exploreButton}
+                onPress={() => {
+                  setLoading(true);
+                  setLoadError(false);
+                  loadConversations({ force: true });
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.exploreButtonText}>Tap to Retry</Text>
+              </TouchableOpacity>
+            </View>
+          }
+        />
       ) : conversations.length === 0 ? (
         <FlatList
           data={[]}
@@ -279,7 +363,7 @@ export default function ChatsScreen() {
           persona={activeChatPersona}
           onClose={() => {
             setActiveChatPersona(null);
-            loadConversations(false);
+            loadConversations({ force: true });
           }}
         />
       )}

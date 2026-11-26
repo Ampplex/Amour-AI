@@ -7,6 +7,7 @@ import * as Linking from 'expo-linking';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { GOOGLE_CONFIG, API_CONFIG } from '../constants/authConfig';
 import { clearFeedMemoryCache } from '../services/feedService';
+import { clearConversationCache } from '../services/conversationService';
 import { setReplyLengthPreference } from '../services/settingsService';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -823,6 +824,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.removeItem(LOCAL_SESSION_KEY);
     } catch {}
     clearFeedMemoryCache();
+    clearConversationCache().catch(() => {});
     setUser(null);
     setError(null);
     setPendingGoogleSession(false);
