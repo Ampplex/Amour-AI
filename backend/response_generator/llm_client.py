@@ -60,6 +60,48 @@ def record_model_rate_limit(
     return cooldown
 
 
+def get_groq_api_keys() -> list[str]:
+    """
+    Resolve list of Groq API keys for automatic 429 key failover / rotation.
+    Supports comma-separated GROQ_API_KEY, GROQ_API_KEYS list, or GROQ_API_KEY_FALLBACK.
+    """
+    raw_keys = []
+
+    # 1. GROQ_API_KEYS (e.g. "key1,key2,key3" or list)
+    env_keys = os.environ.get("GROQ_API_KEYS", "") or getattr(settings, "GROQ_API_KEYS", None)
+    if env_keys:
+        if isinstance(env_keys, str):
+            raw_keys.extend([k.strip() for k in env_keys.split(",") if k.strip()])
+        elif isinstance(env_keys, (list, tuple)):
+            raw_keys.extend([str(k).strip() for k in env_keys if str(k).strip()])
+
+    # 2. GROQ_API_KEY (single key or comma-separated)
+    primary = os.environ.get("GROQ_API_KEY", "") or getattr(settings, "GROQ_API_KEY", "")
+    if primary:
+        if isinstance(primary, str) and "," in primary:
+            raw_keys.extend([k.strip() for k in primary.split(",") if k.strip()])
+        elif str(primary).strip():
+            raw_keys.append(str(primary).strip())
+
+    # 3. GROQ_API_KEY_FALLBACK
+    fallback = os.environ.get("GROQ_API_KEY_FALLBACK", "") or getattr(settings, "GROQ_API_KEY_FALLBACK", "")
+    if fallback:
+        if isinstance(fallback, str) and "," in fallback:
+            raw_keys.extend([k.strip() for k in fallback.split(",") if k.strip()])
+        elif str(fallback).strip():
+            raw_keys.append(str(fallback).strip())
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for k in raw_keys:
+        if k not in seen:
+            seen.add(k)
+            unique.append(k)
+
+    return unique
+
+
 def get_llm_configuration() -> tuple[str, str, list[str]]:
     """
     Resolve API key, endpoint, and fallback model chain.
@@ -237,55 +279,80 @@ def call_llm(
                     return raw_text, current_model
 
             else:
-                # OpenAI / Groq compatible completions
-                headers = {
-                    "Authorization": f"Bearer {llm_api_key}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": current_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": min(max_tokens, 3072),
-                    "frequency_penalty": frequency_penalty,
-                    "presence_penalty": presence_penalty,
-                    "top_p": 0.9,
-                }
-                url = f"{llm_base_url}/chat/completions"
+                # OpenAI / Groq compatible completions with multi-key 429 failover
+                provider = (
+                    getattr(settings, "RESPONSE_LLM_PROVIDER", "")
+                    or os.environ.get("RESPONSE_LLM_PROVIDER", "")
+                    or getattr(settings, "LLM_PROVIDER", "")
+                    or os.environ.get("LLM_PROVIDER", "groq")
+                ).strip().lower()
 
-                start_time = time.time()
-                resp = requests.post(url, headers=headers, json=payload, timeout=25)
-                duration = time.time() - start_time
+                api_keys_to_try = get_groq_api_keys() if provider == "groq" else [llm_api_key]
+                if not api_keys_to_try and llm_api_key:
+                    api_keys_to_try = [llm_api_key]
 
-                if resp.status_code == 429:
-                    cd = record_model_rate_limit(llm_base_url, current_model, resp.headers)
-                    logger.warning("Model %s hit 429; cooling down for %.1fs", current_model, cd)
-                    continue
+                for api_key_attempt in api_keys_to_try:
+                    key_id = api_key_attempt[-8:] if len(api_key_attempt) >= 8 else api_key_attempt
+                    key_cooldown = get_model_rate_limit_cooldown(llm_base_url, key_id)
+                    if key_cooldown > 0:
+                        logger.info("Groq key ...%s in cooldown for %.1fs; trying next key", key_id, key_cooldown)
+                        continue
 
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Model %s returned HTTP %s: %s",
-                        current_model,
-                        resp.status_code,
-                        resp.text[:300],
+                    headers = {
+                        "Authorization": f"Bearer {api_key_attempt}",
+                        "Content-Type": "application/json",
+                    }
+                    payload = {
+                        "model": current_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": min(max_tokens, 3072),
+                        "frequency_penalty": frequency_penalty,
+                        "presence_penalty": presence_penalty,
+                        "top_p": 0.9,
+                    }
+                    url = f"{llm_base_url}/chat/completions"
+
+                    start_time = time.time()
+                    resp = requests.post(url, headers=headers, json=payload, timeout=25)
+                    duration = time.time() - start_time
+
+                    if resp.status_code == 429:
+                        cd = record_model_rate_limit(llm_base_url, key_id, resp.headers)
+                        logger.warning(
+                            "Groq key ...%s hit 429 rate limit (cooling for %.1fs); failing over to next key for %s",
+                            key_id,
+                            cd,
+                            current_model,
+                        )
+                        continue
+
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "Model %s returned HTTP %s with key ...%s: %s",
+                            current_model,
+                            resp.status_code,
+                            key_id,
+                            resp.text[:300],
+                        )
+                        continue
+
+                    data = resp.json()
+                    raw_text = (
+                        data.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                        .strip()
                     )
-                    continue
-
-                data = resp.json()
-                raw_text = (
-                    data.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                    .strip()
-                )
-                logger.info(
-                    "Model %s responded in %.2fs (%s chars)",
-                    current_model,
-                    duration,
-                    len(raw_text),
-                )
-                if raw_text:
-                    return raw_text, current_model
+                    logger.info(
+                        "Model %s responded in %.2fs (%s chars) via key ...%s",
+                        current_model,
+                        duration,
+                        len(raw_text),
+                        key_id,
+                    )
+                    if raw_text:
+                        return raw_text, current_model
 
         except ClientError as exc:
             err_code = exc.response.get("Error", {}).get("Code", "")
