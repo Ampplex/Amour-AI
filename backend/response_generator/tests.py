@@ -6,6 +6,7 @@ from response_generator.generator import generate_companion_reply
 from response_generator.llm_client import call_llm
 from response_generator.observability import extract_rate_limit_headers, extract_token_usage
 from response_generator.prompt_builder import build_roleplay_system_prompt
+from response_generator.tone_tracker import _extract_tone_label, classify_tone_with_bedrock
 from response_generator.usage_view import LLMUsageView
 
 
@@ -81,6 +82,67 @@ class PromptBuilderTests(SimpleTestCase):
         self.assertEqual(prefix_a, prefix_b)
         self.assertIn("--- CONVERSATION CONTEXT ---", prefix_a)
         self.assertIn("--- CORE ROLEPLAY DIRECTIVES ---", prefix_a)
+
+    def test_turn_focus_respects_non_mature_story_tones(self):
+        casual_prompt = self._build_sample(story_tone="casual")
+        comfort_prompt = self._build_sample(story_tone="comfort")
+        default_prompt = self._build_sample(story_tone="default")
+        mature_prompt = self._build_sample(story_tone="mature")
+
+        casual_tail = casual_prompt.split("--- THIS TURN ---")[1].lower()
+        comfort_tail = comfort_prompt.split("--- THIS TURN ---")[1].lower()
+        default_tail = default_prompt.split("--- THIS TURN ---")[1].lower()
+        mature_tail = mature_prompt.split("--- THIS TURN ---")[1].lower()
+
+        self.assertIn("do not force prior sensual or mature tension", casual_tail)
+        self.assertIn("rather than pushing sensual escalation", comfort_tail)
+        self.assertIn("non-adult topic", default_tail)
+        self.assertIn("mature romantic progression", mature_tail)
+
+        casual_auto_tail = self._build_sample(story_tone="casual", is_autonomous_continue=True).split("--- THIS TURN ---")[1].lower()
+        self.assertNotIn("escalate the current romantic or mature tension", casual_auto_tail)
+
+
+class ToneTrackerParsingTests(SimpleTestCase):
+    def test_extract_tone_label_handles_wrapped_and_punctuated_outputs(self):
+        self.assertEqual(_extract_tone_label("casual"), "casual")
+        self.assertEqual(_extract_tone_label("Tone: casual."), "casual")
+        self.assertEqual(_extract_tone_label("'comfort'"), "comfort")
+        self.assertEqual(_extract_tone_label("default - topic changed"), "default")
+        self.assertEqual(_extract_tone_label("  MATURE\n"), "mature")
+        self.assertIsNone(_extract_tone_label("unknown"))
+        self.assertIsNone(_extract_tone_label(""))
+
+    def test_classify_tone_transitions_from_mature_on_wrapped_llm_outputs(self):
+        for raw_reply, expected in [
+            ("Tone: casual.", "casual"),
+            ("Next tone: comfort", "comfort"),
+            ("default - user changed topic", "default"),
+            ("mature", "mature"),
+        ]:
+            result = classify_tone_with_bedrock(
+                user_message="How was your day?",
+                current_tone="mature",
+                classify_fn=lambda _msgs, **_kw: raw_reply,
+            )
+            self.assertEqual(result, expected)
+
+    def test_classify_tone_falls_back_to_current_tone_on_error_or_unrecognized_output(self):
+        def failing_fn(_msgs, **_kw):
+            raise RuntimeError("Bedrock unavailable")
+
+        self.assertEqual(
+            classify_tone_with_bedrock("Hi there", current_tone="mature", classify_fn=failing_fn),
+            "mature",
+        )
+        self.assertEqual(
+            classify_tone_with_bedrock(
+                "Hi there",
+                current_tone="mature",
+                classify_fn=lambda _msgs, **_kw: "unclear",
+            ),
+            "mature",
+        )
 
 
 class GeneratorAndClientTests(SimpleTestCase):

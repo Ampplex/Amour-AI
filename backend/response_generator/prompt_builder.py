@@ -51,6 +51,47 @@ def _build_tone_directive(story_tone: str) -> str:
     )
 
 
+def _build_turn_focus_directive(story_tone: str, is_autonomous: bool) -> str:
+    """Return turn-tail focus aligned with the active story_tone."""
+    clean_tone = (story_tone or "default").strip().lower()
+
+    if is_autonomous:
+        if clean_tone in ("casual", "comfort"):
+            return (
+                "Story continuation: Seamlessly continue the conversation from your previous message. "
+                "Do not mention silence, pauses, or ask why the user isn't talking. "
+                "Advance the current moment naturally in keeping with the active warm or casual mood."
+            )
+        return (
+            "Story continuation: Seamlessly continue the scene from your previous message. "
+            "Do not mention silence, pauses, or ask why the user isn't talking. "
+            "Proactively push the story forward—introduce a new physical beat, deepen the dialogue, "
+            "or escalate the current romantic or mature tension."
+        )
+
+    if clean_tone == "casual":
+        return (
+            "Active focus: React directly to the user's latest message and follow their topic naturally "
+            "with grounded, witty everyday conversation—do not force prior sensual or mature tension back in."
+        )
+    if clean_tone == "comfort":
+        return (
+            "Active focus: React directly to the user's latest message with genuine warmth, care, and "
+            "emotional reassurance—focus on supporting them rather than pushing sensual escalation."
+        )
+    if clean_tone == "mature":
+        return (
+            "Active focus: React directly to the user's latest message, then actively carry the scene forward—"
+            "maintain and build bold flirtation, sensual tension, or mature romantic progression on your own "
+            "initiative instead of waiting passively for the user to steer."
+        )
+    return (
+        "Active focus: React directly to the user's latest message and follow their current direction—"
+        "lean into bold flirtation, sensual tension, or mature romantic momentum when present, or shift "
+        "smoothly with them when they steer toward a non-adult topic."
+    )
+
+
 def _build_length_directive(clean_reply_length: str) -> str:
     """Return flush-left response length rules for the selected pacing mode."""
     if clean_reply_length == "short":
@@ -138,7 +179,7 @@ def build_roleplay_system_prompt(
         Weave physical actions, facial expressions, tone, and setting smoothly into the reply inside *asterisks* without headings, bullet lists, or narrating minor mechanical movements.
 
         5. INITIATIVE, TENSION & USER AGENCY
-        Be confident, bold, and proactive: set the mood, tease, escalate romantic and sensual tension, and steer scenes into mature, adult-oriented storytelling on your own initiative rather than waiting for the user to prompt you.
+        Be confident, bold, and proactive: set the mood, tease, escalate romantic and sensual tension, and steer scenes into mature, adult-oriented storytelling on your own initiative rather than waiting for the user to prompt you, while following the active Scene tone and matching the user's topic if they shift to non-adult conversation.
         Respect boundaries immediately if the user redirects or declines, and never control, write, or assume the user's actions, dialogue, thoughts, or feelings.
 
         6. CONTINUITY, FLOW & ANTI-REPETITION
@@ -192,19 +233,8 @@ def build_roleplay_system_prompt(
                 "Name usage: Address the user with 'you'/'your' rather than their name unless they explicitly ask for it."
             )
 
-    if is_autonomous_continue or not (current_message and current_message.strip()):
-        turn_lines.append(
-            "Story continuation: Seamlessly continue the scene from your previous message. "
-            "Do not mention silence, pauses, or ask why the user isn't talking. "
-            "Proactively push the story forward—introduce a new physical beat, deepen the dialogue, "
-            "or escalate the current romantic or mature tension."
-        )
-    else:
-        turn_lines.append(
-            "Active focus: React directly to the user's latest message, then actively carry the scene forward—"
-            "maintain and build bold flirtation, sensual tension, or mature romantic progression on your own "
-            "initiative instead of waiting passively for the user to steer."
-        )
+    is_autonomous = bool(is_autonomous_continue or not (current_message and current_message.strip()))
+    turn_lines.append(_build_turn_focus_directive(story_tone, is_autonomous))
 
     sections.append("\n".join(turn_lines).strip())
     return "\n\n".join(sections)

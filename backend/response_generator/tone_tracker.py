@@ -1,16 +1,29 @@
 """
-Pure LLM-driven tone classification powered by Amazon Bedrock (Mistral Large).
+Pure LLM-driven tone classification powered by Amazon Bedrock (Llama 3.1 8B).
 
-No hardcoded regex or keyword matching.
+No hardcoded regex or keyword matching for user intent.
 Classifies user intent dynamically and keeps Qwen exclusively for chat generation.
 """
 
 import logging
 import os
+import re
 
 logger = logging.getLogger("amour.tone_tracker")
 
 VALID_TONES = {"default", "casual", "comfort", "mature"}
+_TONE_OUTPUT_PATTERN = re.compile(r"\b(default|casual|comfort|mature)\b", re.IGNORECASE)
+
+
+def _extract_tone_label(raw_output: str) -> str | None:
+    """Extract a valid tone label from an LLM reply (e.g. 'Tone: casual' -> 'casual')."""
+    if not raw_output or not isinstance(raw_output, str):
+        return None
+    cleaned = raw_output.strip().lower().strip(".,:\"'`")
+    if cleaned in VALID_TONES:
+        return cleaned
+    match = _TONE_OUTPUT_PATTERN.search(cleaned)
+    return match.group(1).lower() if match else None
 
 
 def _call_bedrock_converse(messages: list, max_tokens: int = 8, temperature: float = 0.1) -> str:
@@ -132,9 +145,10 @@ def classify_tone_with_bedrock(
     ]
 
     try:
-        raw = (classify_fn(prompt, max_tokens=8, temperature=0.1) or "").strip().lower().strip(".,\"'")
-        if raw in VALID_TONES:
-            return raw
+        raw = classify_fn(prompt, max_tokens=8, temperature=0.1) or ""
+        detected = _extract_tone_label(raw)
+        if detected in VALID_TONES:
+            return detected
     except Exception as exc:
         logger.warning("Bedrock tone classification failed, falling back to current tone: %s", exc)
 
