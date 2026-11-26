@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='personarelationshipstate',
             name='story_tone',
-            field=models.CharField(db_index=True, default='mature', max_length=24),
+            field=models.CharField(db_index=True, default='default', max_length=24),
         ),
     ]

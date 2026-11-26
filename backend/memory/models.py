@@ -152,7 +152,7 @@ class PersonaRelationshipState(models.Model):
     persona_identifier = models.CharField(max_length=128, db_index=True)
     conflict_stage = models.IntegerField(default=0, db_index=True)
     conflict_reason = models.TextField(blank=True, default="")
-    story_tone = models.CharField(max_length=24, default="mature", db_index=True)
+    story_tone = models.CharField(max_length=24, default="default", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

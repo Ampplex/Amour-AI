@@ -100,7 +100,7 @@ def generate_companion_reply(
     persist_exchange_to_memory: bool = True,
     reply_length: str = "default",
     is_autonomous_continue: bool = False,
-    story_tone: str = "mature",
+    story_tone: str = "default",
 ) -> dict:
     """
     Single-prompt AI persona response generation.

@@ -102,9 +102,15 @@ def _classify_next_tone(
             "content": (
                 "You track the active story tone of a roleplay conversation.\n"
                 "Allowed tones: default, casual, comfort, mature.\n"
+                "Definitions:\n"
+                "- default: Adaptive general roleplay, romantic banter, and everyday pacing.\n"
+                "- mature: Any adult fiction, explicit or implicit erotic/sensual tension, sexual or physical intimacy, passion, or adult intentions.\n"
+                "- comfort: Emotional caretaking, reassurance, soothing, or listening when the user is distressed or vulnerable.\n"
+                "- casual: Light platonic chat with no romantic or adult undertones.\n"
                 "Rules:\n"
-                "- Keep the CURRENT tone unless the latest exchange clearly shifts the mood or intimacy level.\n"
-                "- Short or neutral replies ('ok', 'go on', '*nods*') must keep the CURRENT tone.\n"
+                "- When the user's message displays mature themes, adult intentions, erotic tension, or adult fiction, immediately classify as 'mature'.\n"
+                "- When the current tone is 'mature', keep it 'mature' unless the user clearly redirects the conversation away from adult fiction.\n"
+                "- Short, neutral, or continuation replies ('ok', 'go on', '*nods*', '[continuation]') must keep the CURRENT tone.\n"
                 "- Reply with ONLY one word from: default, casual, comfort, mature."
             ),
         },

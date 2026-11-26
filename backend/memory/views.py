@@ -174,8 +174,8 @@ class ChatMemoryView(APIView):
             user_identifier=user_id,
             persona_identifier=persona_id,
         ).first()
-        current_conflict_stage = rel_state.conflict_stage
-        current_story_tone = getattr(rel_state, "story_tone", "mature") or "mature" if rel_state else 0
+        current_conflict_stage = rel_state.conflict_stage if rel_state else 0
+        current_story_tone = (getattr(rel_state, "story_tone", "default") if rel_state else "default") or "default"
 
         return Response(
             {
@@ -446,7 +446,7 @@ class ChatMemoryView(APIView):
             persona_identifier=str(persona_id),
         )
         current_conflict_stage = rel_state.conflict_stage
-        current_story_tone = getattr(rel_state, "story_tone", "mature") or "mature"
+        current_story_tone = getattr(rel_state, "story_tone", "default") or "default"
 
         # Override persona personality & greeting with per-user customization if one exists
         try:
