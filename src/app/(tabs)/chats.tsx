@@ -17,6 +17,7 @@ import { useAuth } from '../../context/AuthContext';
 import CompanionChatModal from '../../components/CompanionChatModal';
 import { PersonaItem } from '../../services/personaService';
 import {
+  CONVERSATIONS_PAGE_SIZE,
   fetchUserConversationsWithStatus,
   getCachedConversations,
   ConversationItem,
@@ -80,11 +81,16 @@ export default function ChatsScreen() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
+  const [hasMore, setHasMore] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<boolean>(false);
   const [activeChatPersona, setActiveChatPersona] = useState<PersonaItem | null>(null);
   const conversationsRef = useRef<ConversationItem[]>([]);
   const lastLoadedAtRef = useRef<number>(0);
   const activeUserIdRef = useRef<string | null>(null);
+  const pageRef = useRef<number>(1);
+  const hasMoreRef = useRef<boolean>(false);
+  const isLoadingMoreRef = useRef<boolean>(false);
 
   const loadConversations = useCallback(
     async ({ isPullToRefresh = false, force = false } = {}) => {
@@ -93,7 +99,12 @@ export default function ChatsScreen() {
         activeUserIdRef.current = null;
         conversationsRef.current = [];
         lastLoadedAtRef.current = 0;
+        pageRef.current = 1;
+        hasMoreRef.current = false;
+        isLoadingMoreRef.current = false;
         setConversations([]);
+        setHasMore(false);
+        setLoadingMore(false);
         setLoadError(false);
         setLoading(false);
         setRefreshing(false);
@@ -104,7 +115,12 @@ export default function ChatsScreen() {
         activeUserIdRef.current = currentUserId;
         conversationsRef.current = [];
         lastLoadedAtRef.current = 0;
+        pageRef.current = 1;
+        hasMoreRef.current = false;
+        isLoadingMoreRef.current = false;
         setConversations([]);
+        setHasMore(false);
+        setLoadingMore(false);
         setLoading(true);
       }
 
@@ -112,7 +128,7 @@ export default function ChatsScreen() {
         setRefreshing(true);
       }
 
-      // Immediately hydrate from memory/local cache if list isn't populated yet
+      // Immediately hydrate latest capped page from memory/local cache if list isn't populated yet
       let hasExisting = conversationsRef.current.length > 0;
       if (!hasExisting) {
         const cached = await getCachedConversations(currentUserId);
@@ -126,17 +142,26 @@ export default function ChatsScreen() {
         }
       }
 
-      if (!force && !isPullToRefresh && hasExisting && Date.now() - lastLoadedAtRef.current < CONVERSATIONS_STALE_MS) {
+      // Don't discard older pages scrolled into memory during passive tab switches unless forced/stale
+      if (!force && !isPullToRefresh && hasExisting && (pageRef.current > 1 || Date.now() - lastLoadedAtRef.current < CONVERSATIONS_STALE_MS)) {
         setLoading(false);
         return;
       }
 
       try {
-        const result = await fetchUserConversationsWithStatus(currentUserId, user?.token);
+        const result = await fetchUserConversationsWithStatus(
+          currentUserId,
+          user?.token,
+          1,
+          CONVERSATIONS_PAGE_SIZE
+        );
         if (activeUserIdRef.current !== currentUserId) return;
         if (result.ok) {
           conversationsRef.current = result.conversations;
+          pageRef.current = 1;
+          hasMoreRef.current = result.hasMore;
           setConversations(result.conversations);
+          setHasMore(result.hasMore);
           setLoadError(false);
           lastLoadedAtRef.current = Date.now();
         } else if (!hasExisting) {
@@ -156,6 +181,48 @@ export default function ChatsScreen() {
     },
     [user?.id, user?.token]
   );
+
+  const handleLoadMoreConversations = useCallback(async () => {
+    const currentUserId = user?.id || null;
+    if (
+      !currentUserId ||
+      loading ||
+      refreshing ||
+      isLoadingMoreRef.current ||
+      !hasMoreRef.current
+    ) {
+      return;
+    }
+
+    isLoadingMoreRef.current = true;
+    setLoadingMore(true);
+    const nextPage = pageRef.current + 1;
+
+    try {
+      const result = await fetchUserConversationsWithStatus(
+        currentUserId,
+        user?.token,
+        nextPage,
+        CONVERSATIONS_PAGE_SIZE
+      );
+      if (activeUserIdRef.current !== currentUserId) return;
+      if (result.ok) {
+        const existingIds = new Set(conversationsRef.current.map((c) => c.persona.id));
+        const uniqueOlder = result.conversations.filter((c) => !existingIds.has(c.persona.id));
+        const merged = [...conversationsRef.current, ...uniqueOlder];
+        conversationsRef.current = merged;
+        pageRef.current = nextPage;
+        hasMoreRef.current = result.hasMore;
+        setConversations(merged);
+        setHasMore(result.hasMore);
+      }
+    } catch (err) {
+      console.warn('[ChatsScreen] Error loading earlier conversations:', err);
+    } finally {
+      isLoadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [user?.id, user?.token, loading, refreshing]);
 
   useFocusEffect(
     useCallback(() => {
@@ -256,7 +323,9 @@ export default function ChatsScreen() {
           <Text style={styles.headerTitle}>CHATS</Text>
           {conversations.length > 0 ? (
             <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{conversations.length}</Text>
+              <Text style={styles.countBadgeText}>
+                {conversations.length}{hasMore ? '+' : ''}
+              </Text>
             </View>
           ) : null}
         </View>
@@ -346,6 +415,15 @@ export default function ChatsScreen() {
           windowSize={7}
           initialNumToRender={10}
           updateCellsBatchingPeriod={50}
+          onEndReached={handleLoadMoreConversations}
+          onEndReachedThreshold={0.4}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.loadingMoreFooter}>
+                <ActivityIndicator size="small" color="#F43F5E" />
+              </View>
+            ) : undefined
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -409,6 +487,11 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingMoreFooter: {
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },

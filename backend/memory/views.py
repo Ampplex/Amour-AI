@@ -1916,7 +1916,26 @@ class UserConversationsListView(APIView):
         user_key = (request.headers.get("X-Memory-User-Key") or request.query_params.get("user_key") or "").strip() or None
 
         if not user_id:
-            return Response({"conversations": []}, status=status.HTTP_200_OK)
+            return Response(
+                {"conversations": [], "page": 1, "page_size": 20, "has_more": False},
+                status=status.HTTP_200_OK,
+            )
+
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+
+        has_pagination_params = (
+            "page" in request.query_params or "page_size" in request.query_params
+        )
+        default_page_size = 20 if has_pagination_params else 50
+        try:
+            page_size = min(100, max(1, int(request.query_params.get("page_size", default_page_size))))
+        except (TypeError, ValueError):
+            page_size = default_page_size
+
+        offset = (page - 1) * page_size
 
         import uuid
         from django.db import connection
@@ -1924,35 +1943,61 @@ class UserConversationsListView(APIView):
         from .models import PersonaChatMessage, Persona, UserPersonaCustomization
         from .crypto import decrypt_chat_message
 
-        # Fetch the latest message per persona in 1 indexed query on PostgreSQL
-        # (eliminates 2N+1 sequential round-trips over remote Neon connections).
+        # Fetch only the requested page's (persona_identifier, max_created_at) pairs first
+        # (+1 row to detect has_more without a separate COUNT query).
+        page_rows = list(
+            PersonaChatMessage.objects.filter(user_identifier=user_id)
+            .values("persona_identifier")
+            .annotate(max_created_at=Max("created_at"))
+            .order_by("-max_created_at")[offset : offset + page_size + 1]
+        )
+        has_more = len(page_rows) > page_size
+        page_rows = page_rows[:page_size]
+
+        if not page_rows:
+            return Response(
+                {
+                    "conversations": [],
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": False,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        page_pids = [row["persona_identifier"] for row in page_rows if row.get("persona_identifier")]
+        if not page_pids:
+            return Response(
+                {
+                    "conversations": [],
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": False,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Fetch the latest message for ONLY the page_pids in 1 query.
         if connection.vendor == "postgresql":
-            latest_messages = list(
-                PersonaChatMessage.objects.filter(user_identifier=user_id)
+            msg_by_pid = {
+                msg.persona_identifier: msg
+                for msg in PersonaChatMessage.objects.filter(
+                    user_identifier=user_id,
+                    persona_identifier__in=page_pids,
+                )
                 .select_related("persona")
                 .order_by("persona_identifier", "-created_at")
                 .distinct("persona_identifier")
-            )
-            latest_messages.sort(key=lambda m: m.created_at, reverse=True)
+            }
         else:
-            persona_latest = list(
-                PersonaChatMessage.objects.filter(user_identifier=user_id)
-                .values("persona_identifier")
-                .annotate(max_created_at=Max("created_at"))
-                .order_by("-max_created_at")
-            )
-            if not persona_latest:
-                return Response({"conversations": []}, status=status.HTTP_200_OK)
-
             pair_filter = Q()
-            for row in persona_latest:
+            for row in page_rows:
                 pid = row.get("persona_identifier")
                 ts = row.get("max_created_at")
                 if pid and ts:
                     pair_filter |= Q(persona_identifier=pid, created_at=ts)
 
-            seen_pids = set()
-            latest_messages = []
+            msg_by_pid = {}
             if pair_filter:
                 candidates = (
                     PersonaChatMessage.objects.filter(user_identifier=user_id)
@@ -1961,12 +2006,20 @@ class UserConversationsListView(APIView):
                     .order_by("-created_at")
                 )
                 for msg in candidates:
-                    if msg.persona_identifier and msg.persona_identifier not in seen_pids:
-                        seen_pids.add(msg.persona_identifier)
-                        latest_messages.append(msg)
+                    if msg.persona_identifier and msg.persona_identifier not in msg_by_pid:
+                        msg_by_pid[msg.persona_identifier] = msg
 
+        latest_messages = [msg_by_pid[pid] for pid in page_pids if pid in msg_by_pid]
         if not latest_messages:
-            return Response({"conversations": []}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "conversations": [],
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": has_more,
+                },
+                status=status.HTTP_200_OK,
+            )
 
         # Batch-load any Persona records where the FK wasn't populated on the message
         missing_persona_uuids = []
@@ -2067,7 +2120,15 @@ class UserConversationsListView(APIView):
                 },
             })
 
-        return Response({"conversations": conversations}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "conversations": conversations,
+                "page": page,
+                "page_size": page_size,
+                "has_more": has_more,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 
