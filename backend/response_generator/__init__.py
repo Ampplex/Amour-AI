@@ -22,6 +22,7 @@ from .sanitizer import (
 from .tone_tracker import (
     schedule_tone_update,
     VALID_TONES,
+    _classify_with_bedrock,
 )
 
 __all__ = [

@@ -22,6 +22,7 @@ from .reeve_service import (
 from response_generator import (
     generate_companion_reply,
     strip_emojis,
+    schedule_tone_update,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,8 @@ class ChatMemoryView(APIView):
             user_identifier=user_id,
             persona_identifier=persona_id,
         ).first()
-        current_conflict_stage = rel_state.conflict_stage if rel_state else 0
+        current_conflict_stage = rel_state.conflict_stage
+        current_story_tone = getattr(rel_state, "story_tone", "mature") or "mature" if rel_state else 0
 
         return Response(
             {
@@ -444,6 +446,7 @@ class ChatMemoryView(APIView):
             persona_identifier=str(persona_id),
         )
         current_conflict_stage = rel_state.conflict_stage
+        current_story_tone = getattr(rel_state, "story_tone", "mature") or "mature"
 
         # Override persona personality & greeting with per-user customization if one exists
         try:
@@ -582,6 +585,7 @@ class ChatMemoryView(APIView):
                 persist_exchange_to_memory=False,
                 reply_length=reply_length,
                 is_autonomous_continue=is_autonomous_continue,
+                story_tone=current_story_tone,
             )
 
             if result.get("success") is False:
@@ -729,6 +733,28 @@ class ChatMemoryView(APIView):
                             )
 
                     transaction.on_commit(store_committed_exchange)
+
+                    # Fire-and-forget background tone classification via Bedrock
+                    # (runs after reply is sent, adds 0ms to response latency)
+                    _user_id_str = str(user_id)
+                    _persona_id_str = str(persona_id)
+                    _user_msg = (message or "").strip() if not is_autonomous_continue else "[continuation]"
+                    _reply = reply_text
+                    _tone = current_story_tone
+
+                    def fire_tone_update():
+                        try:
+                            schedule_tone_update(
+                                user_identifier=_user_id_str,
+                                persona_identifier=_persona_id_str,
+                                user_message=_user_msg,
+                                assistant_reply=_reply,
+                                current_tone=_tone,
+                            )
+                        except Exception:
+                            logger.debug("Tone update scheduling failed", exc_info=True)
+
+                    transaction.on_commit(fire_tone_update)
 
             except Exception as e:
                 logger.exception("Failed to commit conversation turn in PostgreSQL: %s", e)
