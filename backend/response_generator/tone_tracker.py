@@ -24,8 +24,10 @@ def _call_bedrock_converse(messages: list, max_tokens: int = 8, temperature: flo
         or os.environ.get("AWS_REGION", "us-west-2")
     ).strip()
     model_id = (
-        getattr(settings, "BEDROCK_MODEL_ID", "")
-        or os.environ.get("BEDROCK_MODEL_ID", "mistral.mistral-large-2407-v1:0")
+        getattr(settings, "BEDROCK_SMALL_MODEL_ID", "")
+        or os.environ.get("BEDROCK_SMALL_MODEL_ID", "")
+        or getattr(settings, "BEDROCK_CLASSIFIER_MODEL_ID", "")
+        or os.environ.get("BEDROCK_CLASSIFIER_MODEL_ID", "meta.llama3-1-8b-instruct-v1:0")
     ).strip()
 
     system_blocks = []
