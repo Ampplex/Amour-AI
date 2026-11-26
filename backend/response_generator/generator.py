@@ -19,7 +19,7 @@ from memory.reeve_service import (
 from .prompt_builder import build_roleplay_system_prompt
 from .llm_client import call_llm
 from .sanitizer import sanitize_companion_reply
-from .tone_tracker import has_mature_intent
+from .tone_tracker import classify_tone_with_bedrock
 
 logger = logging.getLogger("amour.response_generator")
 
@@ -141,9 +141,12 @@ def generate_companion_reply(
     if clean_tone not in {"default", "casual", "comfort", "mature"}:
         clean_tone = "default"
 
-    # Immediate Turn-1 escalation: if user sends mature/adult cues, elevate this turn instantly
-    if clean_tone != "mature" and message and has_mature_intent(message):
-        clean_tone = "mature"
+    # Pure LLM-driven tone classification via Bedrock (no hardcoded regex)
+    if message and not is_autonomous_continue:
+        clean_tone = classify_tone_with_bedrock(
+            user_message=message,
+            current_tone=clean_tone,
+        )
 
     system_prompt = build_roleplay_system_prompt(
         persona_name=persona_name,

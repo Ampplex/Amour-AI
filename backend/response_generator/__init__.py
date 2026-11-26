@@ -20,10 +20,8 @@ from .sanitizer import (
     clean_user_name_vocatives,
 )
 from .tone_tracker import (
-    schedule_tone_update,
+    classify_tone_with_bedrock,
     VALID_TONES,
-    _classify_with_bedrock,
-    has_mature_intent,
 )
 
 __all__ = [
@@ -35,7 +33,6 @@ __all__ = [
     "sanitize_companion_reply",
     "strip_emojis",
     "clean_user_name_vocatives",
-    "schedule_tone_update",
+    "classify_tone_with_bedrock",
     "VALID_TONES",
-    "has_mature_intent",
 ]
