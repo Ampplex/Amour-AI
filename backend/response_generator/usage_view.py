@@ -1,13 +1,12 @@
-import hmac
 from datetime import timedelta
 
-from django.conf import settings
 from django.db.models import Avg, Count, Q, Sum
 from django.db.models.functions import TruncDate
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views import View
 
+from authentication.console_auth import is_console_authorized
 from .models import LLMRequestMetric
 
 
@@ -15,20 +14,7 @@ class LLMUsageView(View):
     """Return prompt-free LLM usage analytics to authorized console administrators."""
 
     def get(self, request):
-        user = getattr(request, "user", None)
-        is_staff = bool(
-            user
-            and user.is_authenticated
-            and (user.is_staff or user.is_superuser)
-        )
-        supplied_key = request.headers.get("x-console-admin-key", "")
-        expected_key = getattr(settings, "SECRET_KEY", "")[:16]
-        has_console_key = bool(
-            supplied_key
-            and expected_key
-            and hmac.compare_digest(supplied_key, expected_key)
-        )
-        if not (is_staff or has_console_key or getattr(settings, "DEBUG", False)):
+        if not is_console_authorized(request):
             return JsonResponse({"error": "Admin credentials required"}, status=403)
 
         now = timezone.now()

@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.html import escape
 from django.contrib.auth.hashers import make_password
 from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
+from django.middleware.csrf import CsrfViewMiddleware
 from django.utils.decorators import method_decorator
 from django.http import HttpResponse
 from rest_framework import status
@@ -36,6 +37,7 @@ from .serializers import (
 )
 from .email_service import send_verification_email, send_password_reset_email
 from .deletion_service import delete_user_account_and_memories
+from .console_auth import is_console_authenticated, is_console_authorized
 
 logger = logging.getLogger("amour.auth")
 
@@ -1181,7 +1183,22 @@ class ProfilePictureUploadView(APIView):
             return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class AdminUsersView(APIView):
+class ConsoleAdminAPIView(APIView):
+    def dispatch(self, request, *args, **kwargs):
+        if (
+            request.method not in ("GET", "HEAD", "OPTIONS", "TRACE")
+            and is_console_authenticated(request)
+        ):
+            csrf_response = CsrfViewMiddleware(
+                lambda _request: None
+            ).process_view(request, self.dispatch, (), {})
+            if csrf_response is not None:
+                return csrf_response
+
+        return super().dispatch(request, *args, **kwargs)
+
+
+class AdminUsersView(ConsoleAdminAPIView):
     """
     Admin Console View to list, filter, search and create user accounts
     reflecting the exact database schema.
@@ -1189,17 +1206,7 @@ class AdminUsersView(APIView):
     permission_classes = [AllowAny]
 
     def _is_admin(self, request):
-        if request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser):
-            return True
-        admin_id = request.headers.get("x-admin-user-id") or request.query_params.get("admin_user_id") or request.data.get("admin_user_id")
-        if admin_id:
-            user = User.objects.filter(id=admin_id).first()
-            if user and (user.is_staff or user.is_superuser):
-                return True
-        # Allow in local development environments
-        if getattr(settings, "DEBUG", False):
-            return True
-        return False
+        return is_console_authorized(request)
 
     def get(self, request):
         if not self._is_admin(request):
@@ -1275,23 +1282,14 @@ class AdminUsersView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class AdminUserDetailView(APIView):
+class AdminUserDetailView(ConsoleAdminAPIView):
     """
     Admin Console View to inspect, modify, or delete a specific user account.
     """
     permission_classes = [AllowAny]
 
     def _is_admin(self, request):
-        if request.user and request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser):
-            return True
-        admin_id = request.headers.get("x-admin-user-id") or request.query_params.get("admin_user_id") or request.data.get("admin_user_id")
-        if admin_id:
-            user = User.objects.filter(id=admin_id).first()
-            if user and (user.is_staff or user.is_superuser):
-                return True
-        if getattr(settings, "DEBUG", False):
-            return True
-        return False
+        return is_console_authorized(request)
 
     def get(self, request, user_id):
         if not self._is_admin(request):

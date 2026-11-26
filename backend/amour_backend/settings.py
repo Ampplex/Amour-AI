@@ -11,6 +11,9 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "amour-ai-django-fallback-secret-key-2026")
 DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
+CONSOLE_PASSWORD = os.environ.get("CONSOLE_PASSWORD", "")
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 ALLOWED_HOSTS = ["*"]
 

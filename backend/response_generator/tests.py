@@ -220,7 +220,7 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertEqual(quota["rate_limit_remaining_tokens"], 490000)
         self.assertEqual(quota["rate_limit_reset_tokens"], "1m")
 
-    @override_settings(DEBUG=False, SECRET_KEY="test-console-secret")
+    @override_settings(DEBUG=True, SECRET_KEY="test-console-secret")
     def test_llm_usage_endpoint_rejects_anonymous_requests(self):
         request = RequestFactory().get("/api/llm/usage/")
         request.user = AnonymousUser()

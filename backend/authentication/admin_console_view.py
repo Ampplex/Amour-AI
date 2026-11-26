@@ -1,14 +1,23 @@
+import hmac
 import json
 from django.views import View
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.conf import settings
+from django.middleware.csrf import get_token
+from django.utils.decorators import method_decorator
+from django.utils.html import escape
+from django.views.decorators.cache import never_cache
+from django.views.decorators.debug import sensitive_post_parameters
 from django.contrib.auth import get_user_model
 from memory.models import Persona, PersonaChatMessage
+from .console_auth import CONSOLE_SESSION_KEY, is_console_authenticated
 
 User = get_user_model()
 
 
+@method_decorator(never_cache, name="dispatch")
+@method_decorator(sensitive_post_parameters("password"), name="dispatch")
 class AdminConsoleWebView(View):
     """
     Production Web Admin Console for Amour AI.
@@ -17,20 +26,53 @@ class AdminConsoleWebView(View):
     and chat activity monitoring.
     """
 
+    def _login_page(self, request, error: str = "", status_code: int = 200):
+        error_html = f'<p class="error">{escape(error)}</p>' if error else ""
+        csrf_token = get_token(request)
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amour AI — Admin Console Login</title>
+  <style>
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #09090b; color: #fafafa; font-family: system-ui, sans-serif; }}
+    main {{ width: min(360px, calc(100% - 40px)); padding: 28px; background: #18181b; border: 1px solid #27272a; border-radius: 16px; }}
+    h1 {{ margin: 0 0 8px; font-size: 22px; }}
+    p {{ color: #a1a1aa; font-size: 14px; }}
+    label {{ display: block; margin: 20px 0 8px; font-size: 13px; }}
+    input {{ box-sizing: border-box; width: 100%; padding: 12px; color: #fff; background: #09090b; border: 1px solid #3f3f46; border-radius: 8px; }}
+    button {{ width: 100%; margin-top: 16px; padding: 12px; color: #fff; background: #e11d48; border: 0; border-radius: 8px; font-weight: 700; cursor: pointer; }}
+    .error {{ color: #fda4af; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Amour AI Admin</h1>
+    <p>Enter the console password to continue.</p>
+    {error_html}
+    <form method="post" action="/console/">
+      <input type="hidden" name="csrfmiddlewaretoken" value="{csrf_token}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>"""
+        return HttpResponse(html, status=status_code, content_type="text/html")
+
     def get(self, request):
-        # Allow superusers / staff logged into Django session
-        is_authenticated = (
-            hasattr(request, "user")
-            and request.user
-            and request.user.is_authenticated
-            and (getattr(request.user, "is_staff", False) or getattr(request.user, "is_superuser", False))
-        )
-        
-        # Check query param / header key for direct token access
-        admin_key = request.GET.get("key", "").strip()
-        expected_secret = getattr(settings, "SECRET_KEY", "amour-secret")[:16]
-        if admin_key and admin_key == expected_secret:
-            is_authenticated = True
+        if not is_console_authenticated(request):
+            if not settings.CONSOLE_PASSWORD:
+                return self._login_page(
+                    request,
+                    "Console password is not configured on the server.",
+                    status_code=503,
+                )
+            return self._login_page(request)
+
+        csrf_token = get_token(request)
 
         # Calculate high-level stats for fast server-side hydration
         total_users = User.objects.count()
@@ -138,9 +180,14 @@ class AdminConsoleWebView(View):
           <span>Django Portal</span>
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
         </a>
+        <form method="post" action="/console/">
+          <input type="hidden" name="csrfmiddlewaretoken" value="{csrf_token}">
+          <input type="hidden" name="action" value="logout">
+          <button type="submit" class="px-3.5 py-1.5 rounded-lg border border-dark-border bg-dark-input hover:bg-dark-hover transition text-xs font-semibold text-zinc-300">Sign out</button>
+        </form>
         <div class="hidden sm:flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-zinc-900 border border-dark-border">
           <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span class="text-xs text-zinc-300 font-medium">{'ankeshpune@gmail.com' if is_authenticated else 'Guest Mode'}</span>
+          <span class="text-xs text-zinc-300 font-medium">Console access</span>
         </div>
       </div>
     </div>
@@ -435,8 +482,7 @@ class AdminConsoleWebView(View):
   <script>
     let currentUsers = [];
     let searchTimeout = null;
-    const adminUserId = "111822298300726667407"; // ankeshpune@gmail.com
-    const consoleAdminKey = new URLSearchParams(window.location.search).get('key') || '';
+    const consoleCsrfToken = "{csrf_token}";
 
     function switchTab(tab) {{
       document.getElementById('tab-users').classList.toggle('hidden', tab !== 'users');
@@ -467,9 +513,7 @@ class AdminConsoleWebView(View):
     async function loadLLMUsage() {{
       const quotaCards = document.getElementById('llm-quota-cards');
       try {{
-        const headers = {{}};
-        if (consoleAdminKey) headers['x-console-admin-key'] = consoleAdminKey;
-        const response = await fetch('/api/llm/usage/', {{ headers }});
+        const response = await fetch('/api/llm/usage/');
         if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
         const data = await response.json();
         const summary = data.summary || {{}};
@@ -568,17 +612,15 @@ class AdminConsoleWebView(View):
       const provider = document.getElementById('filter-provider').value;
       const active = document.getElementById('filter-active').value;
 
-      let url = `/api/auth/admin/users/?admin_user_id=${{adminUserId}}`;
-      if (search) url += `&search=${{encodeURIComponent(search)}}`;
-      if (provider !== 'all') url += `&auth_provider=${{provider}}`;
-      if (active !== 'all') url += `&is_active=${{active}}`;
+      const filters = new URLSearchParams();
+      if (search) filters.set('search', search);
+      if (provider !== 'all') filters.set('auth_provider', provider);
+      if (active !== 'all') filters.set('is_active', active);
+      const query = filters.toString();
+      const url = `/api/auth/admin/users/${{query ? `?${{query}}` : ''}}`;
 
       try {{
-        const res = await fetch(url, {{
-          headers: {{
-            'x-admin-user-id': adminUserId
-          }}
-        }});
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
         currentUsers = data.users || [];
@@ -686,11 +728,11 @@ class AdminConsoleWebView(View):
       }};
 
       try {{
-        const res = await fetch(`/api/auth/admin/users/${{userId}}/?admin_user_id=${{adminUserId}}`, {{
-          method: 'PUT',
+        const res = await fetch(`/api/auth/admin/users/${{userId}}/`, {{
+          method: 'PATCH',
           headers: {{
             'Content-Type': 'application/json',
-            'x-admin-user-id': adminUserId,
+            'X-CSRFToken': consoleCsrfToken,
           }},
           body: JSON.stringify(payload),
         }});
@@ -712,10 +754,10 @@ class AdminConsoleWebView(View):
       }}
 
       try {{
-        const res = await fetch(`/api/auth/admin/users/${{userId}}/?admin_user_id=${{adminUserId}}`, {{
+        const res = await fetch(`/api/auth/admin/users/${{userId}}/`, {{
           method: 'DELETE',
           headers: {{
-            'x-admin-user-id': adminUserId,
+            'X-CSRFToken': consoleCsrfToken,
           }}
         }});
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
@@ -734,3 +776,28 @@ class AdminConsoleWebView(View):
 </body>
 </html>"""
         return HttpResponse(html, content_type="text/html")
+
+    def post(self, request):
+        if request.POST.get("action") == "logout":
+            request.session.flush()
+            return redirect("/console/")
+
+        expected_password = settings.CONSOLE_PASSWORD
+        if not expected_password:
+            return self._login_page(
+                request,
+                "Console password is not configured on the server.",
+                status_code=503,
+            )
+
+        supplied_password = request.POST.get("password", "")
+        if not supplied_password or not hmac.compare_digest(
+            supplied_password.encode("utf-8"),
+            expected_password.encode("utf-8"),
+        ):
+            return self._login_page(request, "Invalid password.", status_code=401)
+
+        request.session.cycle_key()
+        request.session[CONSOLE_SESSION_KEY] = True
+        request.session.set_expiry(3600)
+        return redirect("/console/")
