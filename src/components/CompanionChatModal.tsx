@@ -524,6 +524,7 @@ export default function CompanionChatModal({
   const [historyLoadError, setHistoryLoadError] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
+  const [isInitialScrollComplete, setIsInitialScrollComplete] = useState<boolean>(false);
   const [historyPage, setHistoryPage] = useState<number>(1);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
   const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
@@ -531,8 +532,58 @@ export default function CompanionChatModal({
   const [actionMenuMessage, setActionMenuMessage] = useState<ChatMessage | null>(null);
   const [copiedToast, setCopiedToast] = useState<boolean>(false);
   const flatListRef = useRef<FlatList>(null);
+  const pendingInitialScrollRef = useRef<boolean>(false);
+  const initialScrollFrameRef = useRef<number | null>(null);
+  const contentHeightRef = useRef<number>(0);
   const chatInputRef = useRef<any>(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
+
+  const cancelInitialScroll = React.useCallback(() => {
+    pendingInitialScrollRef.current = false;
+    if (initialScrollFrameRef.current !== null) {
+      cancelAnimationFrame(initialScrollFrameRef.current);
+      initialScrollFrameRef.current = null;
+    }
+  }, []);
+
+  const handleMessagesContentSizeChange = React.useCallback((_width: number, height: number) => {
+    contentHeightRef.current = height;
+    if (!pendingInitialScrollRef.current || initialScrollFrameRef.current !== null) return;
+
+    let lastHeight = -1;
+    let stableFrames = 0;
+    const scrollAsContentSettles = () => {
+      if (!pendingInitialScrollRef.current) {
+        initialScrollFrameRef.current = null;
+        return;
+      }
+
+      flatListRef.current?.scrollToEnd({ animated: false });
+      if (contentHeightRef.current === lastHeight) {
+        stableFrames += 1;
+      } else {
+        lastHeight = contentHeightRef.current;
+        stableFrames = 0;
+      }
+
+      if (stableFrames >= 2) {
+        pendingInitialScrollRef.current = false;
+        initialScrollFrameRef.current = null;
+        setIsInitialScrollComplete(true);
+        return;
+      }
+
+      initialScrollFrameRef.current = requestAnimationFrame(scrollAsContentSettles);
+    };
+
+    initialScrollFrameRef.current = requestAnimationFrame(scrollAsContentSettles);
+  }, []);
+
+  useEffect(() => () => {
+    if (initialScrollFrameRef.current !== null) {
+      cancelAnimationFrame(initialScrollFrameRef.current);
+    }
+  }, []);
 
   // iOS-style Horizontal Screen Slide Transition Controller
   useEffect(() => {
@@ -897,6 +948,7 @@ export default function CompanionChatModal({
   const loadHistory = React.useCallback(async () => {
     if (!persona?.id) return;
     setIsLoadingHistory(true);
+    setIsInitialScrollComplete(false);
     setHistoryLoadError(false);
     try {
       const uId = await resolveConversationUserId(user?.id);
@@ -915,6 +967,8 @@ export default function CompanionChatModal({
           variants: item.variants || (item.response_metadata?.variants && item.response_metadata.variants.length > 1 ? item.response_metadata.variants : undefined),
           activeVariantIndex: item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
         }));
+        pendingInitialScrollRef.current = loaded.length > 0;
+        setIsInitialScrollComplete(loaded.length === 0);
         setMessages(loaded);
         setHasMoreHistory(Boolean(data.has_more));
         setHistoryLoadError(false);
@@ -925,18 +979,17 @@ export default function CompanionChatModal({
       console.warn('[CompanionChat] History read error:', err);
       setHistoryLoadError(true);
     } finally {
+      if (!pendingInitialScrollRef.current) {
+        setIsInitialScrollComplete(true);
+      }
       setIsLoadingHistory(false);
-      setTimeout(() => {
-        try {
-          flatListRef.current?.scrollToEnd({ animated: false });
-        } catch {}
-      }, 80);
     }
   }, [persona?.id, user?.id, user?.token]);
 
   // Fetch paginated chat history for this (user_id, persona_id) conversation
   useEffect(() => {
     if (!visible || !persona) {
+      cancelInitialScroll();
       setMessages([]);
       setEditingMessageId(null);
       setActionMenuMessage(null);
@@ -949,13 +1002,14 @@ export default function CompanionChatModal({
         setActivePersona((prev) => (prev ? { ...prev, ...custom } : persona));
       }
     });
+    cancelInitialScroll();
     setMessages([]);
     setEditingMessageId(null);
     setActionMenuMessage(null);
     setHistoryPage(1);
     setHasMoreHistory(false);
     loadHistory();
-  }, [visible, persona, loadHistory]);
+  }, [visible, persona, loadHistory, cancelInitialScroll]);
 
   const handleLoadEarlier = async () => {
     if (isLoadingMore || !hasMoreHistory || !activePersona) return;
@@ -1311,6 +1365,7 @@ export default function CompanionChatModal({
         <FlatList
           ref={flatListRef}
           data={messages}
+          onContentSizeChange={handleMessagesContentSizeChange}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           extraData={lastUserMessageId}
@@ -1325,7 +1380,10 @@ export default function CompanionChatModal({
           ]}
           keyboardShouldPersistTaps="handled"
           maintainVisibleContentPosition={
-            Platform.OS === 'ios' ? { minIndexForVisible: 0 } : undefined
+            Platform.OS === 'ios'
+              && isInitialScrollComplete
+              ? { minIndexForVisible: 0 }
+              : undefined
           }
           onScrollToIndexFailed={() => {}}
           ListHeaderComponent={
