@@ -21,8 +21,6 @@ logger = logging.getLogger("amour.llm_client")
 
 _RATE_LIMIT_COOLDOWNS: dict[str, float] = {}
 _COOLDOWN_LOCK = threading.Lock()
-_ROTATION_LOCK = threading.Lock()
-_GROQ_KEY_ROTATION_IDX = 0
 DEFAULT_COOLDOWN_SECONDS = 60.0
 SHORT_RATE_LIMIT_RETRY_MAX_SECONDS = 2.5
 DEFAULT_GROQ_BEDROCK_FALLBACK_MODEL_IDS = (
@@ -85,17 +83,6 @@ def _select_rate_limit_reset_value(headers: dict | None):
     return normalized.get("x-ratelimit-reset-tokens") or normalized.get("x-ratelimit-reset-requests")
 
 
-def _rotate_api_keys(keys: list[str]) -> list[str]:
-    """Return API keys rotated round-robin so traffic spreads evenly across the key pool."""
-    global _GROQ_KEY_ROTATION_IDX
-    if len(keys) <= 1:
-        return list(keys)
-    with _ROTATION_LOCK:
-        start = _GROQ_KEY_ROTATION_IDX % len(keys)
-        _GROQ_KEY_ROTATION_IDX = (_GROQ_KEY_ROTATION_IDX + 1) % len(keys)
-    return list(keys[start:]) + list(keys[:start])
-
-
 def get_model_rate_limit_cooldown(endpoint: str, model_id: str) -> float:
     """Return remaining cooldown seconds for a model at endpoint, or 0.0 if available."""
     key = f"{endpoint}:{model_id}"
@@ -128,34 +115,19 @@ def record_model_rate_limit(
 
 def get_groq_api_keys() -> list[str]:
     """
-    Resolve list of Groq API keys for automatic 429 key failover / rotation.
-    Supports comma-separated GROQ_API_KEY, GROQ_API_KEYS list, or GROQ_API_KEY_FALLBACK.
+    Resolve Groq keys in primary, explicit fallback, then additional-pool order.
     """
     raw_keys = []
-
-    # 1. GROQ_API_KEYS (e.g. "key1,key2,key3" or list)
-    env_keys = os.environ.get("GROQ_API_KEYS", "") or getattr(settings, "GROQ_API_KEYS", None)
-    if env_keys:
-        if isinstance(env_keys, str):
-            raw_keys.extend([k.strip() for k in env_keys.split(",") if k.strip()])
-        elif isinstance(env_keys, (list, tuple)):
-            raw_keys.extend([str(k).strip() for k in env_keys if str(k).strip()])
-
-    # 2. GROQ_API_KEY (single key or comma-separated)
-    primary = os.environ.get("GROQ_API_KEY", "") or getattr(settings, "GROQ_API_KEY", "")
-    if primary:
-        if isinstance(primary, str) and "," in primary:
-            raw_keys.extend([k.strip() for k in primary.split(",") if k.strip()])
-        elif str(primary).strip():
-            raw_keys.append(str(primary).strip())
-
-    # 3. GROQ_API_KEY_FALLBACK
-    fallback = os.environ.get("GROQ_API_KEY_FALLBACK", "") or getattr(settings, "GROQ_API_KEY_FALLBACK", "")
-    if fallback:
-        if isinstance(fallback, str) and "," in fallback:
-            raw_keys.extend([k.strip() for k in fallback.split(",") if k.strip()])
-        elif str(fallback).strip():
-            raw_keys.append(str(fallback).strip())
+    key_sources = (
+        os.environ.get("GROQ_API_KEY", "") or getattr(settings, "GROQ_API_KEY", ""),
+        os.environ.get("GROQ_API_KEY_FALLBACK", "") or getattr(settings, "GROQ_API_KEY_FALLBACK", ""),
+        os.environ.get("GROQ_API_KEYS", "") or getattr(settings, "GROQ_API_KEYS", None),
+    )
+    for source in key_sources:
+        if isinstance(source, str):
+            raw_keys.extend([key.strip() for key in source.split(",") if key.strip()])
+        elif isinstance(source, (list, tuple)):
+            raw_keys.extend([str(key).strip() for key in source if str(key).strip()])
 
     # Deduplicate while preserving order
     seen = set()
@@ -552,8 +524,8 @@ def _call_openai_compatible_with_keys(
     frequency_penalty: float,
     presence_penalty: float,
 ) -> tuple[str | None, bool]:
-    """Try rotated keys and return the response plus whether a rate limit was hit."""
-    rotated_keys = _rotate_api_keys(api_keys) if provider == "groq" else list(api_keys)
+    """Try keys in configured priority order and report whether any hit a rate limit."""
+    ordered_keys = list(api_keys)
     waited_seconds = 0.0
     was_rate_limited = False
 
@@ -561,7 +533,7 @@ def _call_openai_compatible_with_keys(
         shortest_cooldown = None
         hit_rate_limit = False
 
-        for api_key_attempt in rotated_keys:
+        for api_key_attempt in ordered_keys:
             key_id = api_key_attempt[-8:] if len(api_key_attempt) >= 8 else api_key_attempt
             cooldown_key = f"{current_model}:{key_id}"
             key_cooldown = get_model_rate_limit_cooldown(llm_base_url, cooldown_key)

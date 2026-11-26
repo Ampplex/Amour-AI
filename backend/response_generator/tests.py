@@ -8,6 +8,7 @@ from response_generator.llm_client import (
     _RATE_LIMIT_COOLDOWNS,
     _parse_retry_after_seconds,
     call_llm,
+    get_groq_api_keys,
     get_model_rate_limit_cooldown,
     record_model_rate_limit,
 )
@@ -194,6 +195,21 @@ class GeneratorAndClientTests(SimpleTestCase):
         )
         self.assertEqual(extract_token_usage(None), (None, None))
 
+    def test_get_groq_api_keys_preserves_primary_then_fallback_order(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "GROQ_API_KEY": "primary-key",
+                "GROQ_API_KEY_FALLBACK": "fallback-key",
+                "GROQ_API_KEYS": "extra-key,fallback-key",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                get_groq_api_keys(),
+                ["primary-key", "fallback-key", "extra-key"],
+            )
+
     def test_extract_rate_limit_headers_normalizes_provider_quota(self):
         quota = extract_rate_limit_headers({
             "X-RateLimit-Limit-Tokens": "500000",
@@ -324,7 +340,7 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertEqual(recorded["status"], "rate_limited")
         self.assertEqual(recorded["response_status"], 429)
 
-    def test_call_llm_falls_back_to_bedrock_qwen_then_deepseek_on_groq_rate_limit(self):
+    def test_call_llm_tries_groq_fallback_key_before_bedrock_models(self):
         _RATE_LIMIT_COOLDOWNS.clear()
         self.addCleanup(_RATE_LIMIT_COOLDOWNS.clear)
 
@@ -352,8 +368,14 @@ class GeneratorAndClientTests(SimpleTestCase):
                 "response_generator.llm_client.get_llm_configuration",
                 return_value=("key", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"]),
             ),
-            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key"]),
-            patch("response_generator.llm_client.requests.post", return_value=rate_limited_response),
+            patch(
+                "response_generator.llm_client.get_groq_api_keys",
+                return_value=["primary-key", "fallback-key"],
+            ),
+            patch(
+                "response_generator.llm_client.requests.post",
+                return_value=rate_limited_response,
+            ) as mock_groq_post,
             patch("response_generator.llm_client.boto3.client", return_value=bedrock_client) as mock_boto_client,
             patch("response_generator.llm_client.record_llm_request"),
             patch.dict("os.environ", {"AWS_REGION": "ap-south-1"}, clear=False),
@@ -368,6 +390,13 @@ class GeneratorAndClientTests(SimpleTestCase):
             )
 
         self.assertEqual((text, model), ("Bedrock reply.", "deepseek.v3.2"))
+        self.assertEqual(
+            [
+                call.kwargs["headers"]["Authorization"]
+                for call in mock_groq_post.call_args_list
+            ],
+            ["Bearer primary-key", "Bearer fallback-key"],
+        )
         self.assertEqual(
             [call.kwargs["modelId"] for call in bedrock_client.converse.call_args_list],
             ["qwen.qwen3-32b-v1:0", "deepseek.v3.2"],
@@ -570,7 +599,7 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertGreater(get_model_rate_limit_cooldown("https://groq.test/openai/v1", "qwen/qwen3.8-27b:key1"), 0.0)
         _RATE_LIMIT_COOLDOWNS.clear()
 
-    def test_call_llm_rotates_keys_and_retries_brief_rate_limit_once(self):
+    def test_call_llm_preserves_key_priority_and_retries_brief_rate_limit_once(self):
         _RATE_LIMIT_COOLDOWNS.clear()
         rate_limited_resp = MagicMock()
         rate_limited_resp.status_code = 429
@@ -590,6 +619,7 @@ class GeneratorAndClientTests(SimpleTestCase):
             patch("response_generator.llm_client.get_groq_api_keys", return_value=["key-first-11111111", "key-second-22222222"]),
             patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
             patch("response_generator.llm_client.requests.post", side_effect=[rate_limited_resp, rate_limited_resp, ok_resp]) as mock_post,
+            patch("response_generator.llm_client.boto3.client") as mock_bedrock_client,
             patch("response_generator.llm_client.record_llm_request"),
             patch("response_generator.llm_client.time.sleep") as mock_sleep,
         ):
@@ -599,6 +629,18 @@ class GeneratorAndClientTests(SimpleTestCase):
         mock_sleep.assert_called_once()
         self.assertLessEqual(mock_sleep.call_args.args[0], 2.55)
         self.assertEqual(mock_post.call_count, 3)
+        self.assertEqual(
+            [
+                call.kwargs["headers"]["Authorization"]
+                for call in mock_post.call_args_list
+            ],
+            [
+                "Bearer key-first-11111111",
+                "Bearer key-second-22222222",
+                "Bearer key-first-11111111",
+            ],
+        )
+        mock_bedrock_client.assert_not_called()
 
         # Next call should skip keys already in cooldown before triggering any sleep retry
         _RATE_LIMIT_COOLDOWNS.clear()
@@ -617,7 +659,7 @@ class GeneratorAndClientTests(SimpleTestCase):
         mock_skip_post.assert_called_once()
         self.assertEqual(mock_skip_post.call_args.kwargs["headers"]["Authorization"], "Bearer key-beta-22222222")
 
-        # Successive clean calls should start on different keys via round-robin
+        # Clean calls keep the main key first rather than rotating the fallback ahead of it.
         _RATE_LIMIT_COOLDOWNS.clear()
         with (
             patch("response_generator.llm_client.get_llm_configuration", return_value=("k1", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
@@ -638,7 +680,8 @@ class GeneratorAndClientTests(SimpleTestCase):
 
         auth_1 = mock_post_1.call_args.kwargs["headers"]["Authorization"]
         auth_2 = mock_post_2.call_args.kwargs["headers"]["Authorization"]
-        self.assertNotEqual(auth_1, auth_2)
+        self.assertEqual(auth_1, "Bearer key-alpha-11111111")
+        self.assertEqual(auth_2, "Bearer key-alpha-11111111")
         _RATE_LIMIT_COOLDOWNS.clear()
 
     def test_cap_memory_context_and_history_token_budget_and_max_tokens(self):
