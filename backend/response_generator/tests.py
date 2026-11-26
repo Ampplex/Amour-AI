@@ -116,16 +116,28 @@ class PromptBuilderTests(SimpleTestCase):
             "waiting to",
             "waiting passively",
             "waiting for the user",
+            "before the user replies",
+            "before a reply",
         )
-        turn_tail_forbidden = ("silence", "pauses", "isn't talking", "waiting")
+        turn_tail_forbidden = ("silence", "pauses", "isn't talking", "waiting", "replies")
         for tone in ("default", "mature", "casual", "comfort"):
             prompt = self._build_sample(story_tone=tone, is_autonomous_continue=True).lower()
             turn_tail = prompt.split("--- this turn ---")[1]
-            self.assertIn("pick up a split second after your last line", turn_tail)
+            self.assertIn("generate a seamless follow-up continuing directly from your previous response", turn_tail)
             for term in full_prompt_forbidden:
                 self.assertNotIn(term, prompt, f"Unexpected trigger {term!r} in autonomous prompt for tone={tone}")
             for term in turn_tail_forbidden:
                 self.assertNotIn(term, turn_tail, f"Unexpected trigger {term!r} in autonomous turn tail for tone={tone}")
+
+    def test_restored_roleplay_depth_keeps_compact_token_footprint(self):
+        prompt = self._build_sample(allow_user_name=True, memory_context="").lower()
+        self.assertIn("sarcasm, playful banter", prompt)
+        self.assertIn("instead of agreeing with everything", prompt)
+        self.assertIn("no gesture recycling", prompt)
+        self.assertIn("never paraphrase or echo", prompt)
+        self.assertIn("roleplay timeline", prompt)
+        self.assertIn("tender comfort, intimate teasing", prompt)
+        self.assertLess(len(prompt), 6500)
 
 
 class ToneTrackerParsingTests(SimpleTestCase):
@@ -320,7 +332,10 @@ class GeneratorAndClientTests(SimpleTestCase):
         ]
 
         with (
-            patch("response_generator.generator.retrieve_context_for_user", return_value="Assistant (continued): Old beat."),
+            patch(
+                "response_generator.generator.retrieve_context_for_user",
+                return_value="Assistant (continued): Old beat.\n\nWhy are you silent? We talked by the fountain.",
+            ),
             patch("response_generator.generator.call_llm", return_value=("*I pour another glass.* Third line.", "test-model")) as mock_call,
             patch("response_generator.generator.store_memory_for_user") as mock_store,
         ):
@@ -344,11 +359,13 @@ class GeneratorAndClientTests(SimpleTestCase):
                 {"role": "assistant", "content": "*I lean on the counter.* First line.\n\nSecond line."},
                 {
                     "role": "user",
-                    "content": "[Next beat: keep going immediately from your last line with your next thought, line, or movement.]",
+                    "content": "[Follow-up beat: extend your previous response directly with your next thought, spoken line, or physical movement.]",
                 },
             ],
         )
         self.assertNotIn("(continued)", res["context"])
+        self.assertNotIn("Why are you silent?", res["context"])
+        self.assertIn("We talked by the fountain.", res["context"])
         mock_store.assert_called_once()
         stored_entry = mock_store.call_args.args[0]
         self.assertEqual(stored_entry, "Assistant: *I pour another glass.* Third line.")

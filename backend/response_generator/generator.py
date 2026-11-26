@@ -31,11 +31,11 @@ MIN_RECENT_HISTORY_TURNS = 4
 MAX_SINGLE_HISTORY_TURN_CHARS = 1500
 
 AUTONOMOUS_NEXT_BEAT_CUE = (
-    "[Next beat: keep going immediately from your last line with your next thought, line, or movement.]"
+    "[Follow-up beat: extend your previous response directly with your next thought, spoken line, or physical movement.]"
 )
 AUTONOMOUS_RETRY_BEAT_CUE = (
-    "[Next beat: stay purely inside your own perspective—deliver your immediate next movement, "
-    "sensory detail, or spoken line in this same moment before a reply.]"
+    "[Follow-up beat: continue strictly inside your own perspective—deliver your next physical action, "
+    "sensory detail, or follow-up dialogue extending your previous response.]"
 )
 
 _AUTONOMOUS_LEAK_PATTERN = re.compile(
@@ -56,6 +56,7 @@ _LEGACY_META_USER_PREFIXES = (
     "[continue the scene",
     "[scene direction",
     "[next beat",
+    "[follow-up beat",
 )
 
 
@@ -272,8 +273,11 @@ def generate_companion_reply(
         current_message=message,
     )
 
+    clean_msg = (message or "").strip()
+    is_autonomous = bool(is_autonomous_continue or not clean_msg)
+
     # 1. Retrieve historical memory context from Reeve
-    memory_query = (message or "").strip()
+    memory_query = clean_msg
     if not memory_query:
         memory_query = (conversation_history[-1].get("content") if conversation_history else greeting) or "conversation"
 
@@ -292,6 +296,8 @@ def generate_companion_reply(
         # Scrub internal engine brand names and legacy autonomous labels so the persona never picks up on them
         memory_context = re.sub(r"\bReeve\b", "memory", memory_context, flags=re.IGNORECASE)
         memory_context = re.sub(r"\bAssistant\s*\(continued\):", "Assistant:", memory_context, flags=re.IGNORECASE)
+        if is_autonomous:
+            memory_context = _strip_silence_complaint_sentences(memory_context)
         memory_context = _cap_memory_context(memory_context)
 
     # 2. Build the single comprehensive roleplay system prompt
@@ -300,9 +306,9 @@ def generate_companion_reply(
         clean_tone = "default"
 
     # Pure LLM-driven tone classification via Bedrock (no hardcoded regex)
-    if message and not is_autonomous_continue:
+    if clean_msg and not is_autonomous_continue:
         clean_tone = classify_tone_with_bedrock(
-            user_message=message,
+            user_message=clean_msg,
             current_tone=clean_tone,
         )
 
@@ -316,7 +322,7 @@ def generate_companion_reply(
         client_time=client_time,
         client_timezone=client_timezone,
         memory_context=memory_context,
-        current_message=(message or "").strip(),
+        current_message=clean_msg,
         has_history=bool(conversation_history),
         allow_user_name=allow_name,
         reply_length=reply_length,
@@ -324,11 +330,7 @@ def generate_companion_reply(
         story_tone=clean_tone,
     )
 
-    # 3. Assemble messages: system prompt + recent short-term history + current message
-    clean_msg = (message or "").strip()
-    is_autonomous = bool(is_autonomous_continue or not clean_msg)
-
-    # 4. Direct LLM call with fallback model chain & TPM-safe token runways
+    # 3 & 4. Direct LLM call with fallback model chain & TPM-safe token runways
     clean_length = (reply_length or "default").strip().lower()
     if clean_length == "short":
         # 512 tokens keeps 1-2 sentences safe from truncation while cutting upfront TPM reserve
