@@ -19,6 +19,7 @@ from memory.reeve_service import (
 from .prompt_builder import build_roleplay_system_prompt
 from .llm_client import call_llm
 from .sanitizer import sanitize_companion_reply
+from .tone_tracker import has_mature_intent
 
 logger = logging.getLogger("amour.response_generator")
 
@@ -139,6 +140,10 @@ def generate_companion_reply(
     clean_tone = (story_tone or "default").strip().lower()
     if clean_tone not in {"default", "casual", "comfort", "mature"}:
         clean_tone = "default"
+
+    # Immediate Turn-1 escalation: if user sends mature/adult cues, elevate this turn instantly
+    if clean_tone != "mature" and message and has_mature_intent(message):
+        clean_tone = "mature"
 
     system_prompt = build_roleplay_system_prompt(
         persona_name=persona_name,

@@ -18,11 +18,43 @@ Flow:
 
 import logging
 import os
+import re
 import threading
 
 logger = logging.getLogger("amour.tone_tracker")
 
 VALID_TONES = {"default", "casual", "comfort", "mature"}
+
+# Fast pre-flight regex for instant Turn-1 escalation to "mature" without waiting
+MATURE_INTENT_PATTERN = re.compile(
+    r"\b("
+    # Physical intimacy & touch
+    r"kiss(es|ing|ed)?|smooch|french\s+kiss|lips|neck|collarbone|"
+    r"touch(es|ing|ed)?|caress(es|ing|ed)?|stroke|stroking|rubbing|fondl\w*|"
+    r"pinned|pull(ed|ing)?\s+closer|lean(ed|ing)?\s+in|in\s+my\s+arms|in\s+your\s+arms|"
+    # Body, nudity, undressing
+    r"undress\w*|strip(ping|ped)?|naked|nude|shirt\s+off|clothes\s+off|lingerie|panties|boxers|"
+    r"bare\s+skin|body\s+against|thigh(s)?|chest|hips?|waist|groin|curves|"
+    # Sensual/sexual/erotic words & arousal
+    r"bed|bedroom|sheets|sheets\s+between|spend\s+the\s+night|sleep\s+together|make\s+love|making\s+love|"
+    r"arous\w*|turn(ed|ing)?\s+on|turn-on|crave|craving|lust|passion|sensual|erotic|sexy|horny|"
+    r"seduce|seduct\w*|tease|teasing|moan(s|ing|ed)?|groan(s|ing|ed)?|whisper\w*\s+in\s+your\s+ear|"
+    r"breath\s+on\s+my|breath\s+on\s+your|bite\s+your\s+lip|bite\s+my\s+lip|friction|climax|orgasm|"
+    r"hard\s+for\s+you|wet\s+for\s+you|"
+    # Dominance/submission & roleplay positions
+    r"take\s+me|take\s+you|have\s+your\s+way|you('re|\s+are)\s+mine|i('m|\s+am)\s+yours|"
+    r"straddle|straddling|on\s+my\s+lap|on\s+your\s+lap|on\s+top\s+of\s+me|on\s+top\s+of\s+you|"
+    r"push(ed|ing)?\s+me\s+against|push(ed|ing)?\s+you\s+against"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def has_mature_intent(text: str) -> bool:
+    """Zero-latency check for immediate Turn-1 escalation into mature roleplay."""
+    if not text or not isinstance(text, str):
+        return False
+    return bool(MATURE_INTENT_PATTERN.search(text))
 
 
 def _classify_with_bedrock(messages: list, max_tokens: int = 8, temperature: float = 0.1) -> str:

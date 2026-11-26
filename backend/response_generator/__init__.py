@@ -23,6 +23,7 @@ from .tone_tracker import (
     schedule_tone_update,
     VALID_TONES,
     _classify_with_bedrock,
+    has_mature_intent,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "clean_user_name_vocatives",
     "schedule_tone_update",
     "VALID_TONES",
+    "has_mature_intent",
 ]

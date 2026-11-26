@@ -625,13 +625,21 @@ class ChatMemoryView(APIView):
                 "conflict_stage",
                 current_conflict_stage,
             )
+            resulting_story_tone = result.get("story_tone", current_story_tone)
 
             try:
                 with transaction.atomic():
-                    # Persist updated conflict stage only after a usable reply exists
+                    # Persist updated conflict stage and immediate tone escalation only after a usable reply exists
+                    update_rel_fields = []
                     if rel_state.conflict_stage != new_conflict_stage:
                         rel_state.conflict_stage = new_conflict_stage
-                        rel_state.save(update_fields=["conflict_stage", "updated_at"])
+                        update_rel_fields.append("conflict_stage")
+                    if getattr(rel_state, "story_tone", None) != resulting_story_tone:
+                        rel_state.story_tone = resulting_story_tone
+                        update_rel_fields.append("story_tone")
+                    if update_rel_fields:
+                        update_rel_fields.append("updated_at")
+                        rel_state.save(update_fields=update_rel_fields)
 
                     response_metadata = {
                         "engine": "single_prompt_roleplay",
@@ -740,7 +748,7 @@ class ChatMemoryView(APIView):
                     _persona_id_str = str(persona_id)
                     _user_msg = (message or "").strip() if not is_autonomous_continue else "[continuation]"
                     _reply = reply_text
-                    _tone = current_story_tone
+                    _tone = resulting_story_tone
 
                     def fire_tone_update():
                         try:
