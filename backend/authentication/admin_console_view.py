@@ -22,8 +22,7 @@ class AdminConsoleWebView(View):
     """
     Production Web Admin Console for Amour AI.
     Accessible at /console/.
-    Provides real-time analytics, user account administration, persona inspection,
-    and chat activity monitoring.
+    Provides real-time analytics, user account administration, and chat activity monitoring.
     """
 
     def _login_page(self, request, error: str = "", status_code: int = 200):
@@ -83,18 +82,6 @@ class AdminConsoleWebView(View):
         local_users = User.objects.filter(auth_provider="local").count()
         total_personas = Persona.objects.count()
         total_chats = PersonaChatMessage.objects.count()
-
-        # Preload personas
-        personas = list(
-            Persona.objects.all().values(
-                "id", "name", "tagline", "age", "border_color", "image_url",
-                "greeting", "memory_prompt", "visibility", "is_community",
-                "likes_count", "chats_count", "publisher_name", "publisher_handle", "created_at"
-            )[:50]
-        )
-        for p in personas:
-            p["id"] = str(p["id"])
-            p["created_at"] = p["created_at"].strftime("%Y-%m-%d %H:%M") if p.get("created_at") else ""
 
         html = f"""<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -247,9 +234,6 @@ class AdminConsoleWebView(View):
       <button onclick="switchTab('users')" id="tab-btn-users" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 bg-brand-500 text-white">
         <span>👥 User Accounts</span>
       </button>
-      <button onclick="switchTab('personas')" id="tab-btn-personas" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
-        <span>🎭 Personas ({total_personas})</span>
-      </button>
       <button onclick="switchTab('llm')" id="tab-btn-llm" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
         <span>📊 LLM Usage</span>
       </button>
@@ -313,40 +297,7 @@ class AdminConsoleWebView(View):
       </div>
     </section>
 
-    <!-- TAB 2: PERSONAS CATALOG -->
-    <section id="tab-personas" class="hidden space-y-4">
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {"".join([f'''
-        <div class="rounded-xl border border-dark-border bg-dark-card p-4 flex flex-col space-y-3 relative overflow-hidden">
-          <div class="flex items-start space-x-3">
-            <img src="{p.get('image_url') or 'https://images.unsplash.com/photo-1534528741775-53994a69daeb'}" class="w-14 h-14 rounded-xl object-cover border-2 border-zinc-700">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center justify-between">
-                <h4 class="font-bold text-sm text-white truncate">{p.get('name')}</h4>
-                <span class="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-semibold">{p.get('age', 21)} yrs</span>
-              </div>
-              <p class="text-xs text-brand-400 font-medium truncate mt-0.5">{p.get('tagline') or 'Companion'}</p>
-              <p class="text-[11px] text-zinc-500 mt-1">Publisher: {p.get('publisher_name', 'Amour')}</p>
-            </div>
-          </div>
-
-          <div class="p-2.5 rounded-lg bg-dark-input border border-dark-border text-[11px] text-zinc-300 italic line-clamp-3">
-            "{p.get('greeting')[:140]}..."
-          </div>
-
-          <div class="flex items-center justify-between text-[11px] text-zinc-400 pt-1 border-t border-dark-border">
-            <span class="flex items-center space-x-1">
-              <span class="text-brand-500 font-bold">♥</span>
-              <span>{p.get('likes_count', 0)} likes</span>
-            </span>
-            <span class="text-[10px] text-zinc-500">ID: {p.get('id')[:8]}...</span>
-          </div>
-        </div>
-        ''' for p in personas])}
-      </div>
-    </section>
-
-    <!-- TAB 3: LLM USAGE AND QUOTA -->
+    <!-- TAB 2: LLM USAGE AND QUOTA -->
     <section id="tab-llm" class="hidden space-y-4">
       <div class="flex items-center justify-between gap-3">
         <div>
@@ -486,10 +437,9 @@ class AdminConsoleWebView(View):
 
     function switchTab(tab) {{
       document.getElementById('tab-users').classList.toggle('hidden', tab !== 'users');
-      document.getElementById('tab-personas').classList.toggle('hidden', tab !== 'personas');
       document.getElementById('tab-llm').classList.toggle('hidden', tab !== 'llm');
 
-      ['users', 'personas', 'llm'].forEach(t => {{
+      ['users', 'llm'].forEach(t => {{
         const btn = document.getElementById(`tab-btn-${{t}}`);
         if (t === tab) {{
           btn.className = "px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 bg-brand-500 text-white";
