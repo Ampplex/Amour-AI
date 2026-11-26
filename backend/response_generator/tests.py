@@ -102,6 +102,24 @@ class PromptBuilderTests(SimpleTestCase):
         casual_auto_tail = self._build_sample(story_tone="casual", is_autonomous_continue=True).split("--- THIS TURN ---")[1].lower()
         self.assertNotIn("escalate the current romantic or mature tension", casual_auto_tail)
 
+    def test_autonomous_continue_avoids_silence_and_waiting_triggers(self):
+        full_prompt_forbidden = (
+            "silence",
+            "isn't talking",
+            "waiting to",
+            "waiting passively",
+            "waiting for the user",
+        )
+        turn_tail_forbidden = ("silence", "pauses", "isn't talking", "waiting")
+        for tone in ("default", "mature", "casual", "comfort"):
+            prompt = self._build_sample(story_tone=tone, is_autonomous_continue=True).lower()
+            turn_tail = prompt.split("--- this turn ---")[1]
+            self.assertIn("pick up a split second after your last line", turn_tail)
+            for term in full_prompt_forbidden:
+                self.assertNotIn(term, prompt, f"Unexpected trigger {term!r} in autonomous prompt for tone={tone}")
+            for term in turn_tail_forbidden:
+                self.assertNotIn(term, turn_tail, f"Unexpected trigger {term!r} in autonomous turn tail for tone={tone}")
+
 
 class ToneTrackerParsingTests(SimpleTestCase):
     def test_extract_tone_label_handles_wrapped_and_punctuated_outputs(self):
@@ -286,3 +304,97 @@ class GeneratorAndClientTests(SimpleTestCase):
         recorded = mock_record.call_args.kwargs
         self.assertEqual(recorded["status"], "rate_limited")
         self.assertEqual(recorded["response_status"], 429)
+
+    def test_autonomous_continue_merges_history_and_scrubs_memory_labels(self):
+        history = [
+            {"role": "user", "content": "Hey there."},
+            {"role": "assistant", "content": "*I lean on the counter.* First line."},
+            {"role": "assistant", "content": "Second line."},
+        ]
+
+        with (
+            patch("response_generator.generator.retrieve_context_for_user", return_value="Assistant (continued): Old beat."),
+            patch("response_generator.generator.call_llm", return_value=("*I pour another glass.* Third line.", "test-model")) as mock_call,
+            patch("response_generator.generator.store_memory_for_user") as mock_store,
+        ):
+            res = generate_companion_reply(
+                message="",
+                namespace="usr_1_persona_2",
+                persona_name="Elena",
+                user_name="Alex",
+                conversation_history=history,
+                is_autonomous_continue=True,
+                persist_exchange_to_memory=True,
+            )
+
+        self.assertTrue(res["success"])
+        mock_call.assert_called_once()
+        sent_messages = mock_call.call_args.kwargs["messages"]
+        self.assertEqual(
+            sent_messages[1:],
+            [
+                {"role": "user", "content": "Hey there."},
+                {"role": "assistant", "content": "*I lean on the counter.* First line.\n\nSecond line."},
+                {
+                    "role": "user",
+                    "content": "[Next beat: keep going immediately from your last line with your next thought, line, or movement.]",
+                },
+            ],
+        )
+        self.assertNotIn("(continued)", res["context"])
+        mock_store.assert_called_once()
+        stored_entry = mock_store.call_args.args[0]
+        self.assertEqual(stored_entry, "Assistant: *I pour another glass.* Third line.")
+
+    def test_autonomous_continue_strips_prior_leaks_and_retries_once(self):
+        history = [
+            {"role": "user", "content": "Hey."},
+            {"role": "assistant", "content": "*I set down my cup.* Why aren't you speaking? I don't wait for answers."},
+        ]
+
+        with (
+            patch("response_generator.generator.retrieve_context_for_user", return_value=""),
+            patch(
+                "response_generator.generator.call_llm",
+                side_effect=[
+                    ("I dont wait for answers, you are not speaking anything.", "test-model"),
+                    ("*I step closer and straighten your collar.* Come walk with me.", "test-model"),
+                ],
+            ) as mock_call,
+        ):
+            res = generate_companion_reply(
+                message="",
+                namespace="usr_1_persona_2",
+                persona_name="Elena",
+                user_name="Alex",
+                conversation_history=history,
+                is_autonomous_continue=True,
+                persist_exchange_to_memory=False,
+            )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(mock_call.call_count, 2)
+        self.assertEqual(res["reply"], "*I step closer and straighten your collar.* Come walk with me.")
+        first_attempt_messages = mock_call.call_args_list[0].kwargs["messages"]
+        self.assertEqual(first_attempt_messages[2]["content"], "*I set down my cup.*")
+
+    def test_normal_reply_does_not_trigger_autonomous_retry(self):
+        with (
+            patch("response_generator.generator.retrieve_context_for_user", return_value=""),
+            patch(
+                "response_generator.generator.call_llm",
+                return_value=("You're awfully quiet tonight.", "test-model"),
+            ) as mock_call,
+        ):
+            res = generate_companion_reply(
+                message="I stayed quiet because I was thinking.",
+                namespace="usr_1_persona_2",
+                persona_name="Elena",
+                user_name="Alex",
+                is_autonomous_continue=False,
+                persist_exchange_to_memory=False,
+            )
+
+        self.assertTrue(res["success"])
+        mock_call.assert_called_once()
+        self.assertEqual(res["reply"], "You're awfully quiet tonight.")

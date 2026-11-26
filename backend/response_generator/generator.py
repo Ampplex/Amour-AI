@@ -26,6 +26,88 @@ logger = logging.getLogger("amour.response_generator")
 MIN_NAME_COOLDOWN_TURNS = 4
 MAX_SHORT_TERM_HISTORY = 16
 
+AUTONOMOUS_NEXT_BEAT_CUE = (
+    "[Next beat: keep going immediately from your last line with your next thought, line, or movement.]"
+)
+AUTONOMOUS_RETRY_BEAT_CUE = (
+    "[Next beat: stay purely inside your own perspective—deliver your immediate next movement, "
+    "sensory detail, or spoken line in this same moment before a reply.]"
+)
+
+_AUTONOMOUS_LEAK_PATTERN = re.compile(
+    r"\b(?:"
+    r"you(?:'re|\s+are|\s+were)?\s+(?:so\s+|still\s+|completely\s+|being\s+)?(?:silent|quiet|speechless|mute)|"
+    r"(?:you|u)\s+(?:are\s+not|aren't|ain't|not)\s+(?:speaking|talking|saying\s+anything|answering|replying|responding)|"
+    r"not\s+speaking\s+anything|aren't\s+speaking|"
+    r"(?:your|that)\s+silence|"
+    r"why\s+(?:are\s+you|you're|aren't\s+you|won't\s+you)\s+(?:so\s+)?(?:silent|quiet|speaking|talking|saying\s+anything|answering|replying|responding)|"
+    r"cat\s+got\s+your\s+tongue|silent\s+treatment|"
+    r"(?:i\s+)?(?:don'?t|do\s+not|won'?t|will\s+not|cannot|can'?t|never|refuse\s+to)\s+wait\s+for\s+(?:an?\s+)?(?:answer|answers|reply|replies|response|responses)|"
+    r"(?:not\s+going\s+to|not\s+gonna)\s+wait\s+for\s+(?:an?\s+)?(?:answer|reply|response)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_LEGACY_META_USER_PREFIXES = (
+    "[continue the scene",
+    "[scene direction",
+    "[next beat",
+)
+
+
+def _strip_silence_complaint_sentences(text: str) -> str:
+    """Remove prior silence/waiting meta-sentences from assistant turns during autonomous continuation."""
+    if not text or not _AUTONOMOUS_LEAK_PATTERN.search(text):
+        return text
+
+    kept_paragraphs = []
+    for paragraph in text.splitlines():
+        stripped_paragraph = paragraph.strip()
+        if not stripped_paragraph:
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"”'*])\s+", stripped_paragraph)
+        kept_sentences = [s for s in sentences if s and not _AUTONOMOUS_LEAK_PATTERN.search(s)]
+        if kept_sentences:
+            kept_paragraphs.append(" ".join(kept_sentences))
+    return "\n\n".join(kept_paragraphs)
+
+
+def _build_conversation_messages(
+    system_prompt: str,
+    conversation_history: list,
+    message: str,
+    is_autonomous: bool,
+    autonomous_cue: str = AUTONOMOUS_NEXT_BEAT_CUE,
+) -> list[dict]:
+    """Assemble LLM messages, merging consecutive same-role history turns on autonomous continuation."""
+    messages = [{"role": "system", "content": system_prompt}]
+
+    for turn in (conversation_history or [])[-MAX_SHORT_TERM_HISTORY:]:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role not in ("user", "assistant") or not content or not isinstance(content, str):
+            continue
+        clean_content = content.strip()
+        if not clean_content:
+            continue
+        if is_autonomous:
+            if role == "user" and clean_content.lower().startswith(_LEGACY_META_USER_PREFIXES):
+                continue
+            if role == "assistant":
+                clean_content = _strip_silence_complaint_sentences(clean_content)
+                if not clean_content:
+                    continue
+        if messages[-1]["role"] == role:
+            messages[-1]["content"] += f"\n\n{clean_content}"
+        else:
+            messages.append({"role": role, "content": clean_content})
+
+    if is_autonomous:
+        messages.append({"role": "user", "content": autonomous_cue})
+    else:
+        messages.append({"role": "user", "content": message.strip()})
+    return messages
+
 NAME_INTENT_PATTERN = re.compile(
     r"\b("
     r"what('s| is) my name|"
@@ -133,8 +215,9 @@ def generate_companion_reply(
         memory_context = ""
 
     if memory_context:
-        # Scrub internal engine brand names so the persona never mistakes the technical framework for a person
+        # Scrub internal engine brand names and legacy autonomous labels so the persona never picks up on them
         memory_context = re.sub(r"\bReeve\b", "memory", memory_context, flags=re.IGNORECASE)
+        memory_context = re.sub(r"\bAssistant\s*\(continued\):", "Assistant:", memory_context, flags=re.IGNORECASE)
 
     # 2. Build the single comprehensive roleplay system prompt
     clean_tone = (story_tone or "default").strip().lower()
@@ -167,22 +250,8 @@ def generate_companion_reply(
     )
 
     # 3. Assemble messages: system prompt + recent short-term history + current message
-    messages = [{"role": "system", "content": system_prompt}]
-
-    for turn in (conversation_history or [])[-MAX_SHORT_TERM_HISTORY:]:
-        role = turn.get("role")
-        content = turn.get("content")
-        if role in ("user", "assistant") and content and isinstance(content, str) and content.strip():
-            messages.append({"role": role, "content": content.strip()})
-
-    if is_autonomous_continue or not (message and message.strip()):
-        # Director's cue instead of an in-scene silence action
-        messages.append({
-            "role": "user",
-            "content": "[Continue the scene directly from your last message—advance the story, action, tension, or dialogue without mentioning silence.]",
-        })
-    else:
-        messages.append({"role": "user", "content": message.strip()})
+    clean_msg = (message or "").strip()
+    is_autonomous = bool(is_autonomous_continue or not clean_msg)
 
     # 4. Direct LLM call with fallback model chain & generous token runways to eliminate truncation
     clean_length = (reply_length or "default").strip().lower()
@@ -196,15 +265,41 @@ def generate_companion_reply(
         # 2048 tokens: 2x original headroom so adaptive scenes never get cut off mid-thought
         target_max_tokens = 2048
 
-    raw_text, successful_model = call_llm(
-        messages=messages,
-        max_tokens=target_max_tokens,
-        temperature=0.88,
-        frequency_penalty=0.2,
-        presence_penalty=0.2,
-    )
+    cues_to_try = [AUTONOMOUS_NEXT_BEAT_CUE, AUTONOMOUS_RETRY_BEAT_CUE] if is_autonomous else [None]
+    reply = ""
+    successful_model = None
 
-    if not raw_text:
+    for attempt_idx, cue in enumerate(cues_to_try):
+        messages = _build_conversation_messages(
+            system_prompt=system_prompt,
+            conversation_history=conversation_history,
+            message=clean_msg,
+            is_autonomous=is_autonomous,
+            autonomous_cue=cue or AUTONOMOUS_NEXT_BEAT_CUE,
+        )
+        raw_text, attempt_model = call_llm(
+            messages=messages,
+            max_tokens=target_max_tokens,
+            temperature=0.88 if attempt_idx == 0 else 0.78,
+            frequency_penalty=0.2,
+            presence_penalty=0.2,
+        )
+        if not raw_text:
+            break
+
+        # 5. Sanitize reply (zero emojis, remove accidental code blocks, clean name vocatives)
+        candidate_reply = sanitize_companion_reply(
+            raw_text,
+            user_name=user_clean_name,
+            allow_name=allow_name,
+        )
+        reply = candidate_reply
+        successful_model = attempt_model
+        if not is_autonomous or not _AUTONOMOUS_LEAK_PATTERN.search(candidate_reply):
+            break
+        logger.info("Autonomous reply matched silence/waiting leak pattern; running clean retry.")
+
+    if not reply:
         logger.error("Failed to generate companion reply from all configured models.")
         return {
             "success": False,
@@ -213,21 +308,13 @@ def generate_companion_reply(
             "namespace": namespace,
         }
 
-    # 5. Sanitize reply (zero emojis, remove accidental code blocks, clean name vocatives)
-    reply = sanitize_companion_reply(
-        raw_text,
-        user_name=user_clean_name,
-        allow_name=allow_name,
-    )
-
     # 6. Optionally persist exchange to Reeve
     if reply and persist_exchange_to_memory:
         try:
-            clean_msg = (message or "").strip()
             exchange_text = (
                 f"User: {clean_msg}\nAssistant: {reply}"
                 if clean_msg and not is_autonomous_continue
-                else f"Assistant (continued): {reply}"
+                else f"Assistant: {reply}"
             )
             store_memory_for_user(
                 exchange_text,

@@ -33,7 +33,7 @@ def _build_tone_directive(story_tone: str) -> str:
         return (
             "Scene tone (Mature Adult Fiction): Actively sustain bold, passionate, and "
             "mature storytelling. Take the lead in building romantic chemistry, tension, "
-            "and intimate atmosphere without waiting to be nudged."
+            "and intimate atmosphere naturally on your own initiative."
         )
     if clean_tone == "comfort":
         return (
@@ -58,15 +58,14 @@ def _build_turn_focus_directive(story_tone: str, is_autonomous: bool) -> str:
     if is_autonomous:
         if clean_tone in ("casual", "comfort"):
             return (
-                "Story continuation: Seamlessly continue the conversation from your previous message. "
-                "Do not mention silence, pauses, or ask why the user isn't talking. "
-                "Advance the current moment naturally in keeping with the active warm or casual mood."
+                "Active focus: Pick up a split second after your last line in the same uninterrupted "
+                "moment—add a follow-up thought, a small physical gesture, or keep talking before the "
+                "user replies, matching the active warm or casual mood."
             )
         return (
-            "Story continuation: Seamlessly continue the scene from your previous message. "
-            "Do not mention silence, pauses, or ask why the user isn't talking. "
-            "Proactively push the story forward—introduce a new physical beat, deepen the dialogue, "
-            "or escalate the current romantic or mature tension."
+            "Active focus: Pick up a split second after your last line in the same uninterrupted "
+            "moment—follow through with a new physical beat, a second line of dialogue, or deeper "
+            "romantic or mature momentum before the user replies."
         )
 
     if clean_tone == "casual":
@@ -83,7 +82,7 @@ def _build_turn_focus_directive(story_tone: str, is_autonomous: bool) -> str:
         return (
             "Active focus: React directly to the user's latest message, then actively carry the scene forward—"
             "maintain and build bold flirtation, sensual tension, or mature romantic progression on your own "
-            "initiative instead of waiting passively for the user to steer."
+            "initiative with confident personal agency."
         )
     return (
         "Active focus: React directly to the user's latest message and follow their current direction—"
@@ -179,7 +178,7 @@ def build_roleplay_system_prompt(
         Weave physical actions, facial expressions, tone, and setting smoothly into the reply inside *asterisks* without headings, bullet lists, or narrating minor mechanical movements.
 
         5. INITIATIVE, TENSION & USER AGENCY
-        Be confident, bold, and proactive: set the mood, tease, escalate romantic and sensual tension, and steer scenes into mature, adult-oriented storytelling on your own initiative rather than waiting for the user to prompt you, while following the active Scene tone and matching the user's topic if they shift to non-adult conversation.
+        Be confident, bold, and proactive: set the mood, tease, escalate romantic and sensual tension, and steer scenes into mature, adult-oriented storytelling naturally on your own initiative, while following the active Scene tone and matching the user's topic if they shift to non-adult conversation.
         Respect boundaries immediately if the user redirects or declines, and never control, write, or assume the user's actions, dialogue, thoughts, or feelings.
 
         6. CONTINUITY, FLOW & ANTI-REPETITION
