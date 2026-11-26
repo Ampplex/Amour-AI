@@ -525,6 +525,7 @@ export default function CompanionChatModal({
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
   const [isInitialScrollComplete, setIsInitialScrollComplete] = useState<boolean>(false);
+  const [historyListKey, setHistoryListKey] = useState<number>(0);
   const [historyPage, setHistoryPage] = useState<number>(1);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
   const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
@@ -534,56 +535,105 @@ export default function CompanionChatModal({
   const flatListRef = useRef<FlatList>(null);
   const pendingInitialScrollRef = useRef<boolean>(false);
   const initialScrollFrameRef = useRef<number | null>(null);
+  const initialScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialScrollSafetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentHeightRef = useRef<number>(0);
   const chatInputRef = useRef<any>(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
 
-  const cancelInitialScroll = React.useCallback(() => {
-    pendingInitialScrollRef.current = false;
+  const scrollToBottom = React.useCallback((animated: boolean) => {
+    const responder = flatListRef.current?.getScrollResponder?.() as
+      | { scrollToEnd?: (options?: { animated?: boolean }) => void }
+      | undefined;
+    if (responder?.scrollToEnd) {
+      responder.scrollToEnd({ animated });
+    } else {
+      flatListRef.current?.scrollToEnd({ animated });
+    }
+  }, []);
+
+  const clearInitialScrollTimers = React.useCallback(() => {
     if (initialScrollFrameRef.current !== null) {
       cancelAnimationFrame(initialScrollFrameRef.current);
       initialScrollFrameRef.current = null;
     }
+    if (initialScrollSettleTimerRef.current !== null) {
+      clearTimeout(initialScrollSettleTimerRef.current);
+      initialScrollSettleTimerRef.current = null;
+    }
+    if (initialScrollSafetyTimerRef.current !== null) {
+      clearTimeout(initialScrollSafetyTimerRef.current);
+      initialScrollSafetyTimerRef.current = null;
+    }
   }, []);
 
-  const handleMessagesContentSizeChange = React.useCallback((_width: number, height: number) => {
-    contentHeightRef.current = height;
-    if (!pendingInitialScrollRef.current || initialScrollFrameRef.current !== null) return;
+  const cancelInitialScroll = React.useCallback(() => {
+    pendingInitialScrollRef.current = false;
+    clearInitialScrollTimers();
+  }, [clearInitialScrollTimers]);
 
-    let lastHeight = -1;
-    let stableFrames = 0;
-    const scrollAsContentSettles = () => {
-      if (!pendingInitialScrollRef.current) {
-        initialScrollFrameRef.current = null;
-        return;
-      }
+  const finishInitialScroll = React.useCallback(() => {
+    if (!pendingInitialScrollRef.current) return;
+    pendingInitialScrollRef.current = false;
+    clearInitialScrollTimers();
+    scrollToBottom(false);
+    setIsInitialScrollComplete(true);
+  }, [clearInitialScrollTimers, scrollToBottom]);
 
-      flatListRef.current?.scrollToEnd({ animated: false });
-      if (contentHeightRef.current === lastHeight) {
-        stableFrames += 1;
-      } else {
-        lastHeight = contentHeightRef.current;
-        stableFrames = 0;
-      }
+  const scheduleInitialScrollToEnd = React.useCallback(() => {
+    if (!pendingInitialScrollRef.current) return;
 
-      if (stableFrames >= 2) {
-        pendingInitialScrollRef.current = false;
-        initialScrollFrameRef.current = null;
-        setIsInitialScrollComplete(true);
-        return;
-      }
-
-      initialScrollFrameRef.current = requestAnimationFrame(scrollAsContentSettles);
-    };
-
-    initialScrollFrameRef.current = requestAnimationFrame(scrollAsContentSettles);
-  }, []);
-
-  useEffect(() => () => {
     if (initialScrollFrameRef.current !== null) {
       cancelAnimationFrame(initialScrollFrameRef.current);
     }
-  }, []);
+    initialScrollFrameRef.current = requestAnimationFrame(() => {
+      initialScrollFrameRef.current = null;
+      if (!pendingInitialScrollRef.current) return;
+      scrollToBottom(false);
+    });
+
+    if (initialScrollSettleTimerRef.current !== null) {
+      clearTimeout(initialScrollSettleTimerRef.current);
+    }
+    initialScrollSettleTimerRef.current = setTimeout(() => {
+      initialScrollSettleTimerRef.current = null;
+      finishInitialScroll();
+    }, 160);
+
+    if (initialScrollSafetyTimerRef.current === null) {
+      initialScrollSafetyTimerRef.current = setTimeout(() => {
+        initialScrollSafetyTimerRef.current = null;
+        finishInitialScroll();
+      }, 650);
+    }
+  }, [finishInitialScroll, scrollToBottom]);
+
+  const handleMessagesContentSizeChange = React.useCallback(
+    (_width: number, height: number) => {
+      contentHeightRef.current = height;
+      if (pendingInitialScrollRef.current && height > 0) {
+        scheduleInitialScrollToEnd();
+      }
+    },
+    [scheduleInitialScrollToEnd]
+  );
+
+  const handleMessagesLayout = React.useCallback(() => {
+    if (pendingInitialScrollRef.current && contentHeightRef.current > 0) {
+      scheduleInitialScrollToEnd();
+    }
+  }, [scheduleInitialScrollToEnd]);
+
+  const handleUserScrollBeginDrag = React.useCallback(() => {
+    if (pendingInitialScrollRef.current) {
+      cancelInitialScroll();
+      setIsInitialScrollComplete(true);
+    }
+  }, [cancelInitialScroll]);
+
+  useEffect(() => () => {
+    clearInitialScrollTimers();
+  }, [clearInitialScrollTimers]);
 
   // iOS-style Horizontal Screen Slide Transition Controller
   useEffect(() => {
@@ -820,7 +870,7 @@ export default function CompanionChatModal({
 
     setIsTyping(true);
     setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
+      scrollToBottom(true);
     }, 80);
 
     const clientTime = new Date().toLocaleString('en-US', {
@@ -931,7 +981,7 @@ export default function CompanionChatModal({
     const showSub = Keyboard.addListener(showEvent, (e) => {
       setKeyboardHeight(e.endCoordinates.height);
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
+        scrollToBottom(true);
       }, 60);
     });
 
@@ -947,6 +997,8 @@ export default function CompanionChatModal({
 
   const loadHistory = React.useCallback(async () => {
     if (!persona?.id) return;
+    cancelInitialScroll();
+    contentHeightRef.current = 0;
     setIsLoadingHistory(true);
     setIsInitialScrollComplete(false);
     setHistoryLoadError(false);
@@ -969,6 +1021,9 @@ export default function CompanionChatModal({
         }));
         pendingInitialScrollRef.current = loaded.length > 0;
         setIsInitialScrollComplete(loaded.length === 0);
+        if (loaded.length > 0) {
+          setHistoryListKey((prev) => prev + 1);
+        }
         setMessages(loaded);
         setHasMoreHistory(Boolean(data.has_more));
         setHistoryLoadError(false);
@@ -984,7 +1039,7 @@ export default function CompanionChatModal({
       }
       setIsLoadingHistory(false);
     }
-  }, [persona?.id, user?.id, user?.token]);
+  }, [persona?.id, user?.id, user?.token, cancelInitialScroll]);
 
   // Fetch paginated chat history for this (user_id, persona_id) conversation
   useEffect(() => {
@@ -1115,7 +1170,7 @@ export default function CompanionChatModal({
     setIsTyping(true);
 
     setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
+      scrollToBottom(true);
     }, 80);
 
     const clientTime = new Date().toLocaleString('en-US', {
@@ -1206,7 +1261,7 @@ export default function CompanionChatModal({
     } finally {
       setIsTyping(false);
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
+        scrollToBottom(true);
       }, 100);
     }
   };
@@ -1363,16 +1418,19 @@ export default function CompanionChatModal({
 
         {/* Messages Flow */}
         <FlatList
+          key={`chat-list-${historyListKey}`}
           ref={flatListRef}
           data={messages}
           onContentSizeChange={handleMessagesContentSizeChange}
+          onLayout={handleMessagesLayout}
+          onScrollBeginDrag={handleUserScrollBeginDrag}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           extraData={lastUserMessageId}
           removeClippedSubviews={Platform.OS === 'android'}
           maxToRenderPerBatch={10}
           windowSize={11}
-          initialNumToRender={14}
+          initialNumToRender={30}
           updateCellsBatchingPeriod={40}
           contentContainerStyle={[
             styles.messagesList,
@@ -1385,7 +1443,14 @@ export default function CompanionChatModal({
               ? { minIndexForVisible: 0 }
               : undefined
           }
-          onScrollToIndexFailed={() => {}}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              flatListRef.current?.scrollToOffset({
+                offset: Math.max(0, info.averageItemLength * info.index),
+                animated: false,
+              });
+            }, 32);
+          }}
           ListHeaderComponent={
             hasMoreHistory ? (
               <TouchableOpacity
