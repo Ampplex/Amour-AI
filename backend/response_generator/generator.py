@@ -31,11 +31,10 @@ MIN_RECENT_HISTORY_TURNS = 4
 MAX_SINGLE_HISTORY_TURN_CHARS = 1500
 
 AUTONOMOUS_NEXT_BEAT_CUE = (
-    "[Follow-up beat: extend your previous response directly with your next thought, spoken line, or physical movement.]"
+    "[Output ONLY your brand-new next action and dialogue—never repeat, recap, or combine anything from your previous messages.]"
 )
 AUTONOMOUS_RETRY_BEAT_CUE = (
-    "[Follow-up beat: continue strictly inside your own perspective—deliver your next physical action, "
-    "sensory detail, or follow-up dialogue extending your previous response.]"
+    "[Output ONLY fresh new lines advancing the scene from here—never reuse, merge, or paraphrase anything from your earlier messages.]"
 )
 
 _AUTONOMOUS_LEAK_PATTERN = re.compile(
@@ -57,7 +56,40 @@ _LEGACY_META_USER_PREFIXES = (
     "[scene direction",
     "[next beat",
     "[follow-up beat",
+    "[output only your brand-new",
+    "[output only fresh new",
 )
+
+
+def _is_echoing_previous_reply(candidate: str, previous_assistant_turns: list[str]) -> bool:
+    """Detect if an autonomous reply combines or copies phrases from recent assistant messages."""
+    if not candidate or not previous_assistant_turns:
+        return False
+
+    cand_words = re.findall(r"[a-z0-9']+", candidate.lower())
+    if not cand_words:
+        return False
+    cand_joined = " ".join(cand_words)
+
+    ref_4grams: set[tuple[str, ...]] = set()
+    for prev in previous_assistant_turns:
+        prev_words = re.findall(r"[a-z0-9']+", prev.lower())
+        if len(prev_words) >= 4 and cand_joined == " ".join(prev_words):
+            return True
+        for sentence in re.split(r"[.!?\n]+", prev):
+            sent_words = re.findall(r"[a-z0-9']+", sentence.lower())
+            if len(sent_words) >= 5 and " ".join(sent_words) in cand_joined:
+                return True
+        for idx in range(len(prev_words) - 3):
+            ref_4grams.add(tuple(prev_words[idx : idx + 4]))
+
+    if len(cand_words) >= 7 and ref_4grams:
+        cand_4grams = [tuple(cand_words[idx : idx + 4]) for idx in range(len(cand_words) - 3)]
+        overlap_ratio = sum(1 for gram in cand_4grams if gram in ref_4grams) / len(cand_4grams)
+        if overlap_ratio >= 0.35:
+            return True
+
+    return False
 
 
 def _strip_silence_complaint_sentences(text: str) -> str:
@@ -342,6 +374,12 @@ def generate_companion_reply(
         # 1024 tokens (~2.5x observed average output) avoids over-reserving Groq TPM upfront
         target_max_tokens = 1024
 
+    recent_assistant_texts = [
+        turn["content"].strip()
+        for turn in (conversation_history or [])[-MAX_SHORT_TERM_HISTORY:]
+        if turn.get("role") == "assistant" and isinstance(turn.get("content"), str) and turn["content"].strip()
+    ][-3:]
+
     cues_to_try = [AUTONOMOUS_NEXT_BEAT_CUE, AUTONOMOUS_RETRY_BEAT_CUE] if is_autonomous else [None]
     reply = ""
     successful_model = None
@@ -354,12 +392,19 @@ def generate_companion_reply(
             is_autonomous=is_autonomous,
             autonomous_cue=cue or AUTONOMOUS_NEXT_BEAT_CUE,
         )
+        if is_autonomous:
+            freq_pen = 0.45 if attempt_idx == 0 else 0.6
+            pres_pen = 0.5 if attempt_idx == 0 else 0.6
+        else:
+            freq_pen = 0.2
+            pres_pen = 0.2
+
         raw_text, attempt_model = call_llm(
             messages=messages,
             max_tokens=target_max_tokens,
             temperature=0.88 if attempt_idx == 0 else 0.78,
-            frequency_penalty=0.2,
-            presence_penalty=0.2,
+            frequency_penalty=freq_pen,
+            presence_penalty=pres_pen,
         )
         if not raw_text:
             break
@@ -372,9 +417,17 @@ def generate_companion_reply(
         )
         reply = candidate_reply
         successful_model = attempt_model
-        if not is_autonomous or not _AUTONOMOUS_LEAK_PATTERN.search(candidate_reply):
+        if not is_autonomous:
             break
-        logger.info("Autonomous reply matched silence/waiting leak pattern; running clean retry.")
+        has_silence_leak = bool(_AUTONOMOUS_LEAK_PATTERN.search(candidate_reply))
+        has_echo_leak = _is_echoing_previous_reply(candidate_reply, recent_assistant_texts)
+        if not has_silence_leak and not has_echo_leak:
+            break
+        logger.info(
+            "Autonomous reply triggered retry guard (silence_leak=%s, echo_leak=%s).",
+            has_silence_leak,
+            has_echo_leak,
+        )
 
     if not reply:
         logger.error("Failed to generate companion reply from all configured models.")

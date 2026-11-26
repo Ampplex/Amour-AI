@@ -58,14 +58,14 @@ def _build_turn_focus_directive(story_tone: str, is_autonomous: bool) -> str:
     if is_autonomous:
         if clean_tone in ("casual", "comfort"):
             return (
-                "Active focus: Generate a seamless follow-up continuing directly from your previous response—"
-                "extend the current thought with a natural next line, a small physical gesture, or a related "
-                "detail in the same warm or casual mood."
+                "Active focus: Your earlier messages are already delivered—generate ONLY a brand-new "
+                "follow-up beat (a fresh thought, small physical gesture, or new spoken line) moving the "
+                "moment forward in the same warm or casual mood, without repeating or merging previous lines."
             )
         return (
-            "Active focus: Generate a seamless follow-up continuing directly from your previous response—"
-            "extend the scene with a fresh physical beat, a follow-up line of dialogue, or deeper "
-            "romantic or mature momentum."
+            "Active focus: Your earlier messages are already delivered—generate ONLY a brand-new "
+            "follow-up beat (a fresh physical action, new line of dialogue, or deeper romantic or "
+            "mature momentum) moving the scene forward, without repeating or merging previous lines."
         )
 
     if clean_tone == "casual":

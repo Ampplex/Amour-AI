@@ -123,7 +123,7 @@ class PromptBuilderTests(SimpleTestCase):
         for tone in ("default", "mature", "casual", "comfort"):
             prompt = self._build_sample(story_tone=tone, is_autonomous_continue=True).lower()
             turn_tail = prompt.split("--- this turn ---")[1]
-            self.assertIn("generate a seamless follow-up continuing directly from your previous response", turn_tail)
+            self.assertIn("already delivered—generate only a brand-new follow-up beat", turn_tail)
             for term in full_prompt_forbidden:
                 self.assertNotIn(term, prompt, f"Unexpected trigger {term!r} in autonomous prompt for tone={tone}")
             for term in turn_tail_forbidden:
@@ -359,7 +359,7 @@ class GeneratorAndClientTests(SimpleTestCase):
                 {"role": "assistant", "content": "*I lean on the counter.* First line.\n\nSecond line."},
                 {
                     "role": "user",
-                    "content": "[Follow-up beat: extend your previous response directly with your next thought, spoken line, or physical movement.]",
+                    "content": "[Output ONLY your brand-new next action and dialogue—never repeat, recap, or combine anything from your previous messages.]",
                 },
             ],
         )
@@ -422,6 +422,42 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertTrue(res["success"])
         mock_call.assert_called_once()
         self.assertEqual(res["reply"], "You're awfully quiet tonight.")
+
+    def test_autonomous_continue_retries_when_llm_combines_previous_two_messages(self):
+        history = [
+            {"role": "user", "content": "Hey."},
+            {"role": "assistant", "content": "*I pour espresso into two cups.* Here, drink this while it is hot."},
+            {"role": "assistant", "content": "*I lean against the balcony rail watching the rain outside.*"},
+        ]
+
+        with (
+            patch("response_generator.generator.retrieve_context_for_user", return_value=""),
+            patch(
+                "response_generator.generator.call_llm",
+                side_effect=[
+                    ("*I pour espresso into two cups.* Here, drink this while it is hot. *I lean against the balcony rail watching the rain outside.*", "qwen/qwen3.8-27b"),
+                    ("*I turn toward you and tuck a loose strand behind your ear.* Come inside before you catch a chill.", "qwen/qwen3.8-27b"),
+                ],
+            ) as mock_call,
+        ):
+            res = generate_companion_reply(
+                message="",
+                namespace="usr_1_persona_2",
+                persona_name="Elena",
+                user_name="Alex",
+                conversation_history=history,
+                is_autonomous_continue=True,
+                persist_exchange_to_memory=False,
+            )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(mock_call.call_count, 2)
+        self.assertEqual(mock_call.call_args_list[0].kwargs["presence_penalty"], 0.5)
+        self.assertEqual(mock_call.call_args_list[1].kwargs["presence_penalty"], 0.6)
+        self.assertEqual(
+            res["reply"],
+            "*I turn toward you and tuck a loose strand behind your ear.* Come inside before you catch a chill.",
+        )
 
     def test_parse_retry_after_seconds_handles_go_durations_without_ms_minute_bug(self):
         self.assertAlmostEqual(_parse_retry_after_seconds("968ms"), 0.968, places=3)
