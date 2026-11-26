@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { API_CONFIG } from '../constants/authConfig';
 import { getOrCreateUserKey } from './keyService';
@@ -72,6 +73,17 @@ export interface SendMessageResponse {
   active_variant_index?: number;
 }
 
+export const CHAT_HISTORY_PAGE_SIZE = 30;
+export const MAX_CACHED_MESSAGES_PER_CHAT = 30;
+export const MAX_CACHED_MESSAGE_THREADS = 25;
+
+const CHAT_MSGS_CACHE_PREFIX = '@amour_chat_msgs_v1_';
+const CHAT_MSGS_INDEX_PREFIX = '@amour_chat_msgs_index_v1_';
+const BASE_URL_PROBE_TTL_MS = 60000;
+
+const chatHistoryMemoryCache = new Map<string, ChatHistoryResponse>();
+let lastBaseUrlVerifiedAt = 0;
+
 const CANDIDATE_URLS = [
   API_CONFIG.baseUrl,
   'http://192.168.1.4:8000/api',
@@ -80,7 +92,153 @@ const CANDIDATE_URLS = [
 
 let activeBaseUrl = API_CONFIG.baseUrl || 'https://amour-ai-v3e4.onrender.com/api';
 
+function chatCacheKey(userId: string, personaId: string): string {
+  return `${userId.trim()}:${personaId.trim()}`;
+}
+
+function chatStorageKey(userId: string, personaId: string): string {
+  return `${CHAT_MSGS_CACHE_PREFIX}${userId.trim()}_${personaId.trim()}`;
+}
+
+function chatIndexKey(userId: string): string {
+  return `${CHAT_MSGS_INDEX_PREFIX}${userId.trim()}`;
+}
+
+async function touchThreadLruIndex(userId: string, personaId: string): Promise<void> {
+  const cleanUser = userId.trim();
+  const cleanPersona = personaId.trim();
+  const idxKey = chatIndexKey(cleanUser);
+  try {
+    const raw = await AsyncStorage.getItem(idxKey);
+    const parsed: string[] = raw ? JSON.parse(raw) : [];
+    const current = Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string' && id !== cleanPersona) : [];
+    const next = [cleanPersona, ...current];
+    const evicted = next.slice(MAX_CACHED_MESSAGE_THREADS);
+    const kept = next.slice(0, MAX_CACHED_MESSAGE_THREADS);
+
+    await AsyncStorage.setItem(idxKey, JSON.stringify(kept));
+    if (evicted.length > 0) {
+      for (const oldPid of evicted) {
+        chatHistoryMemoryCache.delete(chatCacheKey(cleanUser, oldPid));
+      }
+      await AsyncStorage.multiRemove(evicted.map((oldPid) => chatStorageKey(cleanUser, oldPid))).catch(() => {});
+    }
+  } catch {
+    // ignore index update errors
+  }
+}
+
+/**
+ * Synchronous memory-cache lookup for instant zero-spinner render when available.
+ */
+export function getMemoryCachedChatHistory(
+  personaId: string,
+  userId: string
+): ChatHistoryResponse | null {
+  if (!personaId || !userId) return null;
+  return chatHistoryMemoryCache.get(chatCacheKey(userId, personaId)) || null;
+}
+
+/**
+ * Returns the latest cached messages (up to MAX_CACHED_MESSAGES_PER_CHAT = 30)
+ * for a single (userId, personaId) chat thread.
+ */
+export async function getCachedChatHistory(
+  personaId: string,
+  userId: string
+): Promise<ChatHistoryResponse | null> {
+  if (!personaId || !userId) return null;
+  const memKey = chatCacheKey(userId, personaId);
+  const mem = chatHistoryMemoryCache.get(memKey);
+  if (mem) return mem;
+
+  try {
+    const raw = await AsyncStorage.getItem(chatStorageKey(userId, personaId));
+    if (raw) {
+      const parsed = JSON.parse(raw) as ChatHistoryResponse;
+      if (parsed && Array.isArray(parsed.results)) {
+        const capped: ChatHistoryResponse = {
+          ...parsed,
+          results: parsed.results.slice(-MAX_CACHED_MESSAGES_PER_CHAT),
+          page: 1,
+          page_size: MAX_CACHED_MESSAGES_PER_CHAT,
+        };
+        chatHistoryMemoryCache.set(memKey, capped);
+        return capped;
+      }
+    }
+  } catch {
+    // ignore cache read errors
+  }
+  return null;
+}
+
+/**
+ * Persists only the latest MAX_CACHED_MESSAGES_PER_CHAT (30) messages for this thread
+ * and enforces the LRU cap across threads in AsyncStorage.
+ */
+export async function saveCachedChatHistory(
+  personaId: string,
+  userId: string,
+  data: ChatHistoryResponse
+): Promise<void> {
+  if (!personaId || !userId || !Array.isArray(data?.results)) return;
+  const cappedResults = data.results.slice(-MAX_CACHED_MESSAGES_PER_CHAT);
+  const capped: ChatHistoryResponse = {
+    ...data,
+    results: cappedResults,
+    page: 1,
+    page_size: MAX_CACHED_MESSAGES_PER_CHAT,
+    has_more: Boolean(data.has_more || data.results.length > MAX_CACHED_MESSAGES_PER_CHAT),
+  };
+
+  chatHistoryMemoryCache.set(chatCacheKey(userId, personaId), capped);
+  try {
+    await AsyncStorage.setItem(chatStorageKey(userId, personaId), JSON.stringify(capped));
+    await touchThreadLruIndex(userId, personaId);
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+export async function clearChatHistoryCache(userId?: string): Promise<void> {
+  if (userId) {
+    const cleanUser = userId.trim();
+    for (const key of Array.from(chatHistoryMemoryCache.keys())) {
+      if (key.startsWith(`${cleanUser}:`)) {
+        chatHistoryMemoryCache.delete(key);
+      }
+    }
+    try {
+      const idxKey = chatIndexKey(cleanUser);
+      const raw = await AsyncStorage.getItem(idxKey);
+      const pids: string[] = raw ? JSON.parse(raw) : [];
+      const keysToRemove = [
+        idxKey,
+        ...(Array.isArray(pids) ? pids.map((pid) => chatStorageKey(cleanUser, pid)) : []),
+      ];
+      await AsyncStorage.multiRemove(keysToRemove);
+    } catch {}
+    return;
+  }
+
+  chatHistoryMemoryCache.clear();
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const chatKeys = allKeys.filter(
+      (k) => k.startsWith(CHAT_MSGS_CACHE_PREFIX) || k.startsWith(CHAT_MSGS_INDEX_PREFIX)
+    );
+    if (chatKeys.length > 0) {
+      await AsyncStorage.multiRemove(chatKeys);
+    }
+  } catch {}
+}
+
 async function resolveActiveBaseUrl(): Promise<string> {
+  if (Date.now() - lastBaseUrlVerifiedAt < BASE_URL_PROBE_TTL_MS) {
+    return activeBaseUrl;
+  }
+
   const probeController = new AbortController();
   const probeTimer = setTimeout(() => probeController.abort(), 1200);
   try {
@@ -89,7 +247,10 @@ async function resolveActiveBaseUrl(): Promise<string> {
       signal: probeController.signal,
     });
     clearTimeout(probeTimer);
-    if (probe.ok) return activeBaseUrl;
+    if (probe.ok) {
+      lastBaseUrlVerifiedAt = Date.now();
+      return activeBaseUrl;
+    }
   } catch {
     clearTimeout(probeTimer);
   }
@@ -106,6 +267,7 @@ async function resolveActiveBaseUrl(): Promise<string> {
       clearTimeout(t);
       if (probe.ok) {
         activeBaseUrl = candidate;
+        lastBaseUrlVerifiedAt = Date.now();
         return candidate;
       }
     } catch {
@@ -118,13 +280,13 @@ async function resolveActiveBaseUrl(): Promise<string> {
 
 /**
  * Fetch paginated chat history for a specific persona and user.
- * Direct single-endpoint GET with 12s timeout.
+ * Caches only Page 1 (latest 30 messages) locally; older pages always load from backend.
  */
 export async function fetchChatHistory(
   personaId: string,
   userId: string,
   page: number = 1,
-  pageSize: number = 30,
+  pageSize: number = CHAT_HISTORY_PAGE_SIZE,
   token?: string
 ): Promise<ChatHistoryResponse | null> {
   const query = `persona_id=${encodeURIComponent(personaId)}&user_id=${encodeURIComponent(userId)}&page=${page}&page_size=${pageSize}`;
@@ -148,9 +310,15 @@ export async function fetchChatHistory(
       console.warn(`[chatService] fetchChatHistory HTTP ${res.status}`);
       return null;
     }
-    return await res.json();
+    lastBaseUrlVerifiedAt = Date.now();
+    const json = (await res.json()) as ChatHistoryResponse;
+    if (page === 1 && json && Array.isArray(json.results)) {
+      await saveCachedChatHistory(personaId, userId, json);
+    }
+    return json;
   } catch (err: any) {
     clearTimeout(timer);
+    lastBaseUrlVerifiedAt = 0;
     console.warn('[chatService] fetchChatHistory error:', err?.message || err);
     return null;
   }
@@ -193,9 +361,11 @@ export async function sendChatMessage(
       console.warn(`[chatService] sendChatMessage HTTP ${res.status}`);
       return null;
     }
+    lastBaseUrlVerifiedAt = Date.now();
     return await res.json();
   } catch (err: any) {
     clearTimeout(timer);
+    lastBaseUrlVerifiedAt = 0;
     console.warn('[chatService] sendChatMessage error:', err?.message || err);
     return null;
   }
@@ -232,9 +402,11 @@ export async function deleteChatMessage(
       return { success: false, error: errData?.error || `HTTP ${res.status}` };
     }
 
+    lastBaseUrlVerifiedAt = Date.now();
     return await res.json();
   } catch (err: any) {
     clearTimeout(timer);
+    lastBaseUrlVerifiedAt = 0;
     return { success: false, error: err?.message || 'Network error' };
   }
 }
@@ -283,9 +455,11 @@ export async function switchChatMessageVariant(
       return { success: false, error: errData?.error || `HTTP ${res.status}` };
     }
 
+    lastBaseUrlVerifiedAt = Date.now();
     return await res.json();
   } catch (err: any) {
     clearTimeout(timer);
+    lastBaseUrlVerifiedAt = 0;
     return { success: false, error: err?.message || 'Network error' };
   }
 }
@@ -334,9 +508,11 @@ export async function editBotChatMessage(
       return { success: false, error: errData?.error || `HTTP ${res.status}` };
     }
 
+    lastBaseUrlVerifiedAt = Date.now();
     return await res.json();
   } catch (err: any) {
     clearTimeout(timer);
+    lastBaseUrlVerifiedAt = 0;
     return { success: false, error: err?.message || 'Network error' };
   }
 }

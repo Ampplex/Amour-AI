@@ -24,7 +24,18 @@ import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
 import { PersonaItem, getPersonaCustomization } from '../services/personaService';
-import { fetchChatHistory, sendChatMessage, deleteChatMessage, switchChatMessageVariant, editBotChatMessage } from '../services/chatService';
+import {
+  ChatHistoryItem,
+  CHAT_HISTORY_PAGE_SIZE,
+  fetchChatHistory,
+  getMemoryCachedChatHistory,
+  getCachedChatHistory,
+  saveCachedChatHistory,
+  sendChatMessage,
+  deleteChatMessage,
+  switchChatMessageVariant,
+  editBotChatMessage,
+} from '../services/chatService';
 import { useAuth } from '../context/AuthContext';
 import { showAlert } from '../context/AlertContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -292,9 +303,67 @@ interface ChatMessage {
   sender: 'user' | 'bot';
   text: string;
   timestamp: string;
+  createdAtIso?: string;
   isFailed?: boolean;
   variants?: string[];
   activeVariantIndex?: number;
+}
+
+function mapHistoryItemsToMessages(items: ChatHistoryItem[]): ChatMessage[] {
+  return items.map((item) => ({
+    id: item.id,
+    sender: item.sender,
+    text: item.text,
+    timestamp: item.created_at
+      ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    createdAtIso: item.created_at || undefined,
+    isFailed: false,
+    variants:
+      item.variants ||
+      (item.response_metadata?.variants && item.response_metadata.variants.length > 1
+        ? item.response_metadata.variants
+        : undefined),
+    activeVariantIndex:
+      item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
+  }));
+}
+
+function mapMessagesToHistoryItems(
+  items: ChatMessage[],
+  personaId: string,
+  userId: string
+): ChatHistoryItem[] {
+  return items
+    .filter((m) => !m.isFailed)
+    .slice(-CHAT_HISTORY_PAGE_SIZE)
+    .map((m) => ({
+      id: m.id,
+      user_id: userId,
+      persona_id: personaId,
+      namespace: '',
+      sender: m.sender,
+      text: m.text,
+      variants: m.variants,
+      active_variant_index: m.activeVariantIndex,
+      created_at: m.createdAtIso || new Date().toISOString(),
+    }));
+}
+
+function areMessageSnapshotsEqual(a: ChatMessage[], b: ChatMessage[]): boolean {
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].text !== b[i].text ||
+      a[i].activeVariantIndex !== b[i].activeVariantIndex ||
+      (a[i].variants?.length ?? 0) !== (b[i].variants?.length ?? 0)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 interface ChatMessageBubbleProps {
@@ -521,6 +590,7 @@ export default function CompanionChatModal({
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
+  const [isCheckingLocalCache, setIsCheckingLocalCache] = useState<boolean>(false);
   const [historyLoadError, setHistoryLoadError] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
@@ -538,6 +608,10 @@ export default function CompanionChatModal({
   const initialScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialScrollSafetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentHeightRef = useRef<number>(0);
+  const resolvedUserIdRef = useRef<string | null>(null);
+  const activeSessionTokenRef = useRef<number>(0);
+  const hasLoadedEarlierRef = useRef<boolean>(false);
+  const cacheSyncReadyRef = useRef<boolean>(false);
   const chatInputRef = useRef<any>(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
 
@@ -997,54 +1071,133 @@ export default function CompanionChatModal({
 
   const loadHistory = React.useCallback(async () => {
     if (!persona?.id) return;
+    const sessionToken = ++activeSessionTokenRef.current;
+    hasLoadedEarlierRef.current = false;
+    cacheSyncReadyRef.current = false;
     cancelInitialScroll();
     contentHeightRef.current = 0;
-    setIsLoadingHistory(true);
-    setIsInitialScrollComplete(false);
     setHistoryLoadError(false);
+
+    let hydratedMessages: ChatMessage[] | null = null;
+    const syncUserId = user?.id || resolvedUserIdRef.current;
+    const memCached = syncUserId ? getMemoryCachedChatHistory(persona.id, syncUserId) : null;
+
+    if (memCached && Array.isArray(memCached.results) && memCached.results.length > 0) {
+      resolvedUserIdRef.current = syncUserId;
+      hydratedMessages = mapHistoryItemsToMessages(memCached.results);
+      pendingInitialScrollRef.current = true;
+      setIsInitialScrollComplete(false);
+      setHistoryListKey((prev) => prev + 1);
+      setMessages(hydratedMessages);
+      setHasMoreHistory(Boolean(memCached.has_more));
+      setIsCheckingLocalCache(false);
+      setIsLoadingHistory(false);
+      cacheSyncReadyRef.current = true;
+    } else {
+      // Hold empty view silently during fast local cache check so cached chats never flash a loader
+      setMessages([]);
+      setHasMoreHistory(false);
+      setIsLoadingHistory(false);
+      setIsCheckingLocalCache(true);
+    }
+
     try {
       const uId = await resolveConversationUserId(user?.id);
+      if (activeSessionTokenRef.current !== sessionToken) return;
+      resolvedUserIdRef.current = uId;
 
-      const data = await fetchChatHistory(persona.id, uId, 1, 30, user?.token);
+      // 1. Hydrate instantly from capped local cache (latest 30 messages) if not already in memory
+      if (!hydratedMessages) {
+        const cached = await getCachedChatHistory(persona.id, uId);
+        if (activeSessionTokenRef.current !== sessionToken) return;
+        setIsCheckingLocalCache(false);
+        if (cached && Array.isArray(cached.results) && cached.results.length > 0) {
+          hydratedMessages = mapHistoryItemsToMessages(cached.results);
+          pendingInitialScrollRef.current = true;
+          setIsInitialScrollComplete(false);
+          setHistoryListKey((prev) => prev + 1);
+          setMessages(hydratedMessages);
+          setHasMoreHistory(Boolean(cached.has_more));
+          setHistoryLoadError(false);
+          setIsLoadingHistory(false);
+          cacheSyncReadyRef.current = true;
+        } else {
+          // Only show restoring spinner when there is no locally cached history
+          setIsInitialScrollComplete(false);
+          setIsLoadingHistory(true);
+        }
+      }
+
+      // 2. Fetch fresh Page 1 from backend API and reconcile silently
+      const data = await fetchChatHistory(persona.id, uId, 1, CHAT_HISTORY_PAGE_SIZE, user?.token);
+      if (activeSessionTokenRef.current !== sessionToken) return;
 
       if (data && Array.isArray(data.results)) {
-        const loaded: ChatMessage[] = data.results.map((item) => ({
-          id: item.id,
-          sender: item.sender,
-          text: item.text,
-          timestamp: item.created_at
-            ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          isFailed: false,
-          variants: item.variants || (item.response_metadata?.variants && item.response_metadata.variants.length > 1 ? item.response_metadata.variants : undefined),
-          activeVariantIndex: item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
-        }));
-        pendingInitialScrollRef.current = loaded.length > 0;
-        setIsInitialScrollComplete(loaded.length === 0);
-        if (loaded.length > 0) {
-          setHistoryListKey((prev) => prev + 1);
+        const loaded = mapHistoryItemsToMessages(data.results);
+        if (hydratedMessages && hasLoadedEarlierRef.current) {
+          // User already loaded older pages while background refresh ran; keep extended list intact
+          return;
         }
-        setMessages(loaded);
+
+        if (!hydratedMessages || !areMessageSnapshotsEqual(hydratedMessages, loaded)) {
+          pendingInitialScrollRef.current = loaded.length > 0;
+          setIsInitialScrollComplete(loaded.length === 0);
+          if (loaded.length > 0 && !hydratedMessages) {
+            setHistoryListKey((prev) => prev + 1);
+          }
+          setMessages(loaded);
+          if (loaded.length > 0 && hydratedMessages) {
+            requestAnimationFrame(() => scrollToBottom(false));
+          }
+        }
         setHasMoreHistory(Boolean(data.has_more));
         setHistoryLoadError(false);
-      } else {
+        cacheSyncReadyRef.current = true;
+      } else if (!hydratedMessages) {
         setHistoryLoadError(true);
       }
     } catch (err) {
       console.warn('[CompanionChat] History read error:', err);
-      setHistoryLoadError(true);
-    } finally {
-      if (!pendingInitialScrollRef.current) {
-        setIsInitialScrollComplete(true);
+      if (!hydratedMessages) {
+        setHistoryLoadError(true);
       }
-      setIsLoadingHistory(false);
+    } finally {
+      if (activeSessionTokenRef.current === sessionToken) {
+        if (!pendingInitialScrollRef.current) {
+          setIsInitialScrollComplete(true);
+        }
+        setIsCheckingLocalCache(false);
+        setIsLoadingHistory(false);
+      }
     }
-  }, [persona?.id, user?.id, user?.token, cancelInitialScroll]);
+  }, [persona?.id, user?.id, user?.token, cancelInitialScroll, scrollToBottom]);
+
+  // Keep local capped message cache (latest 30 messages) synced after sends/edits/deletes
+  useEffect(() => {
+    if (!visible || !persona?.id || !cacheSyncReadyRef.current || isLoadingHistory) {
+      return;
+    }
+    const uId = resolvedUserIdRef.current;
+    if (!uId) return;
+    const latestSlice = mapMessagesToHistoryItems(messages, persona.id, uId);
+    saveCachedChatHistory(persona.id, uId, {
+      results: latestSlice,
+      count: latestSlice.length,
+      page: 1,
+      page_size: CHAT_HISTORY_PAGE_SIZE,
+      has_more: hasMoreHistory || messages.length > CHAT_HISTORY_PAGE_SIZE,
+    }).catch(() => {});
+  }, [messages, hasMoreHistory, visible, persona?.id, isLoadingHistory]);
 
   // Fetch paginated chat history for this (user_id, persona_id) conversation
   useEffect(() => {
     if (!visible || !persona) {
+      activeSessionTokenRef.current += 1;
+      cacheSyncReadyRef.current = false;
+      hasLoadedEarlierRef.current = false;
       cancelInitialScroll();
+      setIsCheckingLocalCache(false);
+      setIsLoadingHistory(false);
       setMessages([]);
       setEditingMessageId(null);
       setActionMenuMessage(null);
@@ -1057,12 +1210,9 @@ export default function CompanionChatModal({
         setActivePersona((prev) => (prev ? { ...prev, ...custom } : persona));
       }
     });
-    cancelInitialScroll();
-    setMessages([]);
     setEditingMessageId(null);
     setActionMenuMessage(null);
     setHistoryPage(1);
-    setHasMoreHistory(false);
     loadHistory();
   }, [visible, persona, loadHistory, cancelInitialScroll]);
 
@@ -1072,21 +1222,16 @@ export default function CompanionChatModal({
     const nextPage = historyPage + 1;
     try {
       const uId = await resolveConversationUserId(user?.id);
-      const data = await fetchChatHistory(activePersona.id, uId, nextPage, 30, user?.token);
+      const data = await fetchChatHistory(activePersona.id, uId, nextPage, CHAT_HISTORY_PAGE_SIZE, user?.token);
       if (data?.results && Array.isArray(data.results) && data.results.length > 0) {
-        const older: ChatMessage[] = data.results.map((item) => ({
-          id: item.id,
-          sender: item.sender,
-          text: item.text,
-          timestamp: item.created_at
-            ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          isFailed: false,
-          variants: item.variants || (item.response_metadata?.variants && item.response_metadata.variants.length > 1 ? item.response_metadata.variants : undefined),
-          activeVariantIndex: item.active_variant_index ?? item.response_metadata?.active_variant_index ?? undefined,
-        }));
+        const older = mapHistoryItemsToMessages(data.results);
         const olderCount = older.length;
-        setMessages((prev) => [...older, ...prev]);
+        hasLoadedEarlierRef.current = true;
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const uniqueOlder = older.filter((m) => !existingIds.has(m.id));
+          return [...uniqueOlder, ...prev];
+        });
         setHistoryPage(nextPage);
         setHasMoreHistory(Boolean(data.has_more));
         setTimeout(() => {
@@ -1468,7 +1613,7 @@ export default function CompanionChatModal({
             ) : undefined
           }
           ListEmptyComponent={
-            isLoadingHistory ? (
+            isCheckingLocalCache ? undefined : isLoadingHistory ? (
               <View style={styles.emptyContainer}>
                 <ActivityIndicator size="small" color={borderColor} />
                 <Text style={[styles.emptyHintText, { marginTop: 12 }]}>Restoring conversation...</Text>

@@ -8,6 +8,7 @@ import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-si
 import { GOOGLE_CONFIG, API_CONFIG } from '../constants/authConfig';
 import { clearFeedMemoryCache } from '../services/feedService';
 import { clearConversationCache } from '../services/conversationService';
+import { clearChatHistoryCache } from '../services/chatService';
 import { setReplyLengthPreference } from '../services/settingsService';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -825,6 +826,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {}
     clearFeedMemoryCache();
     clearConversationCache().catch(() => {});
+    clearChatHistoryCache().catch(() => {});
     setUser(null);
     setError(null);
     setPendingGoogleSession(false);
