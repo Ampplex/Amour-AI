@@ -23,7 +23,7 @@ from .sanitizer import sanitize_companion_reply
 logger = logging.getLogger("amour.response_generator")
 
 MIN_NAME_COOLDOWN_TURNS = 4
-MAX_SHORT_TERM_HISTORY = 10
+MAX_SHORT_TERM_HISTORY = 16
 
 NAME_INTENT_PATTERN = re.compile(
     r"\b("
@@ -100,6 +100,7 @@ def generate_companion_reply(
     persist_exchange_to_memory: bool = True,
     reply_length: str = "default",
     is_autonomous_continue: bool = False,
+    story_tone: str = "mature",
 ) -> dict:
     """
     Single-prompt AI persona response generation.
@@ -135,6 +136,10 @@ def generate_companion_reply(
         memory_context = re.sub(r"\bReeve\b", "memory", memory_context, flags=re.IGNORECASE)
 
     # 2. Build the single comprehensive roleplay system prompt
+    clean_tone = (story_tone or "default").strip().lower()
+    if clean_tone not in {"default", "casual", "comfort", "mature"}:
+        clean_tone = "default"
+
     system_prompt = build_roleplay_system_prompt(
         persona_name=persona_name,
         persona_age=persona_age,
@@ -150,6 +155,7 @@ def generate_companion_reply(
         allow_user_name=allow_name,
         reply_length=reply_length,
         is_autonomous_continue=is_autonomous_continue,
+        story_tone=clean_tone,
     )
 
     # 3. Assemble messages: system prompt + recent short-term history + current message
@@ -162,10 +168,10 @@ def generate_companion_reply(
             messages.append({"role": role, "content": content.strip()})
 
     if is_autonomous_continue or not (message and message.strip()):
-        # Universal chat API compliance: end on user turn depicting observation / silence
+        # Director's cue instead of an in-scene silence action
         messages.append({
             "role": "user",
-            "content": "*remains silent, letting you continue and take the lead*",
+            "content": "[Continue the scene directly from your last message—advance the story, action, tension, or dialogue without mentioning silence.]",
         })
     else:
         messages.append({"role": "user", "content": message.strip()})
@@ -186,8 +192,8 @@ def generate_companion_reply(
         messages=messages,
         max_tokens=target_max_tokens,
         temperature=0.88,
-        frequency_penalty=0.5,
-        presence_penalty=0.5,
+        frequency_penalty=0.2,
+        presence_penalty=0.2,
     )
 
     if not raw_text:
@@ -209,8 +215,14 @@ def generate_companion_reply(
     # 6. Optionally persist exchange to Reeve
     if reply and persist_exchange_to_memory:
         try:
+            clean_msg = (message or "").strip()
+            exchange_text = (
+                f"User: {clean_msg}\nAssistant: {reply}"
+                if clean_msg and not is_autonomous_continue
+                else f"Assistant (continued): {reply}"
+            )
             store_memory_for_user(
-                f"User: {message.strip()}\nAssistant: {reply}",
+                exchange_text,
                 namespace,
                 user_key=user_key,
             )
@@ -221,6 +233,7 @@ def generate_companion_reply(
         "success": True,
         "reply": reply,
         "conflict_stage": current_conflict_stage,
+        "story_tone": clean_tone,
         "context": memory_context,
         "namespace": namespace,
         "model": successful_model,

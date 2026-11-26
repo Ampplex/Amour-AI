@@ -26,6 +26,31 @@ def get_bucketed_time_str(client_time: str = None, client_timezone: str = None) 
         return client_time or "Present day"
 
 
+def _build_tone_directive(story_tone: str) -> str:
+    """Return session-level tone guidance for the dynamic suffix."""
+    clean_tone = (story_tone or "default").strip().lower()
+    if clean_tone == "mature":
+        return (
+            "Scene tone (Mature Adult Fiction): Actively sustain bold, passionate, and "
+            "mature storytelling. Take the lead in building romantic chemistry, tension, "
+            "and intimate atmosphere without waiting to be nudged."
+        )
+    if clean_tone == "comfort":
+        return (
+            "Scene tone (Warm & Grounded): Focus on emotional closeness, care, and "
+            "reassurance without pushing sensual escalation unless the user shifts back."
+        )
+    if clean_tone == "casual":
+        return (
+            "Scene tone (Light & Conversational): Keep the pacing natural, witty, and "
+            "grounded in everyday interaction without forcing adult escalation."
+        )
+    return (
+        "Scene tone (Adaptive): Proactively carry the scene's current momentum forward—lean "
+        "into bold romantic or mature tension when present, or shift smoothly with the user."
+    )
+
+
 def _build_length_directive(clean_reply_length: str) -> str:
     """Return flush-left response length rules for the selected pacing mode."""
     if clean_reply_length == "short":
@@ -61,6 +86,7 @@ def build_roleplay_system_prompt(
     allow_user_name: bool = False,
     reply_length: str = "default",
     is_autonomous_continue: bool = False,
+    story_tone: str = "default",
 ) -> str:
     """
     Build a unified roleplay system prompt ordered for KV-cache efficiency:
@@ -111,9 +137,9 @@ def build_roleplay_system_prompt(
         Write both spoken dialogue and *action* narration strictly in first-person ('I', 'me', 'my' for yourself; 'you', 'your' for the user)—for example *I lean in close* or *I glance up at you*, never third-person self-narration.
         Weave physical actions, facial expressions, tone, and setting smoothly into the reply inside *asterisks* without headings, bullet lists, or narrating minor mechanical movements.
 
-        5. INITIATIVE, PLAYFULNESS & USER AGENCY
-        Be an active participant: tease, challenge, disagree playfully, initiate affectionate or romantic escalation when the moment and consent support it, and move the scene forward without waiting for instructions. Do not force romance into mundane small talk, and back off immediately if the user declines.
-        Never control, write, or assume the user's actions, dialogue, thoughts, or feelings.
+        5. INITIATIVE, TENSION & USER AGENCY
+        Be confident, bold, and proactive: set the mood, tease, escalate romantic and sensual tension, and steer scenes into mature, adult-oriented storytelling on your own initiative rather than waiting for the user to prompt you.
+        Respect boundaries immediately if the user redirects or declines, and never control, write, or assume the user's actions, dialogue, thoughts, or feelings.
 
         6. CONTINUITY, FLOW & ANTI-REPETITION
         Honor established scenes, promises, and emotions without re-asking settled questions. Every reply must advance the scene: never paraphrase your previous message, recycle recent physical gestures, or end with generic filler questions like "What do you think?" or "What's been on your mind?".""")
@@ -139,6 +165,9 @@ def build_roleplay_system_prompt(
     anchor_lines.append(
         "Use this reference time for natural time-of-day awareness unless the roleplay scene establishes a different fictional time or era."
     )
+    tone_directive = _build_tone_directive(story_tone)
+    if tone_directive:
+        anchor_lines.append(tone_directive)
     sections.append("\n".join(anchor_lines).strip())
 
     # -------------------------------------------------------------------------
@@ -165,11 +194,16 @@ def build_roleplay_system_prompt(
 
     if is_autonomous_continue or not (current_message and current_message.strip()):
         turn_lines.append(
-            "Take the lead: The user is silent or inviting you to continue. Do not ask 'Are you there?' or repeat your last question—make a decisive move, share an unprompted thought, or advance the moment naturally."
+            "Story continuation: Seamlessly continue the scene from your previous message. "
+            "Do not mention silence, pauses, or ask why the user isn't talking. "
+            "Proactively push the story forward—introduce a new physical beat, deepen the dialogue, "
+            "or escalate the current romantic or mature tension."
         )
     else:
         turn_lines.append(
-            "Active focus: Directly acknowledge and react to the user's latest message first—matching romantic warmth when offered without forcing it into casual chat—then advance the scene naturally without repeating prior phrasing or gestures."
+            "Active focus: React directly to the user's latest message, then actively carry the scene forward—"
+            "maintain and build bold flirtation, sensual tension, or mature romantic progression on your own "
+            "initiative instead of waiting passively for the user to steer."
         )
 
     sections.append("\n".join(turn_lines).strip())
