@@ -2,8 +2,15 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory, SimpleTestCase, override_settings
 
-from response_generator.generator import generate_companion_reply
-from response_generator.llm_client import call_llm
+from memory.reeve_service import _configure_reeve_llm
+from response_generator.generator import _cap_memory_context, generate_companion_reply
+from response_generator.llm_client import (
+    _RATE_LIMIT_COOLDOWNS,
+    _parse_retry_after_seconds,
+    call_llm,
+    get_model_rate_limit_cooldown,
+    record_model_rate_limit,
+)
 from response_generator.observability import extract_rate_limit_headers, extract_token_usage
 from response_generator.prompt_builder import build_roleplay_system_prompt
 from response_generator.tone_tracker import _extract_tone_label, classify_tone_with_bedrock
@@ -216,8 +223,8 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertTrue(res["success"])
         mock_call.assert_called_once()
         kwargs = mock_call.call_args.kwargs
-        self.assertEqual(kwargs["frequency_penalty"], 0.5)
-        self.assertEqual(kwargs["presence_penalty"], 0.5)
+        self.assertEqual(kwargs["frequency_penalty"], 0.2)
+        self.assertEqual(kwargs["presence_penalty"], 0.2)
         sent_messages = kwargs["messages"]
         # 1 system + last 10 history + 1 current user message
         self.assertEqual(len(sent_messages), 12)
@@ -398,3 +405,148 @@ class GeneratorAndClientTests(SimpleTestCase):
         self.assertTrue(res["success"])
         mock_call.assert_called_once()
         self.assertEqual(res["reply"], "You're awfully quiet tonight.")
+
+    def test_parse_retry_after_seconds_handles_go_durations_without_ms_minute_bug(self):
+        self.assertAlmostEqual(_parse_retry_after_seconds("968ms"), 0.968, places=3)
+        self.assertAlmostEqual(_parse_retry_after_seconds("42.265s"), 42.265, places=3)
+        self.assertAlmostEqual(_parse_retry_after_seconds("1m30s"), 90.0, places=3)
+        self.assertAlmostEqual(_parse_retry_after_seconds("5m45.6s"), 345.6, places=3)
+        self.assertAlmostEqual(_parse_retry_after_seconds("12"), 12.0, places=3)
+        self.assertIsNone(_parse_retry_after_seconds("invalid"))
+        self.assertIsNone(_parse_retry_after_seconds(""))
+
+    def test_record_model_rate_limit_prefers_token_reset_when_requests_remain(self):
+        _RATE_LIMIT_COOLDOWNS.clear()
+        cd = record_model_rate_limit(
+            "https://groq.test/openai/v1",
+            "qwen/qwen3.8-27b:key1",
+            {
+                "x-ratelimit-remaining-requests": "996",
+                "x-ratelimit-reset-requests": "5m45.6s",
+                "x-ratelimit-remaining-tokens": "200",
+                "x-ratelimit-reset-tokens": "968ms",
+            },
+        )
+        self.assertAlmostEqual(cd, 0.968, places=3)
+        self.assertGreater(get_model_rate_limit_cooldown("https://groq.test/openai/v1", "qwen/qwen3.8-27b:key1"), 0.0)
+        _RATE_LIMIT_COOLDOWNS.clear()
+
+    def test_call_llm_rotates_keys_and_retries_brief_rate_limit_once(self):
+        _RATE_LIMIT_COOLDOWNS.clear()
+        rate_limited_resp = MagicMock()
+        rate_limited_resp.status_code = 429
+        rate_limited_resp.headers = {
+            "x-ratelimit-remaining-requests": "999",
+            "x-ratelimit-reset-requests": "5m",
+            "x-ratelimit-remaining-tokens": "0",
+            "x-ratelimit-reset-tokens": "968ms",
+        }
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.headers = {}
+        ok_resp.json.return_value = {"choices": [{"message": {"content": "Fresh reply."}}], "usage": {"prompt_tokens": 100, "completion_tokens": 12}}
+
+        with (
+            patch("response_generator.llm_client.get_llm_configuration", return_value=("k1", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key-first-11111111", "key-second-22222222"]),
+            patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
+            patch("response_generator.llm_client.requests.post", side_effect=[rate_limited_resp, rate_limited_resp, ok_resp]) as mock_post,
+            patch("response_generator.llm_client.record_llm_request"),
+            patch("response_generator.llm_client.time.sleep") as mock_sleep,
+        ):
+            text, model = call_llm(messages=[{"role": "user", "content": "Hi"}])
+
+        self.assertEqual((text, model), ("Fresh reply.", "qwen/qwen3.8-27b"))
+        mock_sleep.assert_called_once()
+        self.assertLessEqual(mock_sleep.call_args.args[0], 2.55)
+        self.assertEqual(mock_post.call_count, 3)
+
+        # Next call should skip keys already in cooldown before triggering any sleep retry
+        _RATE_LIMIT_COOLDOWNS.clear()
+        record_model_rate_limit("https://groq.test/openai/v1", "qwen/qwen3.8-27b:11111111", {"retry-after": "30"})
+        with (
+            patch("response_generator.llm_client.get_llm_configuration", return_value=("k1", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key-alpha-11111111", "key-beta-22222222"]),
+            patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
+            patch("response_generator.llm_client.requests.post", return_value=ok_resp) as mock_skip_post,
+            patch("response_generator.llm_client.record_llm_request"),
+            patch("response_generator.llm_client.time.sleep") as mock_no_sleep,
+        ):
+            text_skip, _ = call_llm(messages=[{"role": "user", "content": "Skip"}])
+        self.assertEqual(text_skip, "Fresh reply.")
+        mock_no_sleep.assert_not_called()
+        mock_skip_post.assert_called_once()
+        self.assertEqual(mock_skip_post.call_args.kwargs["headers"]["Authorization"], "Bearer key-beta-22222222")
+
+        # Successive clean calls should start on different keys via round-robin
+        _RATE_LIMIT_COOLDOWNS.clear()
+        with (
+            patch("response_generator.llm_client.get_llm_configuration", return_value=("k1", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key-alpha-11111111", "key-beta-22222222"]),
+            patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
+            patch("response_generator.llm_client.requests.post", return_value=ok_resp) as mock_post_1,
+            patch("response_generator.llm_client.record_llm_request"),
+        ):
+            call_llm(messages=[{"role": "user", "content": "One"}])
+        with (
+            patch("response_generator.llm_client.get_llm_configuration", return_value=("k1", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key-alpha-11111111", "key-beta-22222222"]),
+            patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
+            patch("response_generator.llm_client.requests.post", return_value=ok_resp) as mock_post_2,
+            patch("response_generator.llm_client.record_llm_request"),
+        ):
+            call_llm(messages=[{"role": "user", "content": "Two"}])
+
+        auth_1 = mock_post_1.call_args.kwargs["headers"]["Authorization"]
+        auth_2 = mock_post_2.call_args.kwargs["headers"]["Authorization"]
+        self.assertNotEqual(auth_1, auth_2)
+        _RATE_LIMIT_COOLDOWNS.clear()
+
+    def test_cap_memory_context_and_history_token_budget_and_max_tokens(self):
+        # Oversized first block should be clipped cleanly rather than returning empty string
+        giant_first_block = "Memory word " * 300
+        clipped_first = _cap_memory_context(giant_first_block, max_chars=2000)
+        self.assertTrue(clipped_first)
+        self.assertLessEqual(len(clipped_first), 2000)
+
+        multi_block = ("Fact A " * 120) + "\n\n" + ("Fact B " * 120) + "\n\n" + ("Fact C " * 250)
+        capped_multi = _cap_memory_context(multi_block, max_chars=2000)
+        self.assertIn("Fact A", capped_multi)
+        self.assertLessEqual(len(capped_multi), 2000)
+
+        long_history = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"Msg{i} " + ("x" * 1600)}
+            for i in range(10)
+        ]
+
+        for length_mode, expected_max in [("short", 512), ("default", 1024), ("long", 1536)]:
+            with (
+                patch("response_generator.generator.retrieve_context_for_user", return_value=giant_first_block),
+                patch("response_generator.generator.call_llm", return_value=("*I nod.* Okay.", "qwen/qwen3.8-27b")) as mock_call,
+            ):
+                res = generate_companion_reply(
+                    message="Hey",
+                    namespace="usr_1_persona_2",
+                    persona_name="Elena",
+                    user_name="Alex",
+                    conversation_history=long_history,
+                    reply_length=length_mode,
+                    persist_exchange_to_memory=False,
+                )
+
+            self.assertTrue(res["success"])
+            self.assertLessEqual(len(res["context"]), 2000)
+            kwargs = mock_call.call_args.kwargs
+            self.assertEqual(kwargs["max_tokens"], expected_max)
+            sent_history = kwargs["messages"][1:-1]
+            self.assertGreaterEqual(len(sent_history), 4)
+            self.assertLessEqual(sum(len(m["content"]) for m in sent_history), 6500)
+
+    def test_reeve_service_defaults_extraction_to_bedrock_small_model(self):
+        with patch.dict("os.environ", {"AWS_ACCESS_KEY_ID": "test-id", "AWS_SECRET_ACCESS_KEY": "test-secret", "BEDROCK_SMALL_MODEL_ID": "meta.llama3-1-8b-instruct-v1:0"}, clear=False):
+            _configure_reeve_llm(initialize_client=True)
+            import threelane_memory.config as tmc
+            import threelane_memory.llm_interface as tml
+            self.assertEqual(tmc.LLM_PROVIDER, "bedrock")
+            self.assertEqual(tmc.BEDROCK_MODEL_ID, "meta.llama3-1-8b-instruct-v1:0")
+            self.assertEqual(getattr(tml.client, "model_id", ""), "meta.llama3-1-8b-instruct-v1:0")

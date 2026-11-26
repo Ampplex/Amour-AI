@@ -24,7 +24,11 @@ from .tone_tracker import classify_tone_with_bedrock
 logger = logging.getLogger("amour.response_generator")
 
 MIN_NAME_COOLDOWN_TURNS = 4
-MAX_SHORT_TERM_HISTORY = 16
+MAX_SHORT_TERM_HISTORY = 10
+MAX_MEMORY_CONTEXT_CHARS = 2000
+MAX_HISTORY_CHARS = 6500
+MIN_RECENT_HISTORY_TURNS = 4
+MAX_SINGLE_HISTORY_TURN_CHARS = 1500
 
 AUTONOMOUS_NEXT_BEAT_CUE = (
     "[Next beat: keep going immediately from your last line with your next thought, line, or movement.]"
@@ -72,6 +76,71 @@ def _strip_silence_complaint_sentences(text: str) -> str:
     return "\n\n".join(kept_paragraphs)
 
 
+def _cap_memory_context(context: str, max_chars: int = MAX_MEMORY_CONTEXT_CHARS) -> str:
+    """Cap retrieved memory context cleanly by paragraph block, clamping an oversized first block."""
+    clean = (context or "").strip()
+    if not clean or len(clean) <= max_chars:
+        return clean
+
+    blocks = [b.strip() for b in clean.split("\n\n") if b.strip()]
+    if not blocks:
+        return clean[:max_chars].rstrip()
+
+    kept = []
+    total_len = 0
+    for block in blocks:
+        separator_len = 2 if kept else 0
+        if total_len + separator_len + len(block) <= max_chars:
+            kept.append(block)
+            total_len += separator_len + len(block)
+            continue
+
+        if not kept:
+            # Slice oversized first block at a clean boundary so top-priority memory isn't wiped out
+            clipped = block[:max_chars]
+            last_space = clipped.rfind(" ")
+            if last_space > int(max_chars * 0.6):
+                clipped = clipped[:last_space]
+            kept.append(clipped.rstrip())
+        break
+
+    return "\n\n".join(kept)
+
+
+def _trim_history_turns_to_budget(
+    turns: list[tuple[str, str]],
+    max_chars: int = MAX_HISTORY_CHARS,
+    min_turns: int = MIN_RECENT_HISTORY_TURNS,
+    max_single_turn_chars: int = MAX_SINGLE_HISTORY_TURN_CHARS,
+) -> list[tuple[str, str]]:
+    """Keep the newest turns within char budget while preserving at least `min_turns` recent turns."""
+    if not turns:
+        return []
+
+    total_all = sum(len(c) for _, c in turns)
+    if total_all <= max_chars:
+        return turns
+
+    selected_rev: list[tuple[str, str]] = []
+    used_chars = 0
+    for role, content in reversed(turns):
+        adjusted = content
+        if len(selected_rev) < min_turns:
+            if used_chars + len(adjusted) > max_chars and len(adjusted) > max_single_turn_chars:
+                adjusted = adjusted[-max_single_turn_chars:].lstrip()
+            selected_rev.append((role, adjusted))
+            used_chars += len(adjusted)
+            continue
+
+        if used_chars + len(adjusted) > max_chars:
+            break
+        selected_rev.append((role, adjusted))
+        used_chars += len(adjusted)
+
+    selected_rev.reverse()
+    return selected_rev
+
+
 def _build_conversation_messages(
     system_prompt: str,
     conversation_history: list,
@@ -79,9 +148,8 @@ def _build_conversation_messages(
     is_autonomous: bool,
     autonomous_cue: str = AUTONOMOUS_NEXT_BEAT_CUE,
 ) -> list[dict]:
-    """Assemble LLM messages, merging consecutive same-role history turns on autonomous continuation."""
-    messages = [{"role": "system", "content": system_prompt}]
-
+    """Assemble LLM messages within history budget, merging same-role turns on autonomous continue."""
+    cleaned_turns: list[tuple[str, str]] = []
     for turn in (conversation_history or [])[-MAX_SHORT_TERM_HISTORY:]:
         role = turn.get("role")
         content = turn.get("content")
@@ -97,6 +165,12 @@ def _build_conversation_messages(
                 clean_content = _strip_silence_complaint_sentences(clean_content)
                 if not clean_content:
                     continue
+        cleaned_turns.append((role, clean_content))
+
+    budgeted_turns = _trim_history_turns_to_budget(cleaned_turns)
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for role, clean_content in budgeted_turns:
         if messages[-1]["role"] == role:
             messages[-1]["content"] += f"\n\n{clean_content}"
         else:
@@ -218,6 +292,7 @@ def generate_companion_reply(
         # Scrub internal engine brand names and legacy autonomous labels so the persona never picks up on them
         memory_context = re.sub(r"\bReeve\b", "memory", memory_context, flags=re.IGNORECASE)
         memory_context = re.sub(r"\bAssistant\s*\(continued\):", "Assistant:", memory_context, flags=re.IGNORECASE)
+        memory_context = _cap_memory_context(memory_context)
 
     # 2. Build the single comprehensive roleplay system prompt
     clean_tone = (story_tone or "default").strip().lower()
@@ -253,17 +328,17 @@ def generate_companion_reply(
     clean_msg = (message or "").strip()
     is_autonomous = bool(is_autonomous_continue or not clean_msg)
 
-    # 4. Direct LLM call with fallback model chain & generous token runways to eliminate truncation
+    # 4. Direct LLM call with fallback model chain & TPM-safe token runways
     clean_length = (reply_length or "default").strip().lower()
     if clean_length == "short":
-        # 768 tokens: prompt strictly mandates 1-2 sentences, generous headroom guarantees zero truncation
-        target_max_tokens = 768
+        # 512 tokens keeps 1-2 sentences safe from truncation while cutting upfront TPM reserve
+        target_max_tokens = 512
     elif clean_length == "long":
-        # 3072 tokens: abundant headroom allows full 3-4 rich paragraphs to complete naturally
-        target_max_tokens = 3072
+        # 1536 tokens (~3.8x observed 398-token average) allows 3-4 rich paragraphs without blowing 8K TPM
+        target_max_tokens = 1536
     else:
-        # 2048 tokens: 2x original headroom so adaptive scenes never get cut off mid-thought
-        target_max_tokens = 2048
+        # 1024 tokens (~2.5x observed average output) avoids over-reserving Groq TPM upfront
+        target_max_tokens = 1024
 
     cues_to_try = [AUTONOMOUS_NEXT_BEAT_CUE, AUTONOMOUS_RETRY_BEAT_CUE] if is_autonomous else [None]
     reply = ""

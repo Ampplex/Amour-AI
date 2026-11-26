@@ -49,54 +49,131 @@ from amour_backend.pii_redactor import redact_pii
 
 logger = logging.getLogger("amour.reeve")
 
-# Keep Reeve extraction requests below Groq's on-demand output-token limits.
+# Keep Reeve extraction requests below output-token limits and decoupled from chat Qwen TPM.
 REEVE_LLM_MAX_TOKENS = 512
+DEFAULT_REEVE_BEDROCK_MODEL_ID = "meta.llama3-1-8b-instruct-v1:0"
+DEFAULT_REEVE_GROQ_MODEL_ID = "llama-3.1-8b-instant"
+
 os.environ["LLM_MAX_TOKENS"] = str(REEVE_LLM_MAX_TOKENS)
+os.environ["ASYNC_WRITE_ENABLED"] = "true"
+os.environ.setdefault("EMBEDDING_PROVIDER", "bedrock")
 
 # Ensure REEVE_API_KEY is available in environment
 if hasattr(settings, "REEVE_API_KEY") and settings.REEVE_API_KEY:
     os.environ["REEVE_API_KEY"] = settings.REEVE_API_KEY
 
-# Configure Reeve Chat LLM to use Groq Qwen (decoupling it from Bedrock)
-groq_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
-if groq_key:
-    os.environ.setdefault("OPENAI_API_KEY", groq_key)
-    os.environ.setdefault("OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
-    os.environ.setdefault("OPENAI_API_BASE", "https://api.groq.com/openai/v1")
-    os.environ.setdefault("OPENAI_CHAT_MODEL", "qwen/qwen3.8-27b")
-    os.environ.setdefault("LLM_PROVIDER", "openai")
-    os.environ.setdefault("EMBEDDING_PROVIDER", "bedrock")
 
-# Enable Reeve's native background worker (PersistWorker) and WriteAhead buffer
-os.environ["ASYNC_WRITE_ENABLED"] = "true"
-try:
-    import threelane_memory.config as _tmc
-    _tmc.ASYNC_WRITE_ENABLED = True
-    _tmc.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
-except ImportError:
-    pass
+def _configure_reeve_llm(initialize_client: bool = False) -> None:
+    """Configure threelane_memory on AWS Bedrock (small model) so background writes never consume chat Qwen TPM."""
+    os.environ["ASYNC_WRITE_ENABLED"] = "true"
+    os.environ["LLM_MAX_TOKENS"] = str(REEVE_LLM_MAX_TOKENS)
+
+    requested_provider = (os.environ.get("REEVE_LLM_PROVIDER") or "bedrock").strip().lower()
+    bedrock_api_key = (
+        getattr(settings, "BEDROCK_API_KEY", "")
+        or os.environ.get("BEDROCK_API_KEY", "")
+        or os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
+    ).strip()
+    aws_access_key = (
+        getattr(settings, "AWS_ACCESS_KEY_ID", "")
+        or os.environ.get("AWS_ACCESS_KEY_ID", "")
+    ).strip()
+    aws_secret_key = (
+        getattr(settings, "AWS_SECRET_ACCESS_KEY", "")
+        or os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+    ).strip()
+    aws_region = (
+        getattr(settings, "AWS_REGION", "")
+        or os.environ.get("AWS_REGION", "us-west-2")
+    ).strip()
+    has_aws_creds = bool(aws_access_key and aws_secret_key)
+
+    use_bedrock = requested_provider == "bedrock" and bool(bedrock_api_key or has_aws_creds)
+    reeve_bedrock_model = (
+        os.environ.get("REEVE_BEDROCK_MODEL_ID")
+        or getattr(settings, "BEDROCK_SMALL_MODEL_ID", "")
+        or os.environ.get("BEDROCK_SMALL_MODEL_ID", "")
+        or DEFAULT_REEVE_BEDROCK_MODEL_ID
+    ).strip()
+
+    fallback_groq_key = (
+        getattr(settings, "GROQ_API_KEY_FALLBACK", "")
+        or os.environ.get("GROQ_API_KEY_FALLBACK", "")
+        or getattr(settings, "GROQ_API_KEY", "")
+        or os.environ.get("GROQ_API_KEY", "")
+    ).strip()
+    reeve_groq_model = (os.environ.get("REEVE_CHAT_MODEL") or DEFAULT_REEVE_GROQ_MODEL_ID).strip()
+
+    if use_bedrock:
+        os.environ["LLM_PROVIDER"] = "bedrock"
+        os.environ["EMBEDDING_PROVIDER"] = "bedrock"
+        if has_aws_creds and not os.environ.get("BEDROCK_API_KEY"):
+            # Satisfy threelane_memory.llm_interface import guard while boto3 uses IAM credentials
+            os.environ["BEDROCK_API_KEY"] = "aws-iam"
+    elif fallback_groq_key:
+        os.environ["LLM_PROVIDER"] = "openai"
+        os.environ["OPENAI_API_KEY"] = fallback_groq_key
+        os.environ["OPENAI_BASE_URL"] = "https://api.groq.com/openai/v1"
+        os.environ["OPENAI_API_BASE"] = "https://api.groq.com/openai/v1"
+        os.environ["OPENAI_CHAT_MODEL"] = reeve_groq_model
+
+    if not initialize_client:
+        try:
+            import threelane_memory.config as _tmc
+            _tmc.ASYNC_WRITE_ENABLED = True
+            _tmc.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
+        except ImportError:
+            pass
+        return
+
+    import threelane_memory.config as cfg
+    import threelane_memory.llm_interface as li
+
+    cfg.ASYNC_WRITE_ENABLED = True
+    cfg.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
+    cfg.EMBEDDING_PROVIDER = "bedrock"
+    cfg.BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
+
+    if use_bedrock:
+        from threelane_memory.bedrock_llm import ChatBedrockAPIKey
+
+        cfg.LLM_PROVIDER = "bedrock"
+        cfg.BEDROCK_MODEL_ID = reeve_bedrock_model
+        li.LLM_PROVIDER = "bedrock"
+        li.client = ChatBedrockAPIKey(
+            api_key=bedrock_api_key or "aws-iam",
+            model_id=reeve_bedrock_model,
+            region=aws_region,
+            temperature=cfg.LLM_TEMPERATURE,
+            max_tokens=REEVE_LLM_MAX_TOKENS,
+        )
+    elif fallback_groq_key:
+        from langchain_openai import ChatOpenAI
+
+        cfg.LLM_PROVIDER = "openai"
+        cfg.OPENAI_API_KEY = fallback_groq_key
+        cfg.OPENAI_CHAT_MODEL = reeve_groq_model
+        li.LLM_PROVIDER = "openai"
+        li.client = ChatOpenAI(
+            model=reeve_groq_model,
+            api_key=fallback_groq_key,
+            base_url="https://api.groq.com/openai/v1",
+            temperature=cfg.LLM_TEMPERATURE,
+            model_kwargs={"max_tokens": REEVE_LLM_MAX_TOKENS},
+            streaming=False,
+        )
+
+
+_configure_reeve_llm(initialize_client=False)
 
 
 def _get_memory_tools():
     """
     Returns the local in-process memory operations tools module.
     Exclusively uses local in-process threelane_memory against Neo4j Cloud.
-    Configures Reeve to use Groq Qwen for graph LLM extraction and Bedrock Titan for embeddings.
+    Configures Reeve extraction to use Bedrock small model (zero chat Qwen TPM usage).
     """
-    import threelane_memory.config as cfg
-    groq_key = getattr(settings, "GROQ_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
-    if groq_key:
-        os.environ["OPENAI_API_KEY"] = groq_key
-        os.environ["OPENAI_BASE_URL"] = "https://api.groq.com/openai/v1"
-        os.environ["OPENAI_API_BASE"] = "https://api.groq.com/openai/v1"
-        os.environ["OPENAI_CHAT_MODEL"] = "qwen/qwen3.8-27b"
-        cfg.LLM_PROVIDER = "openai"
-        cfg.OPENAI_API_KEY = groq_key
-        cfg.OPENAI_CHAT_MODEL = "qwen/qwen3.8-27b"
-        cfg.LLM_MAX_TOKENS = REEVE_LLM_MAX_TOKENS
-        os.environ["LLM_MAX_TOKENS"] = str(REEVE_LLM_MAX_TOKENS)
-    cfg.EMBEDDING_PROVIDER = "bedrock"
-    cfg.BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
+    _configure_reeve_llm(initialize_client=True)
     import threelane_memory.tools as tools
     return tools, False
 

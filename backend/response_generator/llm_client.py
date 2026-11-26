@@ -21,7 +21,75 @@ logger = logging.getLogger("amour.llm_client")
 
 _RATE_LIMIT_COOLDOWNS: dict[str, float] = {}
 _COOLDOWN_LOCK = threading.Lock()
+_ROTATION_LOCK = threading.Lock()
+_GROQ_KEY_ROTATION_IDX = 0
 DEFAULT_COOLDOWN_SECONDS = 60.0
+SHORT_RATE_LIMIT_RETRY_MAX_SECONDS = 2.5
+
+_DURATION_PART_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m(?!s)|s)")
+_DURATION_FULL_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:ms|h|m(?!s)|s))+$")
+
+
+def _parse_retry_after_seconds(value) -> float | None:
+    """Parse numeric or Go-style duration headers (e.g. '968ms', '42.265s', '1m30s') into seconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return max(0.1, float(value))
+
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+
+    try:
+        return max(0.1, float(raw))
+    except (ValueError, TypeError):
+        pass
+
+    compact = re.sub(r"\s+", "", raw)
+    if not _DURATION_FULL_RE.fullmatch(compact):
+        return None
+
+    total_seconds = 0.0
+    for amount_str, unit in _DURATION_PART_RE.findall(compact):
+        amount = float(amount_str)
+        if unit == "ms":
+            total_seconds += amount / 1000.0
+        elif unit == "s":
+            total_seconds += amount
+        elif unit == "m":
+            total_seconds += amount * 60.0
+        elif unit == "h":
+            total_seconds += amount * 3600.0
+    return max(0.1, total_seconds) if total_seconds > 0 else None
+
+
+def _select_rate_limit_reset_value(headers: dict | None):
+    """Choose the relevant reset header, preferring retry-after or token reset on TPM exhaustion."""
+    if not headers:
+        return None
+    normalized = {str(k).lower(): v for k, v in headers.items() if v is not None}
+
+    retry_after = normalized.get("retry-after")
+    if retry_after is not None and str(retry_after).strip():
+        return retry_after
+
+    rem_req = normalized.get("x-ratelimit-remaining-requests")
+    if rem_req is not None and str(rem_req).strip() == "0":
+        return normalized.get("x-ratelimit-reset-requests") or normalized.get("x-ratelimit-reset-tokens")
+
+    return normalized.get("x-ratelimit-reset-tokens") or normalized.get("x-ratelimit-reset-requests")
+
+
+def _rotate_api_keys(keys: list[str]) -> list[str]:
+    """Return API keys rotated round-robin so traffic spreads evenly across the key pool."""
+    global _GROQ_KEY_ROTATION_IDX
+    if len(keys) <= 1:
+        return list(keys)
+    with _ROTATION_LOCK:
+        start = _GROQ_KEY_ROTATION_IDX % len(keys)
+        _GROQ_KEY_ROTATION_IDX = (_GROQ_KEY_ROTATION_IDX + 1) % len(keys)
+    return list(keys[start:]) + list(keys[:start])
 
 
 def get_model_rate_limit_cooldown(endpoint: str, model_id: str) -> float:
@@ -41,20 +109,12 @@ def record_model_rate_limit(
     model_id: str,
     headers: dict | None = None,
 ) -> float:
-    """Record an HTTP 429 for a model, parse retry-after header if present, and return cooldown."""
+    """Record an HTTP 429 for a model, parse retry-after/reset header, and return cooldown."""
     cooldown = DEFAULT_COOLDOWN_SECONDS
-    if headers:
-        retry_after = (
-            headers.get("retry-after")
-            or headers.get("Retry-After")
-            or headers.get("x-ratelimit-reset-requests")
-            or headers.get("x-ratelimit-reset-tokens")
-        )
-        if retry_after:
-            try:
-                cooldown = max(1.0, float(retry_after))
-            except (ValueError, TypeError):
-                pass
+    reset_val = _select_rate_limit_reset_value(headers)
+    parsed = _parse_retry_after_seconds(reset_val)
+    if parsed is not None:
+        cooldown = parsed
 
     key = f"{endpoint}:{model_id}"
     with _COOLDOWN_LOCK:
@@ -217,6 +277,173 @@ def prepare_bedrock_converse_messages(messages: list) -> tuple[list[dict], list[
     return system_blocks, conversation
 
 
+def _post_openai_compatible_completion(
+    *,
+    provider: str,
+    llm_base_url: str,
+    current_model: str,
+    api_key_attempt: str,
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+    frequency_penalty: float,
+    presence_penalty: float,
+) -> tuple[str, str | float | None]:
+    """Execute one OpenAI/Groq completion attempt and record usage/429 observability."""
+    key_id = api_key_attempt[-8:] if len(api_key_attempt) >= 8 else api_key_attempt
+    cooldown_key = f"{current_model}:{key_id}"
+    headers = {
+        "Authorization": f"Bearer {api_key_attempt}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": current_model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": min(max_tokens, 3072),
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
+        "top_p": 0.9,
+    }
+    url = f"{llm_base_url}/chat/completions"
+
+    attempt_started_at = time.time()
+    resp = requests.post(url, headers=headers, json=payload, timeout=25)
+    duration = time.time() - attempt_started_at
+
+    if resp.status_code == 429:
+        record_llm_request(
+            provider=provider,
+            model=current_model,
+            status="rate_limited",
+            duration_ms=int(duration * 1000),
+            response_status=resp.status_code,
+            error_type="RateLimit",
+            rate_limit_headers=resp.headers,
+        )
+        cd = record_model_rate_limit(llm_base_url, cooldown_key, resp.headers)
+        logger.warning(
+            "Groq key ...%s hit 429 rate limit (cooling for %.2fs); failing over to next key for %s",
+            key_id,
+            cd,
+            current_model,
+        )
+        return "rate_limited", cd
+
+    if resp.status_code != 200:
+        record_llm_request(
+            provider=provider,
+            model=current_model,
+            status="error",
+            duration_ms=int(duration * 1000),
+            response_status=resp.status_code,
+            error_type="HTTPError",
+            rate_limit_headers=resp.headers,
+        )
+        logger.warning(
+            "Model %s returned HTTP %s with key ...%s: %s",
+            current_model,
+            resp.status_code,
+            key_id,
+            resp.text[:300],
+        )
+        return "error", None
+
+    data = resp.json()
+    raw_text = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+        .strip()
+    )
+    input_tokens, output_tokens = extract_token_usage(data.get("usage"))
+    record_llm_request(
+        provider=provider,
+        model=current_model,
+        status="success" if raw_text else "error",
+        duration_ms=int(duration * 1000),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        response_status=resp.status_code,
+        error_type="" if raw_text else "EmptyResponse",
+        rate_limit_headers=resp.headers,
+    )
+    logger.info(
+        "Model %s responded in %.2fs (%s chars) via key ...%s",
+        current_model,
+        duration,
+        len(raw_text),
+        key_id,
+    )
+    return ("ok", raw_text) if raw_text else ("error", None)
+
+
+def _call_openai_compatible_with_keys(
+    *,
+    provider: str,
+    llm_base_url: str,
+    current_model: str,
+    api_keys: list[str],
+    messages: list,
+    max_tokens: int,
+    temperature: float,
+    frequency_penalty: float,
+    presence_penalty: float,
+) -> str | None:
+    """Try rotated keys for an OpenAI/Groq model, retrying once if shortest cooldown is <= 2.5s."""
+    rotated_keys = _rotate_api_keys(api_keys) if provider == "groq" else list(api_keys)
+    waited_seconds = 0.0
+
+    for pass_idx in range(2):
+        shortest_cooldown = None
+        hit_rate_limit = False
+
+        for api_key_attempt in rotated_keys:
+            key_id = api_key_attempt[-8:] if len(api_key_attempt) >= 8 else api_key_attempt
+            cooldown_key = f"{current_model}:{key_id}"
+            key_cooldown = get_model_rate_limit_cooldown(llm_base_url, cooldown_key)
+
+            # Skip keys still in cooldown (allowing pass 2 retry if we already slept past it)
+            if key_cooldown > 0 and (pass_idx == 0 or key_cooldown > waited_seconds):
+                logger.info("Groq key ...%s in cooldown for %.2fs; trying next key", key_id, key_cooldown)
+                hit_rate_limit = True
+                shortest_cooldown = key_cooldown if shortest_cooldown is None else min(shortest_cooldown, key_cooldown)
+                continue
+
+            outcome, result = _post_openai_compatible_completion(
+                provider=provider,
+                llm_base_url=llm_base_url,
+                current_model=current_model,
+                api_key_attempt=api_key_attempt,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+            )
+            if outcome == "ok" and isinstance(result, str):
+                with _COOLDOWN_LOCK:
+                    _RATE_LIMIT_COOLDOWNS.pop(f"{llm_base_url}:{cooldown_key}", None)
+                return result
+            if outcome == "rate_limited" and isinstance(result, float):
+                hit_rate_limit = True
+                shortest_cooldown = result if shortest_cooldown is None else min(shortest_cooldown, result)
+
+        if (
+            pass_idx == 0
+            and hit_rate_limit
+            and shortest_cooldown is not None
+            and 0 < shortest_cooldown <= SHORT_RATE_LIMIT_RETRY_MAX_SECONDS
+        ):
+            waited_seconds = shortest_cooldown + 0.05
+            logger.info("All %s keys briefly rate-limited; waiting %.2fs before retry", current_model, waited_seconds)
+            time.sleep(waited_seconds)
+            continue
+        break
+
+    return None
+
+
 def call_llm(
     messages: list,
     max_tokens: int = 1024,
@@ -305,107 +532,24 @@ def call_llm(
                     return raw_text, current_model
 
             else:
-                # OpenAI / Groq compatible completions with multi-key 429 failover
+                # OpenAI / Groq compatible completions with round-robin multi-key 429 failover
                 api_keys_to_try = get_groq_api_keys() if provider == "groq" else [llm_api_key]
                 if not api_keys_to_try and llm_api_key:
                     api_keys_to_try = [llm_api_key]
 
-                for api_key_attempt in api_keys_to_try:
-                    key_id = api_key_attempt[-8:] if len(api_key_attempt) >= 8 else api_key_attempt
-                    key_cooldown = get_model_rate_limit_cooldown(llm_base_url, key_id)
-                    if key_cooldown > 0:
-                        logger.info("Groq key ...%s in cooldown for %.1fs; trying next key", key_id, key_cooldown)
-                        continue
-
-                    headers = {
-                        "Authorization": f"Bearer {api_key_attempt}",
-                        "Content-Type": "application/json",
-                    }
-                    payload = {
-                        "model": current_model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": min(max_tokens, 3072),
-                        "frequency_penalty": frequency_penalty,
-                        "presence_penalty": presence_penalty,
-                        "top_p": 0.9,
-                    }
-                    url = f"{llm_base_url}/chat/completions"
-
-                    attempt_recorded = False
-                    attempt_started_at = time.time()
-                    resp = requests.post(url, headers=headers, json=payload, timeout=25)
-                    duration = time.time() - attempt_started_at
-
-                    if resp.status_code == 429:
-                        record_llm_request(
-                            provider=provider,
-                            model=current_model,
-                            status="rate_limited",
-                            duration_ms=int(duration * 1000),
-                            response_status=resp.status_code,
-                            error_type="RateLimit",
-                            rate_limit_headers=resp.headers,
-                        )
-                        attempt_recorded = True
-                        cd = record_model_rate_limit(llm_base_url, key_id, resp.headers)
-                        logger.warning(
-                            "Groq key ...%s hit 429 rate limit (cooling for %.1fs); failing over to next key for %s",
-                            key_id,
-                            cd,
-                            current_model,
-                        )
-                        continue
-
-                    if resp.status_code != 200:
-                        record_llm_request(
-                            provider=provider,
-                            model=current_model,
-                            status="error",
-                            duration_ms=int(duration * 1000),
-                            response_status=resp.status_code,
-                            error_type="HTTPError",
-                            rate_limit_headers=resp.headers,
-                        )
-                        attempt_recorded = True
-                        logger.warning(
-                            "Model %s returned HTTP %s with key ...%s: %s",
-                            current_model,
-                            resp.status_code,
-                            key_id,
-                            resp.text[:300],
-                        )
-                        continue
-
-                    data = resp.json()
-                    raw_text = (
-                        data.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                        .strip()
-                    )
-                    input_tokens, output_tokens = extract_token_usage(data.get("usage"))
-                    record_llm_request(
-                        provider=provider,
-                        model=current_model,
-                        status="success" if raw_text else "error",
-                        duration_ms=int(duration * 1000),
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        response_status=resp.status_code,
-                        error_type="" if raw_text else "EmptyResponse",
-                        rate_limit_headers=resp.headers,
-                    )
-                    attempt_recorded = True
-                    logger.info(
-                        "Model %s responded in %.2fs (%s chars) via key ...%s",
-                        current_model,
-                        duration,
-                        len(raw_text),
-                        key_id,
-                    )
-                    if raw_text:
-                        return raw_text, current_model
+                raw_text = _call_openai_compatible_with_keys(
+                    provider=provider,
+                    llm_base_url=llm_base_url,
+                    current_model=current_model,
+                    api_keys=api_keys_to_try,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                )
+                if raw_text:
+                    return raw_text, current_model
 
         except ClientError as exc:
             err_code = exc.response.get("Error", {}).get("Code", "")
