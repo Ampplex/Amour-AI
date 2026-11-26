@@ -15,6 +15,8 @@ import boto3
 from botocore.exceptions import ClientError
 from django.conf import settings
 
+from .observability import extract_token_usage, record_llm_request
+
 logger = logging.getLogger("amour.llm_client")
 
 _RATE_LIMIT_COOLDOWNS: dict[str, float] = {}
@@ -228,6 +230,15 @@ def call_llm(
     """
     llm_api_key, llm_base_url, models_to_try = get_llm_configuration()
     is_bedrock = (urlparse(llm_base_url).hostname or "").startswith("bedrock-runtime.")
+    configured_provider = (
+        getattr(settings, "RESPONSE_LLM_PROVIDER", "")
+        or os.environ.get("RESPONSE_LLM_PROVIDER", "")
+        or getattr(settings, "LLM_PROVIDER", "")
+        or os.environ.get("LLM_PROVIDER", "groq")
+    ).strip().lower()
+    provider = "bedrock" if is_bedrock else (
+        "groq" if configured_provider == "groq" else "openai_compatible"
+    )
 
     for current_model in models_to_try:
         cooldown = get_model_rate_limit_cooldown(llm_base_url, current_model)
@@ -235,6 +246,8 @@ def call_llm(
             logger.info("Skipping model %s; in cooldown for %.1fs", current_model, cooldown)
             continue
 
+        attempt_started_at = None
+        attempt_recorded = False
         try:
             if is_bedrock:
                 parsed_url = urlparse(llm_base_url)
@@ -245,7 +258,7 @@ def call_llm(
                 system_blocks, conversation = prepare_bedrock_converse_messages(messages)
                 client = boto3.client("bedrock-runtime", region_name=region)
 
-                start_time = time.time()
+                attempt_started_at = time.time()
                 response = client.converse(
                     modelId=current_model,
                     system=system_blocks,
@@ -256,7 +269,7 @@ def call_llm(
                         "topP": 0.9,
                     },
                 )
-                duration = time.time() - start_time
+                duration = time.time() - attempt_started_at
 
                 content_blocks = (
                     response.get("output", {})
@@ -268,6 +281,19 @@ def call_llm(
                     for block in content_blocks
                     if isinstance(block, dict) and isinstance(block.get("text"), str)
                 ).strip()
+                input_tokens, output_tokens = extract_token_usage(response.get("usage"))
+                metadata = response.get("ResponseMetadata", {})
+                record_llm_request(
+                    provider=provider,
+                    model=current_model,
+                    status="success" if raw_text else "error",
+                    duration_ms=int(duration * 1000),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    response_status=metadata.get("HTTPStatusCode"),
+                    error_type="" if raw_text else "EmptyResponse",
+                )
+                attempt_recorded = True
 
                 logger.info(
                     "Bedrock model %s responded in %.2fs (%s chars)",
@@ -280,13 +306,6 @@ def call_llm(
 
             else:
                 # OpenAI / Groq compatible completions with multi-key 429 failover
-                provider = (
-                    getattr(settings, "RESPONSE_LLM_PROVIDER", "")
-                    or os.environ.get("RESPONSE_LLM_PROVIDER", "")
-                    or getattr(settings, "LLM_PROVIDER", "")
-                    or os.environ.get("LLM_PROVIDER", "groq")
-                ).strip().lower()
-
                 api_keys_to_try = get_groq_api_keys() if provider == "groq" else [llm_api_key]
                 if not api_keys_to_try and llm_api_key:
                     api_keys_to_try = [llm_api_key]
@@ -313,11 +332,22 @@ def call_llm(
                     }
                     url = f"{llm_base_url}/chat/completions"
 
-                    start_time = time.time()
+                    attempt_recorded = False
+                    attempt_started_at = time.time()
                     resp = requests.post(url, headers=headers, json=payload, timeout=25)
-                    duration = time.time() - start_time
+                    duration = time.time() - attempt_started_at
 
                     if resp.status_code == 429:
+                        record_llm_request(
+                            provider=provider,
+                            model=current_model,
+                            status="rate_limited",
+                            duration_ms=int(duration * 1000),
+                            response_status=resp.status_code,
+                            error_type="RateLimit",
+                            rate_limit_headers=resp.headers,
+                        )
+                        attempt_recorded = True
                         cd = record_model_rate_limit(llm_base_url, key_id, resp.headers)
                         logger.warning(
                             "Groq key ...%s hit 429 rate limit (cooling for %.1fs); failing over to next key for %s",
@@ -328,6 +358,16 @@ def call_llm(
                         continue
 
                     if resp.status_code != 200:
+                        record_llm_request(
+                            provider=provider,
+                            model=current_model,
+                            status="error",
+                            duration_ms=int(duration * 1000),
+                            response_status=resp.status_code,
+                            error_type="HTTPError",
+                            rate_limit_headers=resp.headers,
+                        )
+                        attempt_recorded = True
                         logger.warning(
                             "Model %s returned HTTP %s with key ...%s: %s",
                             current_model,
@@ -344,6 +384,19 @@ def call_llm(
                         .get("content", "")
                         .strip()
                     )
+                    input_tokens, output_tokens = extract_token_usage(data.get("usage"))
+                    record_llm_request(
+                        provider=provider,
+                        model=current_model,
+                        status="success" if raw_text else "error",
+                        duration_ms=int(duration * 1000),
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        response_status=resp.status_code,
+                        error_type="" if raw_text else "EmptyResponse",
+                        rate_limit_headers=resp.headers,
+                    )
+                    attempt_recorded = True
                     logger.info(
                         "Model %s responded in %.2fs (%s chars) via key ...%s",
                         current_model,
@@ -356,6 +409,20 @@ def call_llm(
 
         except ClientError as exc:
             err_code = exc.response.get("Error", {}).get("Code", "")
+            if attempt_started_at is not None and not attempt_recorded:
+                is_rate_limited = err_code in (
+                    "ThrottlingException",
+                    "TooManyRequestsException",
+                    "ServiceQuotaExceededException",
+                )
+                record_llm_request(
+                    provider=provider,
+                    model=current_model,
+                    status="rate_limited" if is_rate_limited else "error",
+                    duration_ms=int((time.time() - attempt_started_at) * 1000),
+                    error_type=err_code or type(exc).__name__,
+                )
+                attempt_recorded = True
             if err_code in ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"):
                 cd = record_model_rate_limit(llm_base_url, current_model)
                 logger.warning("Bedrock model %s throttled (%s); cooldown %.1fs", current_model, err_code, cd)
@@ -363,6 +430,15 @@ def call_llm(
                 logger.error("Bedrock ClientError for %s: %s", current_model, err_code)
             continue
         except Exception as exc:
+            if attempt_started_at is not None and not attempt_recorded:
+                record_llm_request(
+                    provider=provider,
+                    model=current_model,
+                    status="error",
+                    duration_ms=int((time.time() - attempt_started_at) * 1000),
+                    error_type=type(exc).__name__,
+                )
+                attempt_recorded = True
             logger.exception("Unexpected error calling LLM model %s: %s", current_model, type(exc).__name__)
             continue
 

@@ -74,6 +74,12 @@ python manage.py migrate
 python manage.py runserver 0.0.0.0:8000
 ```
 
+The admin-only **LLM Usage** tab at `/console/` shows request counts, token usage,
+latency, failures, and the latest provider-reported Groq rate-limit headers for
+requests made through the response-generation client (including Qwen). It stores
+provider/model and request metadata only; prompts, completions, and user IDs are
+not recorded. Apply database migrations before using the dashboard.
+
 ### 2. Frontend Setup
 
 ```bash

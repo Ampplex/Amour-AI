@@ -203,6 +203,9 @@ class AdminConsoleWebView(View):
       <button onclick="switchTab('personas')" id="tab-btn-personas" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
         <span>🎭 Personas ({total_personas})</span>
       </button>
+      <button onclick="switchTab('llm')" id="tab-btn-llm" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
+        <span>📊 LLM Usage</span>
+      </button>
     </div>
 
     <!-- TAB 1: USERS MANAGEMENT -->
@@ -296,6 +299,80 @@ class AdminConsoleWebView(View):
       </div>
     </section>
 
+    <!-- TAB 3: LLM USAGE AND QUOTA -->
+    <section id="tab-llm" class="hidden space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-bold text-white">LLM usage &amp; provider quota</h2>
+          <p class="text-[11px] text-zinc-400 mt-1">Observed request/token totals and the latest Groq rate-limit headers. No prompts or user identifiers are stored.</p>
+        </div>
+        <button onclick="loadLLMUsage()" class="shrink-0 px-3 py-2 rounded-lg border border-dark-border bg-dark-card hover:bg-dark-hover text-xs font-semibold text-zinc-300">Refresh</button>
+      </div>
+
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="p-4 rounded-xl bg-dark-card border border-dark-border">
+          <p class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Requests · 24h</p>
+          <p id="llm-requests" class="text-2xl font-bold mt-1 text-white">—</p>
+          <p id="llm-request-breakdown" class="mt-2 text-[11px] text-zinc-400">Waiting for telemetry</p>
+        </div>
+        <div class="p-4 rounded-xl bg-dark-card border border-dark-border">
+          <p class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Tokens · 24h</p>
+          <p id="llm-tokens" class="text-2xl font-bold mt-1 text-sky-400">—</p>
+          <p id="llm-token-breakdown" class="mt-2 text-[11px] text-zinc-400">Input + output tokens</p>
+        </div>
+        <div class="p-4 rounded-xl bg-dark-card border border-dark-border">
+          <p class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Success rate · 24h</p>
+          <p id="llm-success-rate" class="text-2xl font-bold mt-1 text-emerald-400">—</p>
+          <p class="mt-2 text-[11px] text-zinc-400">Provider responses</p>
+        </div>
+        <div class="p-4 rounded-xl bg-dark-card border border-dark-border">
+          <p class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Avg latency · 24h</p>
+          <p id="llm-latency" class="text-2xl font-bold mt-1 text-amber-400">—</p>
+          <p class="mt-2 text-[11px] text-zinc-400">Across observed attempts</p>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-dark-border bg-dark-card p-4 space-y-3">
+        <div>
+          <h3 class="text-xs font-bold text-white">Latest Groq quota snapshot</h3>
+          <p class="text-[11px] text-zinc-500 mt-1">Quota data is supplied by Groq response headers and can be model-specific.</p>
+        </div>
+        <div id="llm-quota-cards" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <p class="text-xs text-zinc-500">Waiting for telemetry</p>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="rounded-xl border border-dark-border bg-dark-card p-4">
+          <h3 class="text-xs font-bold text-white mb-3">Daily token volume · 7 days</h3>
+          <div id="llm-daily-usage" class="space-y-3 text-xs text-zinc-400">Waiting for telemetry</div>
+        </div>
+        <div class="rounded-xl border border-dark-border bg-dark-card p-4 overflow-x-auto">
+          <h3 class="text-xs font-bold text-white mb-3">Usage by model · 7 days</h3>
+          <table class="w-full text-left text-xs text-zinc-300">
+            <thead class="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-dark-border">
+              <tr><th class="py-2 pr-3">Provider / model</th><th class="py-2 px-2 text-right">Requests</th><th class="py-2 px-2 text-right">Tokens</th><th class="py-2 pl-2 text-right">Avg ms</th></tr>
+            </thead>
+            <tbody id="llm-model-usage" class="divide-y divide-dark-border">
+              <tr><td colspan="4" class="py-4 text-center text-zinc-500">Waiting for telemetry</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-dark-border bg-dark-card p-4 overflow-x-auto">
+        <h3 class="text-xs font-bold text-white mb-3">Recent provider attempts · 24h</h3>
+        <table class="w-full text-left text-xs text-zinc-300">
+          <thead class="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-dark-border">
+            <tr><th class="py-2 pr-3">Time</th><th class="py-2 px-2">Provider / model</th><th class="py-2 px-2">Status</th><th class="py-2 px-2 text-right">Tokens</th><th class="py-2 px-2 text-right">Latency</th><th class="py-2 pl-2">Details</th></tr>
+          </thead>
+          <tbody id="llm-recent-usage" class="divide-y divide-dark-border">
+            <tr><td colspan="6" class="py-4 text-center text-zinc-500">Waiting for telemetry</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
   </main>
 
   <!-- EDIT USER MODAL -->
@@ -359,12 +436,14 @@ class AdminConsoleWebView(View):
     let currentUsers = [];
     let searchTimeout = null;
     const adminUserId = "111822298300726667407"; // ankeshpune@gmail.com
+    const consoleAdminKey = new URLSearchParams(window.location.search).get('key') || '';
 
     function switchTab(tab) {{
       document.getElementById('tab-users').classList.toggle('hidden', tab !== 'users');
       document.getElementById('tab-personas').classList.toggle('hidden', tab !== 'personas');
+      document.getElementById('tab-llm').classList.toggle('hidden', tab !== 'llm');
 
-      ['users', 'personas'].forEach(t => {{
+      ['users', 'personas', 'llm'].forEach(t => {{
         const btn = document.getElementById(`tab-btn-${{t}}`);
         if (t === tab) {{
           btn.className = "px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 bg-brand-500 text-white";
@@ -372,6 +451,116 @@ class AdminConsoleWebView(View):
           btn.className = "px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover";
         }}
       }});
+      if (tab === 'llm') loadLLMUsage();
+    }}
+
+    function escapeHtml(value) {{
+      return String(value ?? '').replace(/[&<>"']/g, char => ({{
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }}[char]));
+    }}
+
+    function formatNumber(value) {{
+      return Number(value || 0).toLocaleString();
+    }}
+
+    async function loadLLMUsage() {{
+      const quotaCards = document.getElementById('llm-quota-cards');
+      try {{
+        const headers = {{}};
+        if (consoleAdminKey) headers['x-console-admin-key'] = consoleAdminKey;
+        const response = await fetch('/api/llm/usage/', {{ headers }});
+        if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+        const data = await response.json();
+        const summary = data.summary || {{}};
+        const requestCount = Number(summary.requests || 0);
+        const successes = Number(summary.successes || 0);
+        const tokensIn = Number(summary.input_tokens || 0);
+        const tokensOut = Number(summary.output_tokens || 0);
+        const totalTokens = tokensIn + tokensOut;
+        document.getElementById('llm-requests').textContent = formatNumber(requestCount);
+        document.getElementById('llm-request-breakdown').textContent =
+          `${{formatNumber(successes)}} succeeded · ${{formatNumber(summary.failures)}} failed · ${{formatNumber(summary.rate_limited)}} rate limited`;
+        document.getElementById('llm-tokens').textContent = formatNumber(totalTokens);
+        document.getElementById('llm-token-breakdown').textContent =
+          `${{formatNumber(tokensIn)}} input · ${{formatNumber(tokensOut)}} output`;
+        document.getElementById('llm-success-rate').textContent =
+          `${{requestCount ? Math.round((successes / requestCount) * 100) : 0}}%`;
+        document.getElementById('llm-latency').textContent =
+          `${{formatNumber(Math.round(summary.average_latency_ms || 0))}} ms`;
+
+        const quotas = data.quota_snapshots || [];
+        quotaCards.innerHTML = quotas.length ? quotas.map(quota => {{
+          const model = escapeHtml(quota.model);
+          const tokenLimit = quota.rate_limit_limit_tokens;
+          const tokenRemaining = quota.rate_limit_remaining_tokens;
+          const requestLimit = quota.rate_limit_limit_requests;
+          const requestRemaining = quota.rate_limit_remaining_requests;
+          const tokenPercent = tokenLimit > 0 && tokenRemaining !== null
+            ? Math.max(0, Math.min(100, (tokenRemaining / tokenLimit) * 100)) : null;
+          const observedAt = new Date(quota.observed_at).toLocaleString();
+          return `
+            <div class="rounded-lg bg-dark-input border border-dark-border p-3 space-y-2">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-bold text-white">${{model}}</span>
+                <span class="text-[10px] text-zinc-500">Observed ${{escapeHtml(observedAt)}}</span>
+              </div>
+              ${{tokenLimit !== null && tokenRemaining !== null ? `
+                <div class="flex justify-between text-[11px] text-zinc-400"><span>Tokens remaining</span><span>${{formatNumber(tokenRemaining)}} / ${{formatNumber(tokenLimit)}}</span></div>
+                <div class="h-1.5 rounded-full bg-zinc-800 overflow-hidden"><div class="h-full bg-sky-500 rounded-full" style="width:${{tokenPercent}}%"></div></div>
+                <p class="text-[10px] text-zinc-500">Reset: ${{escapeHtml(quota.rate_limit_reset_tokens || 'not reported')}}</p>
+              ` : '<p class="text-[11px] text-zinc-500">Token quota headers not reported</p>'}}
+              ${{requestLimit !== null && requestRemaining !== null
+                ? `<p class="text-[11px] text-zinc-400">Requests remaining: ${{formatNumber(requestRemaining)}} / ${{formatNumber(requestLimit)}} · reset ${{escapeHtml(quota.rate_limit_reset_requests || 'unknown')}}</p>`
+                : ''}}
+            </div>`;
+        }}).join('') : '<p class="text-xs text-zinc-500">No Groq quota headers observed yet. Make a request and refresh to populate this snapshot.</p>';
+
+        const daily = data.daily || [];
+        const maxDailyTokens = Math.max(1, ...daily.map(day =>
+          Number(day.input_tokens || 0) + Number(day.output_tokens || 0)));
+        document.getElementById('llm-daily-usage').innerHTML = daily.length ? daily.map(day => {{
+          const count = Number(day.input_tokens || 0) + Number(day.output_tokens || 0);
+          const width = Math.max(2, (count / maxDailyTokens) * 100);
+          return `<div>
+            <div class="flex justify-between mb-1"><span>${{escapeHtml(day.day)}}</span><span>${{formatNumber(count)}} tokens · ${{formatNumber(day.requests)}} requests</span></div>
+            <div class="h-1.5 rounded-full bg-zinc-800 overflow-hidden"><div class="h-full bg-brand-500 rounded-full" style="width:${{width}}%"></div></div>
+          </div>`;
+        }}).join('') : '<p class="text-xs text-zinc-500">No recorded usage in the last 7 days.</p>';
+
+        const models = data.models || [];
+        document.getElementById('llm-model-usage').innerHTML = models.length ? models.map(model => {{
+          const tokens = Number(model.input_tokens || 0) + Number(model.output_tokens || 0);
+          return `<tr>
+            <td class="py-2 pr-3"><span class="text-zinc-400">${{escapeHtml(model.provider)}}</span><br><span class="font-medium text-white">${{escapeHtml(model.model)}}</span></td>
+            <td class="py-2 px-2 text-right">${{formatNumber(model.requests)}}</td>
+            <td class="py-2 px-2 text-right">${{formatNumber(tokens)}}</td>
+            <td class="py-2 pl-2 text-right">${{formatNumber(Math.round(model.average_latency_ms || 0))}}</td>
+          </tr>`;
+        }}).join('') : '<tr><td colspan="4" class="py-4 text-center text-zinc-500">No recorded usage in the last 7 days.</td></tr>';
+
+        const recent = data.recent || [];
+        document.getElementById('llm-recent-usage').innerHTML = recent.length ? recent.map(item => {{
+          const tokens = item.input_tokens == null && item.output_tokens == null
+            ? '—' : formatNumber(Number(item.input_tokens || 0) + Number(item.output_tokens || 0));
+          const detail = item.error_type || (item.response_status ? `HTTP ${{item.response_status}}` : '—');
+          const statusColor = item.status === 'success' ? 'text-emerald-400'
+            : item.status === 'rate_limited' ? 'text-amber-400' : 'text-rose-400';
+          return `<tr>
+            <td class="py-2 pr-3 whitespace-nowrap">${{escapeHtml(new Date(item.created_at).toLocaleString())}}</td>
+            <td class="py-2 px-2"><span class="text-zinc-400">${{escapeHtml(item.provider)}}</span><br><span class="text-white">${{escapeHtml(item.model)}}</span></td>
+            <td class="py-2 px-2 ${{statusColor}}">${{escapeHtml(item.status)}}</td>
+            <td class="py-2 px-2 text-right">${{tokens}}</td>
+            <td class="py-2 px-2 text-right">${{formatNumber(item.duration_ms)}} ms</td>
+            <td class="py-2 pl-2 text-zinc-500">${{escapeHtml(detail)}}</td>
+          </tr>`;
+        }}).join('') : '<tr><td colspan="6" class="py-4 text-center text-zinc-500">No provider attempts in the last 24 hours.</td></tr>';
+      }} catch (err) {{
+        console.error('Failed to load LLM usage:', err);
+        quotaCards.innerHTML = `<p class="text-xs text-rose-400">Unable to load LLM usage (${{
+          escapeHtml(err.message)
+        }}). Check admin access and database migrations.</p>`;
+      }}
     }}
 
     async function loadUsers() {{
@@ -538,6 +727,9 @@ class AdminConsoleWebView(View):
 
     // Initial load
     document.addEventListener('DOMContentLoaded', loadUsers);
+    setInterval(() => {{
+      if (!document.getElementById('tab-llm').classList.contains('hidden')) loadLLMUsage();
+    }}, 30000);
   </script>
 </body>
 </html>"""

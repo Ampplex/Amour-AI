@@ -1,9 +1,12 @@
 from unittest.mock import MagicMock, patch
-from django.test import SimpleTestCase
+from django.contrib.auth.models import AnonymousUser
+from django.test import RequestFactory, SimpleTestCase, override_settings
 
 from response_generator.generator import generate_companion_reply
 from response_generator.llm_client import call_llm
+from response_generator.observability import extract_rate_limit_headers, extract_token_usage
 from response_generator.prompt_builder import build_roleplay_system_prompt
+from response_generator.usage_view import LLMUsageView
 
 
 class PromptBuilderTests(SimpleTestCase):
@@ -81,6 +84,36 @@ class PromptBuilderTests(SimpleTestCase):
 
 
 class GeneratorAndClientTests(SimpleTestCase):
+    def test_extract_token_usage_supports_openai_and_bedrock_shapes(self):
+        self.assertEqual(
+            extract_token_usage({"prompt_tokens": "24", "completion_tokens": 9}),
+            (24, 9),
+        )
+        self.assertEqual(
+            extract_token_usage({"inputTokens": 31, "outputTokens": 12}),
+            (31, 12),
+        )
+        self.assertEqual(extract_token_usage(None), (None, None))
+
+    def test_extract_rate_limit_headers_normalizes_provider_quota(self):
+        quota = extract_rate_limit_headers({
+            "X-RateLimit-Limit-Tokens": "500000",
+            "x-ratelimit-remaining-tokens": "490000",
+            "x-ratelimit-reset-tokens": "1m",
+        })
+        self.assertEqual(quota["rate_limit_limit_tokens"], 500000)
+        self.assertEqual(quota["rate_limit_remaining_tokens"], 490000)
+        self.assertEqual(quota["rate_limit_reset_tokens"], "1m")
+
+    @override_settings(DEBUG=False, SECRET_KEY="test-console-secret")
+    def test_llm_usage_endpoint_rejects_anonymous_requests(self):
+        request = RequestFactory().get("/api/llm/usage/")
+        request.user = AnonymousUser()
+
+        response = LLMUsageView.as_view()(request)
+
+        self.assertEqual(response.status_code, 403)
+
     def test_generator_uses_10_history_messages_and_passes_penalties(self):
         history = [
             {"role": "user" if i % 2 == 0 else "assistant", "content": f"Turn {i}"}
@@ -119,6 +152,7 @@ class GeneratorAndClientTests(SimpleTestCase):
         with (
             patch("response_generator.llm_client.get_llm_configuration", return_value=("key", "https://api.groq.com/openai/v1", ["qwen/qwen3.8-27b"])),
             patch("response_generator.llm_client.requests.post", return_value=fake_response) as mock_post,
+            patch("response_generator.llm_client.record_llm_request"),
         ):
             text, model = call_llm(
                 messages=[{"role": "user", "content": "Hi"}],
@@ -133,3 +167,60 @@ class GeneratorAndClientTests(SimpleTestCase):
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["frequency_penalty"], 0.65)
         self.assertEqual(payload["presence_penalty"], 0.4)
+
+    def test_call_llm_records_groq_usage_and_quota_headers(self):
+        fake_response = MagicMock()
+        fake_response.status_code = 200
+        fake_response.headers = {
+            "x-ratelimit-limit-requests": "1000",
+            "x-ratelimit-remaining-requests": "987",
+            "x-ratelimit-reset-requests": "2m30s",
+            "x-ratelimit-limit-tokens": "500000",
+            "x-ratelimit-remaining-tokens": "490000",
+            "x-ratelimit-reset-tokens": "1m",
+        }
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "Hello."}}],
+            "usage": {"prompt_tokens": 42, "completion_tokens": 7},
+        }
+
+        with (
+            patch("response_generator.llm_client.get_llm_configuration", return_value=("key", "https://api.groq.com/openai/v1", ["qwen/qwen3.8-27b"])),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key"]),
+            patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
+            patch("response_generator.llm_client.requests.post", return_value=fake_response),
+            patch("response_generator.llm_client.record_llm_request") as mock_record,
+        ):
+            text, model = call_llm(messages=[{"role": "user", "content": "Hi"}])
+
+        self.assertEqual((text, model), ("Hello.", "qwen/qwen3.8-27b"))
+        mock_record.assert_called_once()
+        recorded = mock_record.call_args.kwargs
+        self.assertEqual(recorded["provider"], "groq")
+        self.assertEqual(recorded["input_tokens"], 42)
+        self.assertEqual(recorded["output_tokens"], 7)
+        self.assertEqual(recorded["status"], "success")
+        self.assertEqual(
+            recorded["rate_limit_headers"]["x-ratelimit-remaining-tokens"],
+            "490000",
+        )
+
+    def test_call_llm_records_groq_rate_limit_attempt(self):
+        fake_response = MagicMock()
+        fake_response.status_code = 429
+        fake_response.headers = {"x-ratelimit-reset-tokens": "1m"}
+
+        with (
+            patch("response_generator.llm_client.get_llm_configuration", return_value=("key", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
+            patch("response_generator.llm_client.get_groq_api_keys", return_value=["key"]),
+            patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
+            patch("response_generator.llm_client.requests.post", return_value=fake_response),
+            patch("response_generator.llm_client.record_llm_request") as mock_record,
+        ):
+            text, model = call_llm(messages=[{"role": "user", "content": "Hi"}])
+
+        self.assertEqual((text, model), (None, None))
+        mock_record.assert_called_once()
+        recorded = mock_record.call_args.kwargs
+        self.assertEqual(recorded["status"], "rate_limited")
+        self.assertEqual(recorded["response_status"], 429)

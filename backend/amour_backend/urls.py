@@ -5,10 +5,12 @@ from django.conf import settings
 from django.conf.urls.static import static
 from authentication.views import PrivacyPolicyView, WebAccountDeletionView
 from authentication.admin_console_view import AdminConsoleWebView
+from response_generator.usage_view import LLMUsageView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("console/", AdminConsoleWebView.as_view(), name="admin-console"),
+    path("api/llm/usage/", LLMUsageView.as_view(), name="llm-usage"),
     path("admin-console/", RedirectView.as_view(url="/console/", permanent=False)),
     path("privacy/", PrivacyPolicyView.as_view(), name="privacy-policy"),
     path("api/privacy/", PrivacyPolicyView.as_view(), name="api-privacy-policy"),
