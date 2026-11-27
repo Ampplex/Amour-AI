@@ -218,3 +218,39 @@ class UserPersonaCustomization(models.Model):
         return f"UserPersonaCustomization({self.user_identifier} -> {self.persona_identifier})"
 
 
+class ContentReport(models.Model):
+    """
+    In-app reports for AI-generated content (messages, personas, avatars)
+    to comply with Google Play Store AI-Generated Content Policy.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="content_reports",
+    )
+    user_identifier = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    reporter_email = models.EmailField(blank=True, default="", db_index=True)
+    content_type = models.CharField(max_length=32, default="message", db_index=True)  # 'message' or 'persona'
+    content_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    persona_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    persona_name = models.CharField(max_length=120, blank=True, default="")
+    reported_text = models.TextField(blank=True, default="")
+    reason = models.CharField(max_length=64, db_index=True)
+    details = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=32, default="pending", db_index=True)  # 'pending', 'reviewed', 'actioned', 'dismissed'
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["content_type", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Report [{self.content_type}] {self.reason} - {self.persona_name} ({self.status})"
+
+

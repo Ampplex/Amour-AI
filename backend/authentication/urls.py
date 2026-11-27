@@ -15,6 +15,8 @@ from .views import (
     ProfilePictureUploadView,
     AdminUsersView,
     AdminUserDetailView,
+    AdminReportsView,
+    AdminReportDetailView,
     DeleteAccountView,
     WebAccountDeletionView,
 )
@@ -37,5 +39,7 @@ urlpatterns = [
     path("users/", UserListView.as_view(), name="auth-users"),
     path("admin/users/", AdminUsersView.as_view(), name="auth-admin-users"),
     path("admin/users/<str:user_id>/", AdminUserDetailView.as_view(), name="auth-admin-user-detail"),
+    path("admin/reports/", AdminReportsView.as_view(), name="auth-admin-reports"),
+    path("admin/reports/<uuid:report_id>/", AdminReportDetailView.as_view(), name="auth-admin-report-detail"),
 ]
 

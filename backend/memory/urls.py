@@ -15,10 +15,12 @@ from .views import (
     UserInteractionsView,
     MemoryKeyBackupView,
     UserConversationsListView,
+    ContentReportView,
 )
 
 urlpatterns = [
     path("status/", ReeveStatusView.as_view(), name="memory-status"),
+    path("report/", ContentReportView.as_view(), name="content-report"),
     path("conversations/", UserConversationsListView.as_view(), name="memory-conversations"),
     path("key-backup/", MemoryKeyBackupView.as_view(), name="memory-key-backup"),
     path("chat/", ChatMemoryView.as_view(), name="memory-chat"),

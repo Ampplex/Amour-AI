@@ -82,6 +82,9 @@ class AdminConsoleWebView(View):
         local_users = User.objects.filter(auth_provider="local").count()
         total_personas = Persona.objects.count()
         total_chats = PersonaChatMessage.objects.count()
+        from memory.models import ContentReport
+        total_reports = ContentReport.objects.count()
+        pending_reports = ContentReport.objects.filter(status="pending").count()
 
         html = f"""<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -184,7 +187,7 @@ class AdminConsoleWebView(View):
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-8 py-6 space-y-6">
 
     <!-- METRICS OVERVIEW CARDS -->
-    <section class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
+    <section class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3.5">
       <div class="p-4 rounded-xl bg-dark-card border border-dark-border">
         <p class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Total Users</p>
         <p class="text-2xl font-bold mt-1 text-white" id="stat-total">{total_users}</p>
@@ -227,12 +230,23 @@ class AdminConsoleWebView(View):
           <span>Messages safe in DB</span>
         </div>
       </div>
+      <div class="p-4 rounded-xl bg-dark-card border border-dark-border cursor-pointer hover:border-amber-500/50 transition" onclick="switchTab('reports')">
+        <p class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">AI Reports</p>
+        <p class="text-2xl font-bold mt-1 text-amber-400" id="stat-reports">{pending_reports}</p>
+        <div class="mt-2 text-[11px] text-zinc-400">
+          <span>{total_reports} total logged</span>
+        </div>
+      </div>
     </section>
 
     <!-- NAVIGATION TABS -->
     <div class="flex items-center space-x-2 border-b border-dark-border pb-3">
       <button onclick="switchTab('users')" id="tab-btn-users" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 bg-brand-500 text-white">
         <span>👥 User Accounts</span>
+      </button>
+      <button onclick="switchTab('reports')" id="tab-btn-reports" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
+        <span>🚩 Moderation Reports</span>
+        <span class="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 font-semibold">{pending_reports}</span>
       </button>
       <button onclick="switchTab('llm')" id="tab-btn-llm" class="px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 text-zinc-400 hover:text-white hover:bg-dark-hover">
         <span>📊 LLM Usage</span>
@@ -371,6 +385,62 @@ class AdminConsoleWebView(View):
       </div>
     </section>
 
+    <!-- TAB 3: REPORTS MANAGEMENT -->
+    <section id="tab-reports" class="hidden space-y-4">
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div class="relative flex-1 max-w-md">
+          <input 
+            type="text" 
+            id="report-search-input" 
+            placeholder="Search reports by companion, email, reason, text..." 
+            oninput="handleReportSearch()"
+            class="w-full pl-9 pr-4 py-2 rounded-lg bg-dark-card border border-dark-border text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-brand-500 transition"
+          >
+          <svg class="w-4 h-4 text-zinc-500 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </div>
+
+        <div class="flex items-center space-x-2 overflow-x-auto pb-1 sm:pb-0">
+          <select id="filter-report-status" onchange="loadReports()" class="px-3 py-2 rounded-lg bg-dark-card border border-dark-border text-xs text-zinc-300 focus:outline-none">
+            <option value="all">All Statuses</option>
+            <option value="pending" selected>Pending Review</option>
+            <option value="reviewed">Reviewed</option>
+            <option value="actioned">Actioned</option>
+            <option value="dismissed">Dismissed</option>
+          </select>
+          <select id="filter-report-type" onchange="loadReports()" class="px-3 py-2 rounded-lg bg-dark-card border border-dark-border text-xs text-zinc-300 focus:outline-none">
+            <option value="all">All Types</option>
+            <option value="message">Messages</option>
+            <option value="persona">Personas</option>
+          </select>
+          <button onclick="loadReports()" class="px-3 py-2 rounded-lg border border-dark-border bg-dark-input hover:bg-dark-hover transition text-xs font-semibold text-zinc-300">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- Reports Table -->
+      <div class="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-zinc-300">
+            <thead class="bg-dark-input text-[11px] font-semibold text-zinc-400 uppercase tracking-wider border-b border-dark-border">
+              <tr>
+                <th class="py-3 px-4">Date / ID</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Type / Target</th>
+                <th class="py-3 px-4">Category</th>
+                <th class="py-3 px-4">Reported Content / Notes</th>
+                <th class="py-3 px-4">Reporter</th>
+                <th class="py-3 px-4 text-right">Moderation Actions</th>
+              </tr>
+            </thead>
+            <tbody id="reports-table-body" class="divide-y divide-dark-border">
+              <tr><td colspan="7" class="py-8 text-center text-zinc-500">Loading reports...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- EDIT USER MODAL -->
@@ -432,15 +502,19 @@ class AdminConsoleWebView(View):
   <!-- JAVASCRIPT CONTROLLER -->
   <script>
     let currentUsers = [];
+    let currentReports = [];
     let searchTimeout = null;
+    let reportSearchTimeout = null;
     const consoleCsrfToken = "{csrf_token}";
 
     function switchTab(tab) {{
       document.getElementById('tab-users').classList.toggle('hidden', tab !== 'users');
       document.getElementById('tab-llm').classList.toggle('hidden', tab !== 'llm');
+      document.getElementById('tab-reports').classList.toggle('hidden', tab !== 'reports');
 
-      ['users', 'llm'].forEach(t => {{
+      ['users', 'reports', 'llm'].forEach(t => {{
         const btn = document.getElementById(`tab-btn-${{t}}`);
+        if (!btn) return;
         if (t === tab) {{
           btn.className = "px-4 py-2 rounded-lg text-xs font-bold transition flex items-center space-x-2 bg-brand-500 text-white";
         }} else {{
@@ -448,6 +522,133 @@ class AdminConsoleWebView(View):
         }}
       }});
       if (tab === 'llm') loadLLMUsage();
+      if (tab === 'reports') loadReports();
+    }}
+
+    function handleReportSearch() {{
+      clearTimeout(reportSearchTimeout);
+      reportSearchTimeout = setTimeout(loadReports, 300);
+    }}
+
+    async function loadReports() {{
+      const tbody = document.getElementById('reports-table-body');
+      tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-zinc-500">Loading reports...</td></tr>`;
+
+      const search = document.getElementById('report-search-input')?.value.trim() || '';
+      const status = document.getElementById('filter-report-status')?.value || 'all';
+      const type = document.getElementById('filter-report-type')?.value || 'all';
+
+      let url = `/api/auth/admin/reports/?status=${{encodeURIComponent(status)}}&content_type=${{encodeURIComponent(type)}}`;
+      if (search) url += `&search=${{encodeURIComponent(search)}}`;
+
+      try {{
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+        currentReports = data.reports || [];
+        renderReports(currentReports);
+        if (data.stats && document.getElementById('stat-reports')) {{
+          document.getElementById('stat-reports').textContent = data.stats.pending_reports || 0;
+        }}
+      }} catch (err) {{
+        tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-rose-400">Failed to load reports: ${{escapeHtml(err.message)}}</td></tr>`;
+      }}
+    }}
+
+    function renderReports(reports) {{
+      const tbody = document.getElementById('reports-table-body');
+      if (!reports.length) {{
+        tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-zinc-500">No content reports match the selected filters.</td></tr>`;
+        return;
+      }}
+
+      tbody.innerHTML = reports.map(r => {{
+        const caseNum = (r.id || '').replace(/-/g, '').slice(0, 8).toUpperCase();
+        const dateStr = r.created_at ? new Date(r.created_at).toLocaleString() : 'N/A';
+
+        let statusBadge = '';
+        if (r.status === 'pending') {{
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Pending</span>';
+        }} else if (r.status === 'reviewed') {{
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">Reviewed</span>';
+        }} else if (r.status === 'actioned') {{
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Actioned</span>';
+        }} else {{
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-700 text-zinc-400">Dismissed</span>';
+        }}
+
+        const typeBadge = r.content_type === 'persona'
+          ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">Persona</span>'
+          : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-sky-500/10 text-sky-400 border border-sky-500/20">Message</span>';
+
+        return `
+          <tr class="hover:bg-dark-hover transition">
+            <td class="py-3 px-4 whitespace-nowrap">
+              <span class="font-mono text-zinc-400">#${{escapeHtml(caseNum)}}</span>
+              <div class="text-[10px] text-zinc-500">${{escapeHtml(dateStr)}}</div>
+            </td>
+            <td class="py-3 px-4 whitespace-nowrap">${{statusBadge}}</td>
+            <td class="py-3 px-4">
+              <div class="font-semibold text-white">${{escapeHtml(r.persona_name || 'Companion')}}</div>
+              <div class="mt-0.5">${{typeBadge}}</div>
+            </td>
+            <td class="py-3 px-4">
+              <span class="font-medium text-rose-400">${{escapeHtml(r.reason)}}</span>
+            </td>
+            <td class="py-3 px-4 max-w-xs">
+              ${{r.reported_text ? `<div class="truncate text-zinc-300 italic">"${{escapeHtml(r.reported_text)}}"</div>` : ''}}
+              ${{r.details ? `<div class="text-[10px] text-zinc-400 mt-1">Note: ${{escapeHtml(r.details)}}</div>` : ''}}
+            </td>
+            <td class="py-3 px-4 whitespace-nowrap">
+              <div class="text-white">${{escapeHtml(r.reporter_email || 'Anonymous')}}</div>
+              <div class="text-[10px] font-mono text-zinc-500">${{escapeHtml(r.user_identifier ? r.user_identifier.slice(0, 12) + '...' : '')}}</div>
+            </td>
+            <td class="py-3 px-4 text-right whitespace-nowrap space-x-1">
+              ${{r.status === 'pending' ? `
+                <button onclick="updateReportStatus('${{r.id}}', 'reviewed')" class="px-2 py-1 rounded bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 text-[11px] font-semibold border border-blue-500/30">Review</button>
+                <button onclick="updateReportStatus('${{r.id}}', 'actioned')" class="px-2 py-1 rounded bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 text-[11px] font-semibold border border-emerald-500/30">Action</button>
+                <button onclick="updateReportStatus('${{r.id}}', 'dismissed')" class="px-2 py-1 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 text-[11px] font-semibold">Dismiss</button>
+              ` : `
+                <button onclick="updateReportStatus('${{r.id}}', 'pending')" class="px-2 py-1 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 text-[11px] font-semibold">Reopen</button>
+                <button onclick="deleteReport('${{r.id}}')" class="px-2 py-1 rounded bg-rose-600/20 text-rose-400 hover:bg-rose-600/30 text-[11px] font-semibold border border-rose-500/30">Delete</button>
+              `}}
+            </td>
+          </tr>
+        `;
+      }}).join('');
+    }}
+
+    async function updateReportStatus(reportId, newStatus) {{
+      try {{
+        const res = await fetch(`/api/auth/admin/reports/${{reportId}}/`, {{
+          method: 'PATCH',
+          headers: {{
+            'Content-Type': 'application/json',
+            'X-CSRFToken': consoleCsrfToken,
+          }},
+          body: JSON.stringify({{ status: newStatus }}),
+        }});
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        loadReports();
+      }} catch (err) {{
+        alert('Failed to update report status: ' + err.message);
+      }}
+    }}
+
+    async function deleteReport(reportId) {{
+      if (!confirm('Are you sure you want to delete this report record?')) return;
+      try {{
+        const res = await fetch(`/api/auth/admin/reports/${{reportId}}/`, {{
+          method: 'DELETE',
+          headers: {{
+            'X-CSRFToken': consoleCsrfToken,
+          }},
+        }});
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        loadReports();
+      }} catch (err) {{
+        alert('Failed to delete report: ' + err.message);
+      }}
     }}
 
     function escapeHtml(value) {{

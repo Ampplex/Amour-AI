@@ -328,6 +328,7 @@ class GeneratorAndClientTests(SimpleTestCase):
         with (
             patch("response_generator.llm_client.get_llm_configuration", return_value=("key", "https://groq.test/openai/v1", ["qwen/qwen3.8-27b"])),
             patch("response_generator.llm_client.get_groq_api_keys", return_value=["key"]),
+            patch("response_generator.llm_client.get_groq_bedrock_fallback_model_ids", return_value=[]),
             patch("response_generator.llm_client.settings.RESPONSE_LLM_PROVIDER", "groq"),
             patch("response_generator.llm_client.requests.post", return_value=fake_response),
             patch("response_generator.llm_client.record_llm_request") as mock_record,

@@ -6,6 +6,7 @@ from .models import (
     PersonaChatMessage,
     PersonaRelationshipState,
     UserMemoryKeyBackup,
+    ContentReport,
 )
 
 
@@ -101,3 +102,28 @@ class UserMemoryKeyBackupAdmin(admin.ModelAdmin):
     list_display = ("user_identifier", "created_at", "updated_at")
     search_fields = ("user_identifier",)
     readonly_fields = ("id", "created_at", "updated_at")
+
+
+@admin.register(ContentReport)
+class ContentReportAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "content_type",
+        "reason",
+        "persona_name",
+        "reporter_email",
+        "status",
+        "created_at",
+    )
+    search_fields = (
+        "persona_name",
+        "reporter_email",
+        "user_identifier",
+        "reported_text",
+        "details",
+        "reason",
+    )
+    list_filter = ("content_type", "status", "reason", "created_at")
+    readonly_fields = ("id", "created_at")
+    ordering = ("-created_at",)
+

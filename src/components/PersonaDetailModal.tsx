@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import MarkdownText from './MarkdownText';
+import ReportContentModal from './ReportContentModal';
 import { PersonaItem, updatePersonaMemory, getPersonaCustomization } from '../services/personaService';
 import { useAuth } from '../context/AuthContext';
 
@@ -167,6 +168,20 @@ function ShareIcon({ size = 17, color = '#FFFFFF' }: { size?: number; color?: st
   );
 }
 
+function FlagIcon({ size = 16, color = '#FFFFFF' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1v19"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 function formatDate(isoString?: string): string {
   if (!isoString) return 'Active';
   try {
@@ -196,6 +211,11 @@ export default function PersonaDetailModal({
   const [greetingText, setGreetingText] = useState<string>('');
   const [memoryText, setMemoryText] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [reportModalVisible, setReportModalVisible] = useState<boolean>(false);
+
+  const handleOpenReport = () => {
+    setReportModalVisible(true);
+  };
 
   // iOS-style Horizontal Screen Slide Transition Controller
   useEffect(() => {
@@ -308,13 +328,14 @@ export default function PersonaDetailModal({
   });
 
   return (
-    <Modal
-      visible={modalVisible}
-      transparent={true}
-      animationType="none"
-      statusBarTranslucent={true}
-      onRequestClose={handleDismiss}
-    >
+    <>
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="none"
+        statusBarTranslucent={true}
+        onRequestClose={handleDismiss}
+      >
       <View style={styles.modalRoot}>
         {/* iOS Dimming Backdrop over previous screen */}
         <Animated.View
@@ -402,6 +423,15 @@ export default function PersonaDetailModal({
                   accessibilityLabel="Share persona"
                 >
                   <ShareIcon size={17} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.glassCircleBtn}
+                  onPress={handleOpenReport}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Report persona"
+                >
+                  <FlagIcon size={16} color="#FFFFFF" />
                 </TouchableOpacity>
 
                 {onDelete ? (
@@ -620,6 +650,16 @@ export default function PersonaDetailModal({
               <Text style={styles.specValue}>{createdDate}</Text>
             </View>
           </View>
+
+          {/* Section: Report this AI Companion (Google Play AI Content Policy) */}
+          <TouchableOpacity
+            style={styles.reportCompanionFooterBtn}
+            onPress={handleOpenReport}
+            activeOpacity={0.7}
+          >
+            <FlagIcon size={14} color="#A1A1AA" />
+            <Text style={styles.reportCompanionFooterText}>Report this AI Companion</Text>
+          </TouchableOpacity>
         </ScrollView>
 
         {/* Bottom Floating Action Bar */}
@@ -654,7 +694,28 @@ export default function PersonaDetailModal({
     </Animated.View>
   </View>
 </Modal>
-);
+
+      {/* In-App Report Content Modal - Rendered outside to prevent Android modal collision */}
+      <ReportContentModal
+        visible={reportModalVisible}
+        target={
+          activePersona
+            ? {
+                contentType: 'persona',
+                contentId: activePersona.id,
+                personaId: activePersona.id,
+                personaName: activePersona.name,
+                reportedText: activePersona.greeting,
+              }
+            : null
+        }
+        userId={user?.id}
+        userEmail={user?.email}
+        token={user?.token}
+        onClose={() => setReportModalVisible(false)}
+      />
+    </>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -1003,5 +1064,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     letterSpacing: 0.3,
+  },
+  reportCompanionFooterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    marginHorizontal: 18,
+    borderRadius: 12,
+    backgroundColor: '#14141A',
+    borderWidth: 1,
+    borderColor: '#26262B',
+  },
+  reportCompanionFooterText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#A1A1AA',
   },
 });

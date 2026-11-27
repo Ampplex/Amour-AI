@@ -1387,6 +1387,124 @@ class AdminUserDetailView(ConsoleAdminAPIView):
         }, status=status.HTTP_200_OK)
 
 
+class AdminReportsView(ConsoleAdminAPIView):
+    """
+    Admin Console View to list, search, and filter in-app AI content reports.
+    Reflects all user reports on the Amour AI Web Admin Console.
+    """
+    permission_classes = [AllowAny]
+
+    def _is_admin(self, request):
+        return is_console_authorized(request)
+
+    def get(self, request):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        from memory.models import ContentReport
+
+        qs = ContentReport.objects.all().order_by("-created_at")
+
+        stats = {
+            "total_reports": ContentReport.objects.count(),
+            "pending_reports": ContentReport.objects.filter(status="pending").count(),
+            "reviewed_reports": ContentReport.objects.filter(status="reviewed").count(),
+            "actioned_reports": ContentReport.objects.filter(status="actioned").count(),
+            "dismissed_reports": ContentReport.objects.filter(status="dismissed").count(),
+        }
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(persona_name__icontains=search)
+                | Q(reporter_email__icontains=search)
+                | Q(user_identifier__icontains=search)
+                | Q(reason__icontains=search)
+                | Q(reported_text__icontains=search)
+                | Q(details__icontains=search)
+            )
+
+        status_filter = request.query_params.get("status", "").strip().lower()
+        if status_filter in ["pending", "reviewed", "actioned", "dismissed"]:
+            qs = qs.filter(status=status_filter)
+
+        content_type = request.query_params.get("content_type", "").strip().lower()
+        if content_type in ["message", "persona"]:
+            qs = qs.filter(content_type=content_type)
+
+        reports_data = []
+        for r in qs[:200]:
+            reports_data.append({
+                "id": str(r.id),
+                "content_type": r.content_type,
+                "content_id": r.content_id,
+                "persona_id": r.persona_id,
+                "persona_name": r.persona_name,
+                "reported_text": r.reported_text,
+                "reason": r.reason,
+                "details": r.details,
+                "status": r.status,
+                "reporter_email": r.reporter_email,
+                "user_identifier": r.user_identifier,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+            })
+
+        return Response({
+            "stats": stats,
+            "reports": reports_data,
+        }, status=status.HTTP_200_OK)
+
+
+class AdminReportDetailView(ConsoleAdminAPIView):
+    """
+    Admin Console View to update status of an individual content report.
+    """
+    permission_classes = [AllowAny]
+
+    def _is_admin(self, request):
+        return is_console_authorized(request)
+
+    def patch(self, request, report_id):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        from memory.models import ContentReport
+
+        report = ContentReport.objects.filter(id=report_id).first()
+        if not report:
+            return Response({"error": "Report not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        new_status = (request.data.get("status") or "").strip().lower()
+        if new_status in ["pending", "reviewed", "actioned", "dismissed"]:
+            report.status = new_status
+            report.save(update_fields=["status"])
+
+        return Response({
+            "success": True,
+            "message": f"Report status updated to {report.status}",
+            "report_id": str(report.id),
+            "status": report.status,
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, report_id):
+        if not self._is_admin(request):
+            return Response({"error": "Admin credentials required"}, status=status.HTTP_403_FORBIDDEN)
+
+        from memory.models import ContentReport
+
+        report = ContentReport.objects.filter(id=report_id).first()
+        if not report:
+            return Response({"error": "Report not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        report.delete()
+        return Response({
+            "success": True,
+            "message": "Report deleted successfully",
+        }, status=status.HTTP_200_OK)
+
+
+
 class DeleteAccountView(APIView):
     """
     Authenticated endpoint for an in-app user to permanently delete their own account

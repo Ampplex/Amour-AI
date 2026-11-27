@@ -23,6 +23,7 @@ import * as Clipboard from 'expo-clipboard';
 import MarkdownText from './MarkdownText';
 import PersonaDetailModal from './PersonaDetailModal';
 import ImagePreviewModal from './ImagePreviewModal';
+import ReportContentModal, { ReportTarget } from './ReportContentModal';
 import { PersonaItem, getPersonaCustomization } from '../services/personaService';
 import {
   ChatHistoryItem,
@@ -267,6 +268,20 @@ function TrashIcon({ size = 14, color = '#EF4444' }: { size?: number; color?: st
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
         d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"
+        stroke={color}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function FlagIcon({ size = 14, color = '#F43F5E' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1v19"
         stroke={color}
         strokeWidth="2.2"
         strokeLinecap="round"
@@ -601,6 +616,8 @@ export default function CompanionChatModal({
   const [isPreviewImageOpen, setIsPreviewImageOpen] = useState<boolean>(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [actionMenuMessage, setActionMenuMessage] = useState<ChatMessage | null>(null);
+  const [reportModalVisible, setReportModalVisible] = useState<boolean>(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [copiedToast, setCopiedToast] = useState<boolean>(false);
   const flatListRef = useRef<FlatList>(null);
   const pendingInitialScrollRef = useRef<boolean>(false);
@@ -885,6 +902,25 @@ export default function CompanionChatModal({
       'warning'
     );
   };
+
+  const handleDeleteMessageById = React.useCallback(
+    async (messageId: string) => {
+      const targetMsg = messages.find((m) => m.id === messageId);
+      if (!targetMsg) return;
+      const previousMessages = [...messages];
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      try {
+        const uId = await resolveConversationUserId(user?.id);
+        const res = await deleteChatMessage(messageId, uId, user?.token);
+        if (!res.success) {
+          setMessages(previousMessages);
+        }
+      } catch {
+        setMessages(previousMessages);
+      }
+    },
+    [messages, user?.id, user?.token]
+  );
 
   const handleSwitchVariant = React.useCallback(
     async (messageId: string, targetIndex: number) => {
@@ -1552,7 +1588,38 @@ export default function CompanionChatModal({
           {/* Header Menu Button */}
           <TouchableOpacity
             style={styles.menuBtn}
-            onPress={() => setIsDetailModalOpen(true)}
+            onPress={() => {
+              showAlert(
+                cleanPersonaChipName(currentPersona.name),
+                'Choose an option for this companion:',
+                [
+                  {
+                    text: 'View Profile',
+                    style: 'primary',
+                    onPress: () => setIsDetailModalOpen(true),
+                  },
+                  {
+                    text: 'Report AI Companion',
+                    style: 'destructive',
+                    onPress: () => {
+                      setReportTarget({
+                        contentType: 'persona',
+                        contentId: currentPersona.id,
+                        personaId: currentPersona.id,
+                        personaName: currentPersona.name,
+                        reportedText: currentPersona.greeting,
+                      });
+                      setReportModalVisible(true);
+                    },
+                  },
+                  {
+                    text: 'Cancel',
+                    style: 'cancel',
+                  },
+                ],
+                'info'
+              );
+            }}
             activeOpacity={0.7}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             accessibilityLabel="Persona details menu"
@@ -1900,6 +1967,36 @@ export default function CompanionChatModal({
                     </TouchableOpacity>
 
                     <View style={styles.igActionDivider} />
+
+                    {/* NEW: Report AI Response (Google Play AI Content Policy) */}
+                    <TouchableOpacity
+                      style={styles.igActionRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const botMsg = actionMenuMessage;
+                        setActionMenuMessage(null);
+                        setReportTarget({
+                          contentType: 'message',
+                          contentId: botMsg.id,
+                          personaId: currentPersona.id,
+                          personaName: currentPersona.name,
+                          reportedText: botMsg.text,
+                        });
+                        setReportModalVisible(true);
+                      }}
+                      disabled={isTyping}
+                    >
+                      <View style={styles.igActionRowLeft}>
+                        <View style={[styles.igActionIconCircle, { backgroundColor: 'rgba(244, 63, 94, 0.15)' }]}>
+                          <FlagIcon size={14} color="#F43F5E" />
+                        </View>
+                        <Text style={[styles.igActionText, { color: '#F43F5E' }]}>
+                          Report AI Response
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.igActionDivider} />
                   </>
                 )}
 
@@ -1949,6 +2046,20 @@ export default function CompanionChatModal({
       persona={currentPersona}
       onClose={() => setIsDetailModalOpen(false)}
       onInitiateChat={() => setIsDetailModalOpen(false)}
+    />
+
+    {/* In-App Report Content Modal - Rendered outside to prevent Android modal collisions */}
+    <ReportContentModal
+      visible={reportModalVisible}
+      target={reportTarget}
+      userId={user?.id}
+      userEmail={user?.email}
+      token={user?.token}
+      onClose={() => {
+        setReportModalVisible(false);
+        setReportTarget(null);
+      }}
+      onDeleteMessageRequest={handleDeleteMessageById}
     />
   </>
   );

@@ -247,3 +247,128 @@ This link and code expire in 1 hour. If you did not request this, please disrega
 — The Amour AI Team
 """
     return send_brevo_email(to_email, name, subject, html_content, text_content)
+
+
+def send_report_acknowledgment_email(
+    to_email: str,
+    name: str,
+    report_id: str,
+    content_type: str,
+    persona_name: str,
+    reason: str,
+    details: str = "",
+) -> bool:
+    """
+    Sends an official email acknowledgment via Brevo to the user who submitted a content report.
+    Confirms case ID, details, and moderation review process.
+    """
+    case_num = str(report_id).replace("-", "")[:8].upper()
+    subject = f"[Case #{case_num}] Content Report Acknowledgment — Amour AI"
+    display_name = name.strip() if name else "there"
+    target_desc = f"{persona_name} ({content_type.capitalize()})" if persona_name else content_type.capitalize()
+
+    details_section_html = ""
+    if details:
+        safe_details = details.replace("<", "&lt;").replace(">", "&gt;")
+        details_section_html = f"""
+        <tr>
+          <td style="padding: 6px 0; color: #A1A1AA; font-size: 13px;">Additional Notes:</td>
+          <td style="padding: 6px 0; color: #FFFFFF; font-size: 13px; font-weight: 500;">{safe_details}</td>
+        </tr>
+        """
+
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Content Report Received</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #09090B; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #FFFFFF;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #09090B; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <!-- Main Card -->
+        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 520px; background-color: #121216; border: 1px solid #27272A; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+          <!-- Header Bar with Brand Accent -->
+          <tr>
+            <td style="background: linear-gradient(90deg, #F43F5E 0%, #FB7185 100%); height: 4px;"></td>
+          </tr>
+          <tr>
+            <td style="padding: 36px 32px 24px 32px; text-align: center;">
+              <!-- Logo / Wordmark -->
+              <div style="display: inline-block; padding: 10px 18px; background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.3); border-radius: 12px; margin-bottom: 20px;">
+                <span style="font-size: 20px; font-weight: 800; letter-spacing: 3px; color: #F43F5E;">AMOUR AI</span>
+              </div>
+
+              <!-- Title -->
+              <h1 style="margin: 0 0 12px 0; font-size: 22px; font-weight: 700; color: #FFFFFF; letter-spacing: -0.3px;">
+                We Received Your Report
+              </h1>
+              <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #A1A1AA;">
+                Hi {display_name}, thank you for helping us keep Amour AI safe. Our moderation team has received your report and has queued it for review.
+              </p>
+
+              <!-- Case Details Card -->
+              <div style="background-color: #18181B; border: 1px solid #27272A; border-radius: 12px; padding: 20px; text-align: left; margin-bottom: 24px;">
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td style="padding: 6px 0; color: #A1A1AA; font-size: 13px; width: 40%;">Case Number:</td>
+                    <td style="padding: 6px 0; color: #F43F5E; font-size: 13px; font-weight: 700; font-family: monospace;">#{case_num}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #A1A1AA; font-size: 13px;">Target Content:</td>
+                    <td style="padding: 6px 0; color: #FFFFFF; font-size: 13px; font-weight: 600;">{target_desc}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 6px 0; color: #A1A1AA; font-size: 13px;">Violation Category:</td>
+                    <td style="padding: 6px 0; color: #FFFFFF; font-size: 13px; font-weight: 600;">{reason}</td>
+                  </tr>
+                  {details_section_html}
+                  <tr>
+                    <td style="padding: 6px 0; color: #A1A1AA; font-size: 13px;">Status:</td>
+                    <td style="padding: 6px 0; color: #FBBF24; font-size: 13px; font-weight: 600;">Under Review</td>
+                  </tr>
+                </table>
+              </div>
+
+              <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #71717A; text-align: center;">
+                We take policy violations and harmful content very seriously. Our team will review the flagged AI output against our Community Guidelines and AI Safety Standards.
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 32px; background-color: #0E0E12; border-top: 1px solid #1F1F23; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #52525B;">
+                &copy; 2026 Amour AI. Trust & Safety Moderation Team.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+
+    text_content = f"""
+Hi {display_name},
+
+Thank you for reporting content on Amour AI. Our Trust & Safety team has received your report.
+
+Case Number: #{case_num}
+Target: {target_desc}
+Category: {reason}
+Status: Under Review
+{f'Notes: {details}' if details else ''}
+
+We review all reports to ensure our AI companions adhere to community guidelines and safety policies.
+
+— The Amour AI Safety Team
+"""
+
+    return send_brevo_email(to_email, name or display_name, subject, html_content, text_content)
+

@@ -2131,5 +2131,104 @@ class UserConversationsListView(APIView):
         )
 
 
+class ContentReportView(APIView):
+    """
+    In-app reporting endpoint for AI-generated messages and personas.
+    Complies with Google Play Store AI-Generated Content Policy.
+    Allows users to report offensive, harmful, or inappropriate content directly.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .models import ContentReport
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        data = request.data or {}
+
+        reason = (data.get("reason") or "").strip()
+        if not reason:
+            return Response(
+                {"success": False, "error": "A report reason is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        content_type = (data.get("content_type") or "message").strip().lower()
+        if content_type not in ("message", "persona"):
+            content_type = "message"
+
+        content_id = str(data.get("content_id") or "").strip()
+        persona_id = str(data.get("persona_id") or "").strip()
+        persona_name = str(data.get("persona_name") or "").strip()[:120]
+        reported_text = str(data.get("reported_text") or "").strip()
+        details = str(data.get("details") or "").strip()
+        user_id = str(data.get("user_id") or "").strip()
+
+        user = None
+        user_email = (data.get("reporter_email") or "").strip().lower()
+        user_name = ""
+        if request.user and request.user.is_authenticated:
+            user = request.user
+            user_id = str(user.id)
+            user_email = user.email or user_email
+            user_name = user.name or ""
+        elif user_id:
+            user = User.objects.filter(id=user_id).first()
+            if user:
+                user_email = user.email or user_email
+                user_name = user.name or ""
+
+        report = ContentReport.objects.create(
+            user=user,
+            user_identifier=user_id,
+            reporter_email=user_email,
+            content_type=content_type,
+            content_id=content_id,
+            persona_id=persona_id,
+            persona_name=persona_name,
+            reported_text=reported_text,
+            reason=reason,
+            details=details,
+            status="pending",
+        )
+
+        email_dispatched = False
+        if user_email:
+            try:
+                from authentication.email_service import send_report_acknowledgment_email
+                email_dispatched = send_report_acknowledgment_email(
+                    to_email=user_email,
+                    name=user_name,
+                    report_id=str(report.id),
+                    content_type=content_type,
+                    persona_name=persona_name,
+                    reason=reason,
+                    details=details,
+                )
+            except Exception as e:
+                logger.warning("Failed to dispatch report acknowledgment email: %s", e)
+
+        logger.info(
+            "In-app content report created: id=%s type=%s reason=%s persona=%s user=%s email=%s email_sent=%s",
+            report.id,
+            content_type,
+            reason,
+            persona_name,
+            user_id,
+            user_email,
+            email_dispatched,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Report received. Thank you for keeping our community safe.",
+                "report_id": str(report.id),
+                "email_sent": email_dispatched,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 
 
